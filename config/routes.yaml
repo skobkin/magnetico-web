@@ -1,7 +1,16 @@
-#index:
-#    path: /
-#    controller: App\Controller\DefaultController::index
-
-test:
+index:
     path: /
-    controller: App\Controller\TestController::test
+    controller: App\Controller\MainController::index
+
+torrent_show:
+    path: /torrents/{id}
+    controller: App\Controller\TorrentController::showTorrent
+    requirements:
+        method: GET
+        id: '\d+'
+
+torrent_search:
+    path: /torrents/search
+    controller: App\Controller\TorrentController::searchTorrent
+    requirements:
+        method: GET

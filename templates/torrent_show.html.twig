@@ -1,0 +1,43 @@
+{% extends 'base.html.twig' %}
+
+{% block content %}
+    {# @var torrent \App\Entity\Torrent #}
+    <table class="table">
+        <tr>
+            <td>Name</td>
+            <td>{{ torrent.name }}</td>
+        </tr>
+        <tr>
+            <td>Hash</td>
+            <td>
+                <a href="magnet:?xt=urn:btih:{{ torrent.infoHashAsHex }}&dn={{ torrent.name | url_encode }}">{{ torrent.infoHashAsHex }}</a>
+            </td>
+        </tr>
+        <tr>
+            <td>Size</td>
+            <td>{{ (torrent.totalSize / 1024 / 1024) | round(2, 'ceil')}} MB</td>
+        </tr>
+        <tr>
+            <td>Discovered</td>
+            <td>{{ torrent.discoveredOn | date('Y-m-d H:i:s')}}</td>
+        </tr>
+    </table>
+
+    <table class="table">
+        <thead>
+        <tr>
+            <th scope="col">File</th>
+            <th scope="col">Size</th>
+        </tr>
+        </thead>
+        <tbody>
+        {# @var file \App\Entity\File #}
+        {% for file in torrent.files | sort %}
+            <tr>
+                <td>{{ file.path }}</td>
+                <td>{{ (file.size / 1024 / 1024) | round(2, 'ceil')}} MB</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

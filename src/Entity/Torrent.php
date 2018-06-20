@@ -10,7 +10,7 @@ use Doctrine\ORM\Mapping as ORM;
  *     @ORM\Index(name="discovered_on_index", columns={"discovered_on"}),
  *     @ORM\Index(name="info_hash_index", columns={"info_hash"})
  * })
- * @ORM\Entity(readOnly=true)
+ * @ORM\Entity(readOnly=true, repositoryClass="App\Repository\TorrentRepository")
  */
 class Torrent
 {
@@ -67,7 +67,7 @@ class Torrent
         return $this->infoHash;
     }
 
-    public function getInfoHashAsHex()
+    public function getInfoHashAsHex(): string
     {
         return bin2hex(stream_get_contents($this->infoHash));
     }

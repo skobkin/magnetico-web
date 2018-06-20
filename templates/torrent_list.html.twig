@@ -1,33 +1,32 @@
-{% extends 'base.html.twig' %}
-
 {% block content %}
+
+    <div class="pagination">
+        {{ pagerfanta(torrents) }}
+    </div>
+
     <table class="table">
         <thead>
-        <th scope="col">ID</th>
         <th scope="col">Name</th>
         <th scope="col">Size</th>
         <th scope="col">Discovered</th>
-        <th scope="col">Files</th>
+        <th scope="col">Link</th>
         </thead>
-        {# @var torrent \App\Entity\\App\Entity\Torrent #}
+        {# @var torrent \App\Entity\Torrent #}
         {% for torrent in torrents %}
         <tr>
-            <td>{{ torrent.id }}</td>
             <td>
-                <a href="magnet:?xt=urn:btih:{{ torrent.infoHashAsHex }}&dn={{ torrent.name|url_encode }}">{{ torrent.name }}</a>
+                <a href="{{ path('torrent_show', {'id': torrent.id}) }}">{{ torrent.name }}</a>
             </td>
-            <td>{{ torrent.totalSize }}</td>
-            <td>{{ torrent.discoveredOn }}</td>
+            <td>{{ (torrent.totalSize / 1024 / 1024) | round(2, 'ceil')}} MB</td>
+            <td>{{ torrent.discoveredOn | date('Y-m-d H:i:s')}}</td>
             <td>
-                {#
-                <ul>
-                    {% for file in torrent.files %}
-                        <li>{{ file.path }}</li>
-                    {% endfor %}
-                </ul>
-                #}
+                <a href="magnet:?xt=urn:btih:{{ torrent.infoHashAsHex }}&dn={{ torrent.name | url_encode }}">&#128279;</a>
             </td>
         </tr>
         {% endfor %}
     </table>
+
+    <div class="pagination">
+        {{ pagerfanta(torrents) }}
+    </div>
 {% endblock %}

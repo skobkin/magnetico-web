@@ -1,0 +1,5 @@
+{% extends 'base.html.twig' %}
+
+{% block content %}
+    {% include 'torrent_list.html.twig' with {'torrents': torrents} %}
+{% endblock %}
