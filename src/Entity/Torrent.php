@@ -23,11 +23,16 @@ class Torrent
     private $id;
 
     /**
-     * @var string
+     * @var resource
      *
      * @ORM\Column(name="info_hash", type="blob", nullable=false)
      */
     private $infoHash;
+
+    /**
+     * @var string Cached value of self::infoHash in HEX string
+     */
+    private $infoHashHexCache;
 
     /**
      * @var string
@@ -69,7 +74,12 @@ class Torrent
 
     public function getInfoHashAsHex(): string
     {
-        return bin2hex(stream_get_contents($this->infoHash));
+        if (null === $this->infoHashHexCache) {
+            $this->infoHashHexCache = bin2hex(stream_get_contents($this->infoHash));
+            rewind($this->infoHash);
+        }
+
+        return $this->infoHashHexCache;
     }
 
     public function getName(): string
