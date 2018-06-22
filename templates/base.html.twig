@@ -27,9 +27,9 @@
 
     <div class="collapse navbar-collapse" id="navbarsExampleDefault">
         <ul class="navbar-nav mr-auto">
-            <li class="nav-item">
-                <a class="nav-link" href="#">Last</a>
-            </li>
+            <!--<li class="nav-item">
+                <a class="nav-link" href="#">Item</a>
+            </li>-->
         </ul>
         <form class="form-inline my-2 my-lg-0" action="{{ path('torrent_search') }}" method="get">
             <input name="query" class="form-control mr-sm-2" type="text" placeholder="Search" aria-label="Search"
@@ -44,9 +44,6 @@
 </main><!-- /.container -->
 
 {% block javascript %}
-<!-- Bootstrap core JavaScript
-================================================== -->
-<!-- Placed at the end of the document so the pages load faster -->
 <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js"></script>
 <script>window.jQuery || document.write('<script src="../../assets/js/vendor/jquery-slim.min.js"><\/script>')</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js"></script>
