@@ -80,20 +80,8 @@ class Torrent
         return $this->id;
     }
 
-    /**
-     * Returns torrent info hash as HEX string
-     */
+    /** Returns torrent info hash as HEX string */
     public function getInfoHash(): string
-    {
-        return $this->getInfoHashAsHex();
-    }
-
-    /**
-     * @deprecated Use getInfoHash() instead
-     *
-     * Returns torrent info hash as HEX string
-     */
-    public function getInfoHashAsHex(): string
     {
         if (null === $this->infoHashHexCache) {
             $this->infoHashHexCache = bin2hex(stream_get_contents($this->infoHash));
