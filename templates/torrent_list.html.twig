@@ -6,22 +6,20 @@
 
     <table class="table">
         <thead>
-        <th scope="col">Name</th>
-        <th scope="col">Size</th>
-        <th scope="col">Discovered</th>
-        <th scope="col">Link</th>
+        <tr>
+            <th scope="col">&#128279;</th>
+            <th scope="col">Name</th>
+            <th scope="col">Size</th>
+            <th scope="col">Discovered</th>
+        </tr>
         </thead>
         {# @var torrent \App\Entity\Torrent #}
         {% for torrent in torrents %}
         <tr>
-            <td>
-                <a href="{{ path('torrent_show', {'id': torrent.id}) }}">{{ torrent.name }}</a>
-            </td>
+            <td><a href="{{ magnet(torrent.name, torrent.infoHashAsHex) }}">&#128279;</a></td>
+            <td><a href="{{ path('torrent_show', {'id': torrent.id}) }}">{{ torrent.name }}</a></td>
             <td>{{ torrent.totalSize | readable_size }}</td>
             <td>{{ torrent.discoveredOn | date('Y-m-d H:i:s')}}</td>
-            <td>
-                <a href="{{ magnet(torrent.name, torrent.infoHashAsHex) }}">&#128279;</a>
-            </td>
         </tr>
         {% endfor %}
     </table>
