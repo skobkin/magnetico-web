@@ -21,7 +21,7 @@ class File
     private $id;
 
     /**
-     * @var int
+     * @var Torrent
      *
      * @ORM\ManyToOne(targetEntity="App\Entity\Torrent", inversedBy="files")
      * @ORM\JoinColumn(name="torrent_id")
@@ -29,7 +29,7 @@ class File
     private $torrent;
 
     /**
-     * @var int
+     * @var int File size in bytes
      *
      * @ORM\Column(name="size", type="integer", nullable=false)
      */
@@ -47,16 +47,18 @@ class File
         return $this->id;
     }
 
-    public function getTorrent(): int
+    public function getTorrent(): Torrent
     {
         return $this->torrent;
     }
 
+    /** Returns file size in bytes */
     public function getSize(): int
     {
         return $this->size;
     }
 
+    /** Returns file path relative to the torrent root directory */
     public function getPath(): string
     {
         return $this->path;

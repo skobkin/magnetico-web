@@ -23,7 +23,7 @@ class Torrent
     private $id;
 
     /**
-     * @var resource
+     * @var resource Resource pointing to info-hash BLOB
      *
      * @ORM\Column(name="info_hash", type="blob", nullable=false)
      */
@@ -35,21 +35,21 @@ class Torrent
     private $infoHashHexCache;
 
     /**
-     * @var string
+     * @var string Torrent name
      *
      * @ORM\Column(name="name", type="text", nullable=false)
      */
     private $name;
 
     /**
-     * @var int
+     * @var int Torrent files total size in bytes
      *
      * @ORM\Column(name="total_size", type="integer", nullable=false)
      */
     private $totalSize;
 
     /**
-     * @var int
+     * @var int Torrent discovery timestamp
      *
      * @ORM\Column(name="discovered_on", type="integer", nullable=false)
      */
@@ -67,11 +67,17 @@ class Torrent
         return $this->id;
     }
 
+    /**
+     * Returns torrent info hash BLOB resource
+     *
+     * @return resource
+     */
     public function getInfoHash()
     {
         return $this->infoHash;
     }
 
+    /** Returns torrent info hash as HEX string */
     public function getInfoHashAsHex(): string
     {
         if (null === $this->infoHashHexCache) {
@@ -87,11 +93,13 @@ class Torrent
         return $this->name;
     }
 
+    /** Returns torrent files total size in bytes */
     public function getTotalSize(): int
     {
         return $this->totalSize;
     }
 
+    /** Returns torrent discovery timestamp */
     public function getDiscoveredOn(): int
     {
         return $this->discoveredOn;
