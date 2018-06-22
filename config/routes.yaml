@@ -17,8 +17,8 @@ torrents_show:
         id: '\d+'
 
 # API
-api_v1_torrents_search:
-    path: /api/v1/torrents/search
+api_v1_torrents:
+    path: /api/v1/torrents
     controller: App\Api\V1\Controller\TorrentController::search
     defaults:
         _format: json
