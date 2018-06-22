@@ -1,0 +1,7 @@
+[
+  "udp://tracker.opentrackr.org:1337/announce",
+  "udp://tracker.open-internet.nl:6969/announce",
+  "udp://tracker.piratepublic.com:1337/announce",
+  "udp://9.rarbg.to:2710/announce",
+  "udp://tracker.zer0day.to:1337/announce"
+]

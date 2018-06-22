@@ -17,10 +17,10 @@
             <td>
                 <a href="{{ path('torrent_show', {'id': torrent.id}) }}">{{ torrent.name }}</a>
             </td>
-            <td>{{ (torrent.totalSize / 1024 / 1024) | round(2, 'ceil')}} MB</td>
+            <td>{{ torrent.totalSize | readable_size }}</td>
             <td>{{ torrent.discoveredOn | date('Y-m-d H:i:s')}}</td>
             <td>
-                <a href="magnet:?xt=urn:btih:{{ torrent.infoHashAsHex }}&dn={{ torrent.name | url_encode }}">&#128279;</a>
+                <a href="{{ magnet(torrent.name, torrent.infoHashAsHex) }}">&#128279;</a>
             </td>
         </tr>
         {% endfor %}
