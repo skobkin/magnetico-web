@@ -3,6 +3,7 @@
 namespace App\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
+use Symfony\Component\Serializer\Annotation as Serializer;
 
 /**
  * @ORM\Table(name="files", indexes={
@@ -31,12 +32,16 @@ class File
     /**
      * @var int File size in bytes
      *
+     * @Serializer\Groups({"api_v1_show"})
+     *
      * @ORM\Column(name="size", type="integer", nullable=false)
      */
     private $size;
 
     /**
      * @var string
+     *
+     * @Serializer\Groups({"api_v1_show"})
      *
      * @ORM\Column(name="path", type="text", nullable=false)
      */

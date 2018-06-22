@@ -31,7 +31,7 @@
                 <a class="nav-link" href="#">Item</a>
             </li>-->
         </ul>
-        <form class="form-inline my-2 my-lg-0" action="{{ path('torrent_search') }}" method="get">
+        <form class="form-inline my-2 my-lg-0" action="{{ path('torrents_search') }}" method="get">
             <input name="query" class="form-control mr-sm-2" type="text" placeholder="Search" aria-label="Search"
                    value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}">
             <button class="btn btn-outline-success my-2 my-sm-0" type="submit">Search</button>

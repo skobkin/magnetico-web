@@ -22,3 +22,10 @@ services:
     App\Controller\:
         resource: '../src/Controller'
         tags: ['controller.service_arguments']
+
+    # Fast normalizer for Symfony Serializer
+    get_set_method_normalizer:
+        class: Symfony\Component\Serializer\Normalizer\GetSetMethodNormalizer
+        public: false
+        tags:
+            - { name: serializer.normalizer, priority: 1 }

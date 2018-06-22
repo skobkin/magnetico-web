@@ -1,16 +1,37 @@
+# Basic Front-End
 index:
     path: /
     controller: App\Controller\MainController::index
 
-torrent_show:
+torrents_search:
+    path: /torrents/search
+    controller: App\Controller\TorrentController::searchTorrent
+    requirements:
+        method: GET
+
+torrents_show:
     path: /torrents/{id}
     controller: App\Controller\TorrentController::showTorrent
     requirements:
         method: GET
         id: '\d+'
 
-torrent_search:
-    path: /torrents/search
-    controller: App\Controller\TorrentController::searchTorrent
+# API
+api_v1_torrents_search:
+    path: /api/v1/torrents/search
+    controller: App\Api\V1\Controller\TorrentController::search
+    defaults:
+        _format: json
     requirements:
         method: GET
+        _format:  json
+
+api_v1_torrents_show:
+    path: /api/v1/torrents/{id}
+    controller: App\Api\V1\Controller\TorrentController::show
+    defaults:
+        _format: json
+    requirements:
+        method: GET
+        _format:  json
+        id: '\d+'

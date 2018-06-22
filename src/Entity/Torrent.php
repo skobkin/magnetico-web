@@ -4,6 +4,7 @@ namespace App\Entity;
 
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
+use Symfony\Component\Serializer\Annotation as Serializer;
 
 /**
  * @ORM\Table(name="torrents", indexes={
@@ -17,6 +18,8 @@ class Torrent
     /**
      * @var int
      *
+     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
+     *
      * @ORM\Column(name="id", type="integer")
      * @ORM\Id
      */
@@ -24,6 +27,8 @@ class Torrent
 
     /**
      * @var resource Resource pointing to info-hash BLOB
+     *
+     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
      *
      * @ORM\Column(name="info_hash", type="blob", nullable=false)
      */
@@ -37,12 +42,16 @@ class Torrent
     /**
      * @var string Torrent name
      *
+     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
+     *
      * @ORM\Column(name="name", type="text", nullable=false)
      */
     private $name;
 
     /**
      * @var int Torrent files total size in bytes
+     *
+     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
      *
      * @ORM\Column(name="total_size", type="integer", nullable=false)
      */
@@ -51,12 +60,16 @@ class Torrent
     /**
      * @var int Torrent discovery timestamp
      *
+     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
+     *
      * @ORM\Column(name="discovered_on", type="integer", nullable=false)
      */
     private $discoveredOn;
 
     /**
      * @var File[]|ArrayCollection
+     *
+     * @Serializer\Groups({"api_v1_show"})
      *
      * @ORM\OneToMany(targetEntity="App\Entity\File", fetch="EXTRA_LAZY", mappedBy="torrent")
      */
@@ -68,16 +81,18 @@ class Torrent
     }
 
     /**
-     * Returns torrent info hash BLOB resource
-     *
-     * @return resource
+     * Returns torrent info hash as HEX string
      */
-    public function getInfoHash()
+    public function getInfoHash(): string
     {
-        return $this->infoHash;
+        return $this->getInfoHashAsHex();
     }
 
-    /** Returns torrent info hash as HEX string */
+    /**
+     * @deprecated Use getInfoHash() instead
+     *
+     * Returns torrent info hash as HEX string
+     */
     public function getInfoHashAsHex(): string
     {
         if (null === $this->infoHashHexCache) {
