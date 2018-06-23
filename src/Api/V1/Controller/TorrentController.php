@@ -3,6 +3,7 @@
 namespace App\Api\V1\Controller;
 
 use App\Api\V1\DTO\ApiResponse;
+use App\Api\V1\DTO\ListPage;
 use App\Entity\Torrent;
 use App\Repository\TorrentRepository;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
@@ -28,7 +29,7 @@ class TorrentController extends Controller
             ->setMaxPerPage(self::PER_PAGE)
         ;
 
-        return $this->json(new ApiResponse($pager->getCurrentPageResults()),Response::HTTP_OK, [], [
+        return $this->json(new ApiResponse(ListPage::createFromPager($pager)),Response::HTTP_OK, [], [
             'groups' => array_merge(self::DEFAULT_SERIALIZER_GROUPS,['api_v1_search']),
         ]);
     }
