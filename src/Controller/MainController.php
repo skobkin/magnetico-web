@@ -2,7 +2,7 @@
 
 namespace App\Controller;
 
-use App\Repository\TorrentRepository;
+use App\Magnetico\Repository\TorrentRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\Controller;
 use Symfony\Component\HttpFoundation\Response;
 

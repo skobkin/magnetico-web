@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Entity;
+namespace App\Magnetico\Entity;
 
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
@@ -11,7 +11,7 @@ use Symfony\Component\Serializer\Annotation as Serializer;
  *     @ORM\Index(name="discovered_on_index", columns={"discovered_on"}),
  *     @ORM\Index(name="info_hash_index", columns={"info_hash"})
  * })
- * @ORM\Entity(readOnly=true, repositoryClass="App\Repository\TorrentRepository")
+ * @ORM\Entity(readOnly=true, repositoryClass="App\Magnetico\Repository\TorrentRepository")
  */
 class Torrent
 {
@@ -71,7 +71,7 @@ class Torrent
      *
      * @Serializer\Groups({"api_v1_show"})
      *
-     * @ORM\OneToMany(targetEntity="App\Entity\File", fetch="EXTRA_LAZY", mappedBy="torrent")
+     * @ORM\OneToMany(targetEntity="App\Magnetico\Entity\File", fetch="EXTRA_LAZY", mappedBy="torrent")
      */
     private $files;
 

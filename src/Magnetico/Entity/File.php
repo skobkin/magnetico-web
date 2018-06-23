@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Entity;
+namespace App\Magnetico\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation as Serializer;
@@ -24,7 +24,7 @@ class File
     /**
      * @var Torrent
      *
-     * @ORM\ManyToOne(targetEntity="App\Entity\Torrent", inversedBy="files")
+     * @ORM\ManyToOne(targetEntity="App\Magnetico\Entity\Torrent", inversedBy="files")
      * @ORM\JoinColumn(name="torrent_id")
      */
     private $torrent;

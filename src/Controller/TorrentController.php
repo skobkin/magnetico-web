@@ -2,8 +2,8 @@
 
 namespace App\Controller;
 
-use App\Entity\Torrent;
-use App\Repository\TorrentRepository;
+use App\Magnetico\Entity\Torrent;
+use App\Magnetico\Repository\TorrentRepository;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bundle\FrameworkBundle\Controller\Controller;

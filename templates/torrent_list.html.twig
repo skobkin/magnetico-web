@@ -13,7 +13,7 @@
             <th scope="col">Discovered</th>
         </tr>
         </thead>
-        {# @var torrent \App\Entity\Torrent #}
+        {# @var torrent \App\Magnetico\Entity\Torrent #}
         {% for torrent in torrents %}
         <tr>
             <td><a href="{{ magnet(torrent.name, torrent.infoHash) }}">&#128279;</a></td>

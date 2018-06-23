@@ -4,8 +4,8 @@ namespace App\Api\V1\Controller;
 
 use App\Api\V1\DTO\ApiResponse;
 use App\Api\V1\DTO\ListPage;
-use App\Entity\Torrent;
-use App\Repository\TorrentRepository;
+use App\Magnetico\Entity\Torrent;
+use App\Magnetico\Repository\TorrentRepository;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bundle\FrameworkBundle\Controller\Controller;
