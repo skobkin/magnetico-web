@@ -2,6 +2,12 @@ security:
     # https://symfony.com/doc/current/security.html#where-do-users-come-from-user-providers
     providers:
         in_memory: { memory: ~ }
+    encoders:
+        App\Entity\User:
+            algorithm: 'argon2i'
+            memory_cost:    16384
+            time_cost:      2
+            threads:        4
     firewalls:
         dev:
             pattern: ^/(_(profiler|wdt)|css|images|js)/

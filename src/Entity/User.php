@@ -8,7 +8,7 @@ use Symfony\Component\Security\Core\User\UserInterface;
 
 /**
  * @ORM\Table(name="users", schema="users")
- * @ORM\Entity()
+ * @ORM\Entity(repositoryClass="App\Repository\UserRepository")
  */
 class User implements UserInterface, \Serializable
 {
@@ -43,17 +43,33 @@ class User implements UserInterface, \Serializable
     private $email;
 
     /**
+     * @var string[]
+     *
+     * @ORM\Column(name="roles", type="json")
+     */
+    private $roles = [];
+
+    /**
+     * @var \DateTime
+     *
+     * @ORM\Column(name="created_at", type="datetime")
+     */
+    private $createdAt;
+
+    /**
      * @var Invite[]|ArrayCollection
      *
      * @ORM\OneToMany(targetEntity="App\Entity\Invite", mappedBy="user", fetch="EXTRA_LAZY")
      */
     private $invites;
 
-    public function __construct(string $username, string $password, string $email)
+    public function __construct(string $username, string $password, string $email, array $roles = [])
     {
         $this->username = $username;
         $this->password = $password;
         $this->email = $email;
+        $this->roles = $roles ?: ['ROLE_USER'];
+        $this->createdAt = new \DateTime();
     }
 
     public function getId(): int
@@ -71,6 +87,11 @@ class User implements UserInterface, \Serializable
         return $this->password;
     }
 
+    public function updatePassword(string $password): void
+    {
+        $this->password = $password;
+    }
+
     public function getSalt()
     {
         // Salt is not needed when using Argon2i
@@ -83,9 +104,19 @@ class User implements UserInterface, \Serializable
         return $this->email;
     }
 
-    public function getRoles()
+    public function getRoles(): array
     {
-        return ['ROLE_USER'];
+        return $this->roles;
+    }
+
+    public function addRole(string $role): void
+    {
+        $this->roles[] = $role;
+    }
+
+    public function getCreatedAt(): \DateTime
+    {
+        return $this->createdAt;
     }
 
     public function eraseCredentials()

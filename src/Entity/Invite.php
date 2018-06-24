@@ -6,7 +6,7 @@ use Doctrine\ORM\Mapping as ORM;
 
 /**
  * @ORM\Table(name="invites", schema="users")
- * @ORM\Entity()
+ * @ORM\Entity(repositoryClass="App\Repository\InviteRepository")
  */
 class Invite
 {
@@ -42,9 +42,9 @@ class Invite
      */
     private $usedBy;
 
-    public function __construct(User $user)
+    public function __construct(User $forUser)
     {
-        $this->user = $user;
+        $this->user = $forUser;
         $this->code = md5(random_bytes(100));
     }
 
@@ -66,5 +66,19 @@ class Invite
     public function getUsedBy(): ?User
     {
         return $this->usedBy;
+    }
+
+    public function use(User $user): void
+    {
+        if ($this->usedBy) {
+            throw new \RuntimeException(sprintf(
+                'Invite #%d is already used by User#%d and can\'t be used by User#%d',
+                $this->id,
+                $this->usedBy->getId(),
+                $user->getId()
+            ));
+        }
+
+        $this->usedBy = $user;
     }
 }

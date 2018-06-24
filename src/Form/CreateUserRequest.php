@@ -4,6 +4,9 @@ namespace App\Form;
 
 use Symfony\Component\Validator\Constraints as Assert;
 
+/**
+ * @todo implement UniqueEntity constraint for DTO and use it here
+ */
 class CreateUserRequest
 {
     /**
@@ -18,7 +21,7 @@ class CreateUserRequest
      * @var string
      *
      * @Assert\NotBlank()
-     * @Assert\Length(min="8")
+     * @Assert\Length(min="8", max="4096")
      */
     public $password;
 

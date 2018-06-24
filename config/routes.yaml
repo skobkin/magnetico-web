@@ -16,6 +16,13 @@ torrents_show:
         method: GET
         id: '\d+'
 
+user_register:
+    path: /register/{inviteCode}
+    controller: App\Controller\UserController::register
+    requirements:
+        method: GET
+        inviteCode: \w{32}
+
 # API
 api_v1_torrents:
     path: /api/v1/torrents
