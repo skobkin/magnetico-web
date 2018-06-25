@@ -1,11 +1,13 @@
 security:
     # https://symfony.com/doc/current/security.html#where-do-users-come-from-user-providers
     providers:
-        app_db_provider:
+        default_provider:
             entity:
                 class: App\Entity\User
                 property: username
                 manager_name: default
+        api_token_provider:
+            id: App\Security\ApiTokenUserProvider
     encoders:
         App\Entity\User:
             algorithm: 'argon2i'
@@ -20,10 +22,13 @@ security:
             pattern: ^/api/
             stateless: true
             anonymous: true
+            simple_preauth:
+                authenticator: App\Security\ApiTokenAuthenticator
+            provider: api_token_provider
         main:
             pattern: ^/
             anonymous: ~
-            provider: app_db_provider
+            provider: default_provider
             form_login:
                 login_path: user_login
                 check_path: user_login
@@ -40,7 +45,8 @@ security:
     # Easy way to control access for large sections of your site
     # Note: Only the *first* access control that matches will be used
     access_control:
-        - { path: ^/api/, roles: IS_AUTHENTICATED_ANONYMOUSLY }
+        - { path: ^/api/v1/login, roles: IS_AUTHENTICATED_ANONYMOUSLY }
+        - { path: ^/api/, roles: ROLE_USER }
         - { path: ^/$, roles: IS_AUTHENTICATED_ANONYMOUSLY }
         - { path: /login, roles: IS_AUTHENTICATED_ANONYMOUSLY }
         - { path: ^/, roles: ROLE_USER }
