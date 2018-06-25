@@ -18,6 +18,7 @@ security:
             security: false
         api:
             pattern: ^/api/
+            stateless: true
             anonymous: true
         main:
             pattern: ^/
