@@ -2,7 +2,8 @@
 
 namespace App\Controller;
 
-use App\Form\{CreateUserRequest, CreateUserRequestType};
+use App\Form\{CreateUserRequestType};
+use App\FormRequest\CreateUserRequest;
 use App\Repository\{UserRepository};
 use App\User\Exception\InvalidInviteException;
 use App\User\UserManager;

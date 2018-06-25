@@ -17,10 +17,18 @@ services:
 
     App\:
         resource: '../src/*'
-        exclude: '../src/{Entity,Migrations,Tests,Kernel.php}'
+        exclude: '../src/{Api/V1/{DTO},Magnetico/{Entity,Migrations},Entity,FormRequest,Migrations,Tests,Kernel.php}'
+            # Use array in exclude config from Symfony 4.2
+            #- '../src/Api/V1/{DTO}'
+            #- '../src/Magnetico/{Entity,Migrations}'
+            #- '../src/{Entity,FormRequest,Migrations,Tests,Kernel.php}'
 
     App\Controller\:
         resource: '../src/Controller'
+        tags: ['controller.service_arguments']
+
+    App\Api\V1\Controller\:
+        resource: '../src/Api/V1/Controller'
         tags: ['controller.service_arguments']
 
     # Fast normalizer for Symfony Serializer
