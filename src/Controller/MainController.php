@@ -2,16 +2,29 @@
 
 namespace App\Controller;
 
-use App\Magnetico\Repository\TorrentRepository;
+use App\Form\LoginType;
 use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Component\Form\Extension\Core\Type\SubmitType;
+use Symfony\Component\Form\FormInterface;
 use Symfony\Component\HttpFoundation\Response;
 
 class MainController extends Controller
 {
-    public function index(TorrentRepository $repo): Response
+    public function index(): Response
     {
         return $this->render('index.html.twig', [
-            'torrentsCount' => $repo->getTorrentsTotalCount(),
+            'loginForm' => $this->createLoginForm('')->createView(),
         ]);
+    }
+
+    private function createLoginForm(string $username): FormInterface
+    {
+        $form = $this->createForm(LoginType::class, null, [
+            'action' => $this->generateUrl('user_login'),
+        ]);
+        $form->get('_username')->setData($username);
+        $form->add('submit', SubmitType::class);
+
+        return $form;
     }
 }

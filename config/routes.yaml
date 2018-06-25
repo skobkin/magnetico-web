@@ -4,7 +4,7 @@ index:
     controller: App\Controller\MainController::index
 
 torrents_search:
-    path: /torrents/search
+    path: /torrents
     controller: App\Controller\TorrentController::searchTorrent
     requirements:
         method: GET
@@ -22,6 +22,13 @@ user_register:
     requirements:
         method: GET
         inviteCode: \w{32}
+
+user_login:
+    path: /login
+    controller: App\Controller\SecurityController::login
+
+user_logout:
+    path: /logout
 
 # API
 api_v1_torrents:
