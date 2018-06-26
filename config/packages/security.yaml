@@ -20,8 +20,8 @@ security:
             security: false
         api:
             pattern: ^/api/
+            anonymous: ~
             stateless: true
-            anonymous: true
             simple_preauth:
                 authenticator: App\Security\ApiTokenAuthenticator
             provider: api_token_provider
