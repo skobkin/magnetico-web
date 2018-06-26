@@ -30,7 +30,7 @@ class Invite
     /**
      * @var string
      *
-     * @ORM\Column(name="code", type="string", length=32)
+     * @ORM\Column(name="code", type="string", length=32, unique=true)
      */
     private $code;
 
