@@ -26,7 +26,9 @@ class ApiTokenAuthenticator implements SimplePreAuthenticatorInterface, Authenti
     public function createToken(Request $request, $providerKey)
     {
         if (!($tokenKey = $request->headers->get(self::TOKEN_HEADER))) {
-            throw new BadCredentialsException(sprintf('\'%s\' is invalid or not defined', self::TOKEN_HEADER));
+            // Throwing exception here will break anonymous authentication for login method
+            //throw new BadCredentialsException(sprintf('\'%s\' is invalid or not defined', self::TOKEN_HEADER));
+            return null;
         }
 
         return new PreAuthenticatedToken(
