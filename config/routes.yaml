@@ -31,7 +31,7 @@ user_logout:
     path: /logout
 
 # API
-api_login:
+api_v1_login:
     path: /api/v1/login
     controller: App\Api\V1\Controller\SecurityController::login
     defaults:
