@@ -8,7 +8,7 @@ use Symfony\Component\HttpFoundation\{JsonResponse, Response};
 
 abstract class AbstractApiController extends Controller
 {
-    protected const DEFAULT_SERIALIZER_GROUPS = ['api_v1'];
+    protected const DEFAULT_SERIALIZER_GROUPS = ['api'];
 
     protected function createJsonResponse($data, array $groups = [], int $code = Response::HTTP_OK, string $message = null, string $status = ''): JsonResponse
     {

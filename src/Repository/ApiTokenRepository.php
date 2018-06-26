@@ -4,6 +4,7 @@ namespace App\Repository;
 
 use App\Entity\{ApiToken, User};
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\Query\Expr\Join;
 use Symfony\Bridge\Doctrine\RegistryInterface;
 
 class ApiTokenRepository extends ServiceEntityRepository
@@ -20,9 +21,11 @@ class ApiTokenRepository extends ServiceEntityRepository
 
     public function findUserByTokenKey(string $tokenKey): ?User
     {
-        $qb = $this->createQueryBuilder('at');
+        $qb = $this->getEntityManager()->createQueryBuilder();
         $qb
-            ->select('at.user')
+            ->select('u')
+            ->from(User::class, 'u')
+            ->innerJoin(ApiToken::class, 'at', Join::WITH, 'at.user = u')
             ->where('at.key = :tokenKey')
             ->setParameter('tokenKey', $tokenKey)
         ;

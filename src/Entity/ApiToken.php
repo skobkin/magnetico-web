@@ -3,6 +3,7 @@
 namespace App\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
+use Symfony\Component\Serializer\Annotation as Serializer;
 
 /**
  * @ORM\Table(name="api_tokens", schema="users")
@@ -20,6 +21,8 @@ class ApiToken
 
     /**
      * @var string
+     *
+     * @Serializer\Groups({"api", "api_v1_login"})
      *
      * @ORM\Id()
      * @ORM\Column(name="key", type="string", length=32)

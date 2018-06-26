@@ -10,35 +10,35 @@ class ListPage
     /**
      * @var int
      *
-     * @Serializer\Groups({"api_v1"})
+     * @Serializer\Groups({"api"})
      */
     private $numberOfPages;
 
     /**
      * @var int
      *
-     * @Serializer\Groups({"api_v1"})
+     * @Serializer\Groups({"api"})
      */
     private $currentPage;
 
     /**
      * @var int
      *
-     * @Serializer\Groups({"api_v1"})
+     * @Serializer\Groups({"api"})
      */
     private $numberOfResults;
 
     /**
      * @var int
      *
-     * @Serializer\Groups({"api_v1"})
+     * @Serializer\Groups({"api"})
      */
     private $maxPerPage;
 
     /**
      * @var \Traversable
      *
-     * @Serializer\Groups({"api_v1"})
+     * @Serializer\Groups({"api"})
      */
     protected $items;
 
