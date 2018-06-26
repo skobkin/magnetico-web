@@ -40,6 +40,15 @@ api_v1_login:
         method: POST
         _format: json
 
+api_v1_logout:
+    path: /api/v1/logout
+    controller: App\Api\V1\Controller\SecurityController::logout
+    defaults:
+        _format: json
+    requirements:
+        method: GET
+        _format: json
+
 api_v1_torrents:
     path: /api/v1/torrents
     controller: App\Api\V1\Controller\TorrentController::search
