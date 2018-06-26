@@ -3,6 +3,7 @@
 namespace App\Security;
 
 use App\Api\V1\DTO\ApiResponse;
+use App\Security\Token\AuthenticatedApiToken;
 use Symfony\Component\HttpFoundation\{JsonResponse, Request};
 use Symfony\Component\Security\Core\Authentication\Token\{PreAuthenticatedToken, TokenInterface};
 use Symfony\Component\Security\Core\Exception\{AuthenticationException, BadCredentialsException, CustomUserMessageAuthenticationException};
@@ -59,7 +60,7 @@ class ApiTokenAuthenticator implements SimplePreAuthenticatorInterface, Authenti
             ));
         }
 
-        return new PreAuthenticatedToken(
+        return new AuthenticatedApiToken(
             $user,
             $apiTokenKey,
             $providerKey,
