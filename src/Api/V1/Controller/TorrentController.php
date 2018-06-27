@@ -2,22 +2,18 @@
 
 namespace App\Api\V1\Controller;
 
-use App\Api\V1\DTO\ApiResponse;
 use App\Api\V1\DTO\ListPage;
-use App\Entity\Torrent;
-use App\Repository\TorrentRepository;
+use App\Magnetico\Entity\Torrent;
+use App\Magnetico\Repository\TorrentRepository;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
-use Symfony\Component\HttpFoundation\{Request, Response};
+use Symfony\Component\HttpFoundation\{JsonResponse, Request};
 
-class TorrentController extends Controller
+class TorrentController extends AbstractApiController
 {
-    private const DEFAULT_SERIALIZER_GROUPS = ['api_v1'];
-
     private const PER_PAGE = 20;
 
-    public function search(Request $request, TorrentRepository $repo): Response
+    public function search(Request $request, TorrentRepository $repo): JsonResponse
     {
         $query = $request->query->get('query', '');
         $page = (int) $request->query->get('page', '1');
@@ -29,16 +25,12 @@ class TorrentController extends Controller
             ->setMaxPerPage(self::PER_PAGE)
         ;
 
-        return $this->json(new ApiResponse(ListPage::createFromPager($pager)),Response::HTTP_OK, [], [
-            'groups' => array_merge(self::DEFAULT_SERIALIZER_GROUPS,['api_v1_search']),
-        ]);
+        return $this->createJsonResponse(ListPage::createFromPager($pager), ['api_v1_search']);
     }
 
-    public function show(Torrent $torrent): Response
+    public function show(Torrent $torrent): JsonResponse
     {
-        return $this->json(new ApiResponse($torrent), Response::HTTP_OK, [], [
-            'groups' => array_merge(self::DEFAULT_SERIALIZER_GROUPS,['api_v1_show']),
-        ]);
+        return $this->createJsonResponse($torrent, ['api_v1_show'], JsonResponse::HTTP_OK,null, '');
     }
 
 

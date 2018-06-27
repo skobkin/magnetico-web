@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Repository;
+namespace App\Magnetico\Repository;
 
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
 use Doctrine\ORM\QueryBuilder;
@@ -10,7 +10,7 @@ class TorrentRepository extends ServiceEntityRepository
 {
     public function __construct(RegistryInterface $registry)
     {
-        parent::__construct($registry, \App\Entity\Torrent::class);
+        parent::__construct($registry, \App\Magnetico\Entity\Torrent::class);
     }
 
     public function getTorrentsTotalCount(): int
@@ -19,7 +19,11 @@ class TorrentRepository extends ServiceEntityRepository
             ->select('COUNT(t.id)')
         ;
 
-        return (int) $qb->getQuery()->getSingleScalarResult();
+        try {
+            return (int) $qb->getQuery()->getSingleScalarResult();
+        } catch (\Exception $ex) {
+            return 0;
+        }
     }
 
     public function createFindLikeQueryBuilder(string $query): QueryBuilder

@@ -2,6 +2,8 @@
 
 {% block content %}
     <div class="well">
-        <p>Torrents indexed: {{ torrentsCount }}</p>
+        {% if not is_granted('ROLE_USER') %}
+            <a href="{{ path('user_login') }}" class="btn btn-lg btn-primary">Login</a>
+        {% endif %}
     </div>
 {% endblock %}

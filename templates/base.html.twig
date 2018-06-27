@@ -26,16 +26,25 @@
     </button>
 
     <div class="collapse navbar-collapse" id="navbarsExampleDefault">
-        <ul class="navbar-nav mr-auto">
-            <!--<li class="nav-item">
-                <a class="nav-link" href="#">Item</a>
-            </li>-->
-        </ul>
+        {% if is_granted('IS_AUTHENTICATED_REMEMBERED') %}
+            <ul class="navbar-nav mr-auto">
+                <li class="nav-item dropdown">
+                    <a href="#" class="nav-link dropdown-toggle" role="button" data-toggle="dropdown">
+                        {{ app.user.username }}
+                    </a>
+                    <div class="dropdown-menu">
+                        <a href="{{ path('user_logout') }}" class="dropdown-item">Logout</a>
+                    </div>
+                </li>
+            </ul>
+        {% endif %}
+        {% if is_granted('ROLE_USER') %}
         <form class="form-inline my-2 my-lg-0" action="{{ path('torrents_search') }}" method="get">
             <input name="query" class="form-control mr-sm-2" type="text" placeholder="Search" aria-label="Search"
                    value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}">
             <button class="btn btn-outline-success my-2 my-sm-0" type="submit">Search</button>
         </form>
+        {% endif %}
     </div>
 </nav>
 

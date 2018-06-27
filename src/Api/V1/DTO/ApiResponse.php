@@ -15,28 +15,28 @@ class ApiResponse
     /**
      * @var int HTTP response status code
      *
-     * @Groups({"api_v1"})
+     * @Groups({"api"})
      */
     private $code;
 
     /**
      * @var string Status text: 'success' (1xx-3xx), 'error' (4xx), 'fail' (5xx) or 'unknown'
      *
-     * @Groups({"api_v1"})
+     * @Groups({"api"})
      */
     private $status;
 
     /**
      * @var string|null Used for 'fail' and 'error'
      *
-     * @Groups({"api_v1"})
+     * @Groups({"api"})
      */
     private $message;
 
     /**
      * @var string|\object|array|null Response body. In case of 'error' or 'fail' contains cause or exception name.
      *
-     * @Groups({"api_v1"})
+     * @Groups({"api"})
      */
     private $data;
 
