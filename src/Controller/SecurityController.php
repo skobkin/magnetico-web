@@ -8,20 +8,19 @@ use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\{FormError, FormInterface};
 use Symfony\Component\HttpFoundation\{Request, Response};
 use Symfony\Component\Security\Http\Authentication\AuthenticationUtils;
-use Symfony\Component\Translation\TranslatorInterface;
 
 class SecurityController extends Controller
 {
-    public function login(Request $request, AuthenticationUtils $authenticationUtils, TranslatorInterface $translator): Response
+    public function login(Request $request, AuthenticationUtils $authenticationUtils): Response
     {
-        $lastError = $authenticationUtils->getLastAuthenticationError() ? $authenticationUtils->getLastAuthenticationError()->getMessage() : '';
+        $lastError = $authenticationUtils->getLastAuthenticationError();
         $lastUsername = $authenticationUtils->getLastUsername();
 
         $form = $this->createLoginForm($lastUsername);
         $form->handleRequest($request);
 
         if ($lastError) {
-            $form->addError(new FormError($lastError));
+            $form->addError(new FormError($lastError->getMessage()));
         }
 
         return $this->render('Security/login.html.twig', ['form' => $form->createView()]);
