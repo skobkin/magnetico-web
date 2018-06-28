@@ -22,7 +22,7 @@ class Invite
     /**
      * @var User
      *
-     * @ORM\ManyToOne(targetEntity="App\Entity\User")
+     * @ORM\ManyToOne(targetEntity="App\Entity\User", inversedBy="invites")
      * @ORM\JoinColumn(name="user_id", nullable=false)
      */
     private $user;

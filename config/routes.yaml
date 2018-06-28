@@ -23,6 +23,12 @@ user_register:
         method: GET
         inviteCode: \w{32}
 
+user_account_invites:
+    path: /account/invites
+    controller: App\Controller\AccountController::invites
+    requirements:
+        method: GET
+
 user_login:
     path: /login
     controller: App\Controller\SecurityController::login
