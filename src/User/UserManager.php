@@ -43,10 +43,9 @@ class UserManager
         return $user;
     }
 
-    public function createUserByInviteCode(string $username, string $password, string $email, string $inviteCode, array $roles = self::DEFAULT_ROLES): User
+    public function createUserByInvite(string $username, string $password, string $email, Invite $invite, array $roles = self::DEFAULT_ROLES): User
     {
-        /** @var Invite $invite */
-        if (null === $invite = $this->inviteRepo->findOneBy(['code' => $inviteCode, 'usedBy' => null])) {
+        if (null !== $invite->getUsedBy()) {
             throw new InvalidInviteException();
         }
 
