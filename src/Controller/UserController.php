@@ -4,9 +4,8 @@ namespace App\Controller;
 
 use App\Form\{CreateUserRequestType};
 use App\FormRequest\CreateUserRequest;
-use App\Repository\{UserRepository};
 use App\User\Exception\InvalidInviteException;
-use App\User\UserManager;
+use App\User\{InviteManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\Controller;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
@@ -20,7 +19,7 @@ class UserController extends Controller
         Request $request,
         EntityManagerInterface $em,
         UserManager $userManager,
-        UserRepository $userRepository
+        InviteManager $inviteManager
     ): Response {
         $createUserRequest = new CreateUserRequest();
         $createUserRequest->inviteCode = $inviteCode;
@@ -36,6 +35,8 @@ class UserController extends Controller
                     $createUserRequest->email,
                     $createUserRequest->inviteCode
                 );
+
+                $inviteManager->createInvitesForUser($user);
             } catch (InvalidInviteException $ex) {
                 // @FIXME refactor InvalidInviteException to proper validator
                 $form->get('inviteCode')->addError(new FormError('Invalid invite code'));
@@ -43,7 +44,6 @@ class UserController extends Controller
                 return $this->render('User/register.html.twig', ['form' => $form->createView()]);
             }
 
-            $userRepository->add($user);
             $em->flush();
 
             return $this->redirectToRoute('index');

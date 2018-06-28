@@ -38,6 +38,8 @@ class UserManager
             $roles
         );
 
+        $this->userRepo->add($user);
+
         return $user;
     }
 
