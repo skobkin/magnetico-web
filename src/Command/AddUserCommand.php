@@ -2,9 +2,8 @@
 
 namespace App\Command;
 
-use App\Entity\Invite;
-use App\Repository\{InviteRepository, UserRepository};
-use App\User\UserManager;
+use App\Repository\UserRepository;
+use App\User\{InviteManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Helper\QuestionHelper;
@@ -23,17 +22,17 @@ class AddUserCommand extends Command
     /** @var UserRepository */
     private $userRepo;
 
-    /** @var InviteRepository */
-    private $inviteRepo;
+    /** @var InviteManager */
+    private $inviteManager;
 
-    public function __construct(EntityManagerInterface $em, UserManager $userManager, UserRepository $userRepo, InviteRepository $inviterepo)
+    public function __construct(EntityManagerInterface $em, UserManager $userManager, UserRepository $userRepo, InviteManager $inviteManager)
     {
         parent::__construct();
 
         $this->em = $em;
         $this->userManager = $userManager;
         $this->userRepo = $userRepo;
-        $this->inviteRepo = $inviterepo;
+        $this->inviteManager = $inviteManager;
     }
 
     protected function configure()
@@ -82,10 +81,7 @@ class AddUserCommand extends Command
         $this->userRepo->add($user);
 
         if ($invites) {
-            for ($i = 0; $i < $invites; $i++) {
-                $invite = new Invite($user);
-                $this->inviteRepo->add($invite);
-            }
+            $this->inviteManager->createInvitesForUser($user, $invites);
         }
 
         $this->em->flush();

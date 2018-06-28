@@ -3,6 +3,7 @@
 parameters:
     locale: 'en'
     env(TRACKER_LIST_FILE): '%kernel.project_dir%/config/public_trackers.json'
+    env(NEW_USER_INVITES): 10
 
 services:
     # default configuration for services in *this* file
@@ -14,6 +15,7 @@ services:
                             # The best practice is to be explicit about your dependencies anyway.
         bind:
             $publicTrackers: '%env(json:file:resolve:TRACKER_LIST_FILE)%'
+            $newUserInvites: '%env(NEW_USER_INVITES)%'
 
     App\:
         resource: '../src/*'
