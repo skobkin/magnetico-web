@@ -39,4 +39,9 @@ class CreateUserRequest
      * @Assert\Length(min="32", max="32")
      */
     public $inviteCode;
+
+    public function __construct(string $inviteCode = null)
+    {
+        $this->inviteCode = $inviteCode;
+    }
 }

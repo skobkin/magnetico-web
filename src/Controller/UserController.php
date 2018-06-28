@@ -4,6 +4,7 @@ namespace App\Controller;
 
 use App\Form\{CreateUserRequestType};
 use App\FormRequest\CreateUserRequest;
+use App\Repository\InviteRepository;
 use App\User\Exception\InvalidInviteException;
 use App\User\{InviteManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
@@ -19,21 +20,27 @@ class UserController extends Controller
         Request $request,
         EntityManagerInterface $em,
         UserManager $userManager,
-        InviteManager $inviteManager
+        InviteManager $inviteManager,
+        InviteRepository $inviteRepo
     ): Response {
-        $createUserRequest = new CreateUserRequest();
-        $createUserRequest->inviteCode = $inviteCode;
+        $createUserRequest = new CreateUserRequest($inviteCode);
         $form = $this->createRegisterForm($createUserRequest, $inviteCode);
+
+        $inviteInvalid = false;
+
+        if (null === $invite = $inviteRepo->findOneBy(['code' => $inviteCode, 'usedBy' => null])) {
+            $inviteInvalid = true;
+        }
 
         $form->handleRequest($request);
 
         if ($form->isSubmitted() && $form->isValid()) {
             try {
-                $user = $userManager->createUserByInviteCode(
+                $user = $userManager->createUserByInvite(
                     $createUserRequest->username,
                     $createUserRequest->password,
                     $createUserRequest->email,
-                    $createUserRequest->inviteCode
+                    $invite
                 );
 
                 $inviteManager->createInvitesForUser($user);
@@ -49,7 +56,10 @@ class UserController extends Controller
             return $this->redirectToRoute('index');
         }
 
-        return $this->render('User/register.html.twig', ['form' => $form->createView()]);
+        return $this->render('User/register.html.twig', [
+            'form' => $form->createView(),
+            'inviteInvalid' => $inviteInvalid,
+        ]);
     }
 
     private function createRegisterForm(CreateUserRequest $createUserRequest, string $inviteCode): FormInterface
