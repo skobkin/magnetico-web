@@ -1,0 +1,30 @@
+{% extends 'base.html.twig' %}
+
+{% block content %}
+    <h1>Your invites</h1>
+
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>#</th>
+            <th><i class="icon-external-link"></i></th>
+        </tr>
+        </thead>
+        <tbody>
+        {# @var invite \App\Entity\Invite #}
+        {% for invite in invites %}
+        <tr>
+            <th scope="row">{{ loop.index }}</th>
+            <td>
+                {% if invite.usedBy %}
+                    Used by <strong>{{ invite.usedBy.username }}</strong>.
+                {% else %}
+                    {% set invite_url = url('user_register', { inviteCode: invite.code }) %}
+                    <input class="form-control" type="url" value="{{ invite_url }}" readonly="readonly" onclick="this.select()">
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}
