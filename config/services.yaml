@@ -39,3 +39,8 @@ services:
         public: false
         tags:
             - { name: serializer.normalizer, priority: 1 }
+
+    # Torrent searcher
+    App\Search\TorrentSearcher:
+        arguments:
+            $metadataFactory: '@doctrine.orm.magneticod_entity_manager.metadata_factory'
