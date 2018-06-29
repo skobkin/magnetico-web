@@ -3,7 +3,7 @@
 namespace App\Controller;
 
 use App\Magnetico\Entity\Torrent;
-use App\Magnetico\Repository\TorrentRepository;
+use App\Search\TorrentSearcher;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bundle\FrameworkBundle\Controller\Controller;
@@ -13,12 +13,14 @@ class TorrentController extends Controller
 {
     private const PER_PAGE = 20;
 
-    public function searchTorrent(Request $request, TorrentRepository $repo): Response
+    public function searchTorrent(Request $request, TorrentSearcher $searcher): Response
     {
         $query = $request->query->get('query', '');
         $page = (int) $request->query->get('page', '1');
+        $orderBy = $request->query->get('order-by');
+        $order = $request->query->get('order', 'asc');
 
-        $pagerAdapter = new DoctrineORMAdapter($repo->createFindLikeQueryBuilder($query));
+        $pagerAdapter = new DoctrineORMAdapter($searcher->createSearchQueryBuilder($query, $orderBy, $order));
         $pager = new Pagerfanta($pagerAdapter);
         $pager
             ->setCurrentPage($page)
