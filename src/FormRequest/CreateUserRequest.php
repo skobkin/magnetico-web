@@ -3,6 +3,7 @@
 namespace App\FormRequest;
 
 use Symfony\Component\Validator\Constraints as Assert;
+use App\Validator\Constraints as AppAssert;
 
 /**
  * @todo implement UniqueEntity constraint for DTO and use it here
@@ -37,6 +38,7 @@ class CreateUserRequest
      *
      * @Assert\NotBlank()
      * @Assert\Length(min="32", max="32")
+     * @AppAssert\ValidInvite()
      */
     public $inviteCode;
 
