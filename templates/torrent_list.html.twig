@@ -1,16 +1,19 @@
 {% block content %}
+    {% import 'sortable_table_macro.html.twig' as sortable %}
 
     <div class="pagination">
         {{ pagerfanta(torrents) }}
     </div>
 
     <table class="table">
-        <thead>
+        <thead class="thead-light">
         <tr>
-            <th scope="col">&#128279;</th>
-            <th scope="col">Name</th>
-            <th scope="col">Size</th>
-            <th scope="col">Discovered</th>
+            {{ sortable.sortable_columns({
+                '<i class="icon-magnet"></i>': null,
+                'Name': 'name',
+                'Size': 'totalSize',
+                'Discovered': 'discoveredOn'
+            }) }}
         </tr>
         </thead>
         {# @var torrent \App\Magnetico\Entity\Torrent #}

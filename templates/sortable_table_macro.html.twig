@@ -1,0 +1,33 @@
+{#
+    Sortable table headers ('<th></th>' blocks)
+
+    If you're using this macro then you must comply with convention and use following query parameters:
+        - query - search query
+        - page - current page for pager
+        - order-by - which column is currently used for orderring
+        - order - order direction ('asc' or 'desc')
+
+    'columns' argument must be an associative array like:
+        'Human readable column name' => 'propertyName'
+#}
+{% macro sortable_columns(columns) %}
+    {% set route = app.request.attributes.get('_route') %}
+    {% set query = app.request.query.get('query') %}
+    {% set page = app.request.query.get('page') %}
+    {% set orderBy = app.request.query.get('order-by') %}
+    {% set order = app.request.query.get('order') %}
+    {% for column, property in columns %}
+        <th scope="col">
+            {% if property is not null %}
+            <a href="{{ path(route, {
+                'query': query,
+                'page': page,
+                'order-by': property,
+                'order': (order and property == orderBy) ? ('asc' == order|lower ? 'desc' : 'asc') : 'asc'
+            }) }}">{{ column | raw }}</a>
+            {% else %}
+                {{ column | raw }}
+            {% endif %}
+        </th>
+    {% endfor %}
+{% endmacro %}
