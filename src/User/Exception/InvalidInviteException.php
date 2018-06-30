@@ -2,7 +2,7 @@
 
 namespace App\User\Exception;
 
-class InvalidInviteException extends \Exception
+class InvalidInviteException extends \InvalidArgumentException
 {
     protected $message = 'Invalid invite';
 }
