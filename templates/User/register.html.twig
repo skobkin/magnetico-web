@@ -1,11 +1,11 @@
 {% extends 'base.html.twig' %}
 
 {% block content %}
-    {% if inviteInvalid %}
-    <h1>Invalid invite</h1>
-    {% else %}
+    {% if inviteValid %}
     <div id="form-register">
         {{ form(form) }}
     </div>
+    {% else %}
+    <h1>Invalid invite</h1>
     {% endif %}
 {% endblock %}
