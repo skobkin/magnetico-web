@@ -14,7 +14,8 @@
     <!-- Bootstrap core CSS -->
     <link href="/css/bootstrap.min.css" rel="stylesheet">
     <!-- Font Awesome -->
-    <link href="/css/font-awesome.min.css" rel="stylesheet">
+    <link href="/assets/fontawesome/css/all.css" rel="stylesheet">
+    <!-- SIte style -->
     <link href="/css/style.css" rel="stylesheet">
     {% endblock %}
 </head>
@@ -22,7 +23,7 @@
 <body>
 
 <nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
-    <a class="navbar-brand" href="{{ path('index') }}"><i class="icon-magnet"></i> Magnetico Search</a>
+    <a class="navbar-brand" href="{{ path('index') }}"><i class="fas fa-magnet"></i> Magnetico Search</a>
     <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarsExampleDefault" aria-controls="navbarsExampleDefault" aria-expanded="false" aria-label="Toggle navigation">
         <span class="navbar-toggler-icon"></span>
     </button>
@@ -32,11 +33,11 @@
             <ul class="navbar-nav mr-auto">
                 <li class="nav-item dropdown">
                     <a href="#" class="nav-link dropdown-toggle" role="button" data-toggle="dropdown">
-                        <i class="icon-user"></i> {{ app.user.username }}
+                        <i class="fas fa-user"></i> {{ app.user.username }}
                     </a>
                     <div class="dropdown-menu">
-                        <a href="{{ path('user_account_invites') }}" class="dropdown-item"><i class="icon-group"></i> Invites</a>
-                        <a href="{{ path('user_logout') }}" class="dropdown-item"><i class="icon-signout"></i> Logout</a>
+                        <a href="{{ path('user_account_invites') }}" class="dropdown-item"><i class="fas fa-user-plus"></i> Invites</a>
+                        <a href="{{ path('user_logout') }}" class="dropdown-item"><i class="fas fa-sign-out-alt"></i> Logout</a>
                     </div>
                 </li>
             </ul>
@@ -45,7 +46,7 @@
         <form class="form-inline my-2 my-lg-0" action="{{ path('torrents_search') }}" method="get">
             <input name="query" class="form-control mr-sm-2" type="text" placeholder="Search" aria-label="Search"
                    value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}">
-            <button class="btn btn-outline-success my-2 my-sm-0" type="submit"><i class="icon-search"></i> Search</button>
+            <button class="btn btn-outline-success my-2 my-sm-0" type="submit"><i class="fas fa-search"></i> Search</button>
         </form>
         {% endif %}
     </div>
