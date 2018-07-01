@@ -25,6 +25,9 @@ class InviteRepository extends ServiceEntityRepository
         $qb
             ->select(['i', 'uu'])
             ->leftJoin('i.usedBy', 'uu')
+            ->where('i.user = :user')
+            ->orderBy('i.id', 'asc')
+            ->setParameter('user', $user->getId())
         ;
 
         return $qb->getQuery()->getResult();
