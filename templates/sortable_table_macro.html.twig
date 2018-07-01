@@ -17,14 +17,20 @@
     {% set orderBy = app.request.query.get('order-by') %}
     {% set order = app.request.query.get('order') %}
     {% for column, property in columns %}
+        {% set isCurrent = (property == orderBy) %}
         <th scope="col">
             {% if property is not null %}
             <a href="{{ path(route, {
                 'query': query,
                 'page': page,
                 'order-by': property,
-                'order': (order and property == orderBy) ? ('asc' == order|lower ? 'desc' : 'asc') : 'asc'
-            }) }}">{{ column | raw }}</a>
+                'order': (order and isCurrent) ? ('asc' == order|lower ? 'desc' : 'asc') : 'asc'
+            }) }}">
+                {% if order and isCurrent %}
+                    <i class="fas fa-sort-{% if 'asc' == order|lower %}down{% elseif 'desc' == order|lower %}up{% endif %}"></i>
+                {% endif %}
+                {% if isCurrent %}<b>{% endif %}{{ column | raw }}{% if isCurrent %}</b>{% endif %}
+            </a>
             {% else %}
                 {{ column | raw }}
             {% endif %}
