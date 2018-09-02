@@ -3,5 +3,12 @@
   "udp://tracker.open-internet.nl:6969/announce",
   "udp://tracker.piratepublic.com:1337/announce",
   "udp://9.rarbg.to:2710/announce",
-  "udp://tracker.zer0day.to:1337/announce"
+  "udp://tracker.zer0day.to:1337/announce",
+  "http://nyaa.tracker.wf:7777/announce",
+  "http://t.nyaatracker.com:80/announce",
+  "udp://open.stealth.si:80/announce",
+  "udp://bt.xxx-tracker.com:2710/announce",
+  "udp://exodus.desync.com:6969/announce",
+  "udp://open.demonii.si:1337/announce",
+  "udp://tracker.torrent.eu.org:451/announce"
 ]
