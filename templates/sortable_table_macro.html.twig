@@ -24,7 +24,7 @@
                 'query': query,
                 'page': page,
                 'order-by': property,
-                'order': (order and isCurrent) ? ('asc' == order|lower ? 'desc' : 'asc') : 'asc'
+                'order': (order and isCurrent) ? ('desc' == order|lower ? 'asc' : 'desc') : 'desc'
             }) }}">
                 {% if order and isCurrent %}
                     <i class="fas fa-sort-{% if 'asc' == order|lower %}down{% elseif 'desc' == order|lower %}up{% endif %}"></i>
