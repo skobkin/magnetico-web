@@ -42,18 +42,29 @@
                 </li>
             </ul>
         {% endif %}
-        {% if is_granted('ROLE_USER') %}
-        <form class="form-inline my-2 my-lg-0" action="{{ path('torrents_search') }}" method="get">
-            <input name="query" class="form-control mr-sm-2" type="text" placeholder="Search" aria-label="Search"
-                   value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}">
-            <button class="btn btn-outline-success my-2 my-sm-0" type="submit"><i class="fas fa-search"></i> Search</button>
-        </form>
-        {% endif %}
     </div>
 </nav>
 
 <main id="content" role="main" class="container">
-    {% block content %}{% endblock %}
+    {% if is_granted('ROLE_USER') %}
+    <div class id="form-search">
+            <form class="" action="{{ path('torrents_search') }}" method="get">
+                <div class="input-group  mb-3">
+                    <input name="query" class="form-control" type="text" placeholder="Torrent" aria-label="Search"
+                           value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}"
+                           {# @var app \Symfony\Bridge\Twig\AppVariable #}
+                           {% if 'index' == app.request.get('_route') %}autofocus{% endif %} />
+                    <div class="input-group-append">
+                        <button class="btn btn-outline-primary my-2 my-sm-0" type="submit"><i class="fas fa-search"></i> Search</button>
+                    </div>
+                </div>
+            </form>
+    </div>
+    {% endif %}
+
+    <div>
+        {% block content %}{% endblock %}
+    </div>
 </main><!-- /.container -->
 
 {% block javascript %}
