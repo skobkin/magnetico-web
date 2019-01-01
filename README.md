@@ -45,7 +45,7 @@ for production usage.
 See [Symfony database configuration](https://symfony.com/doc/current/doctrine.html#configuring-the-database)
 documentation for more details.
 
-You **must** set environment variables 
+You **must** set environment variables for both databases: magneticod's SQLite and magnetico-web's PostgreSQL.
 
 ## Database schema migration
 
