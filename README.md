@@ -45,8 +45,26 @@ for production usage.
 See [Symfony database configuration](https://symfony.com/doc/current/doctrine.html#configuring-the-database)
 documentation for more details.
 
+You **must** set environment variables 
+
+## Database schema migration
+
+```bash
+# Only for 'default' EntityManager (PostgreSQL)
+php app/console doc:mig:mig --em=default
+```
+
+## User creation
+
+```bash
+# see --help for more info
+# If you don't specify the password it'll be requested from you in the command line
+php app/console user:add <your_username> <your_email> [your_password] [--invites=10]
+```
+
 ## Web assets installation
 
 ```bash
 php app/console assets:install public --symlink
 ```
+
