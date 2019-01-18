@@ -7,12 +7,12 @@ use App\FormRequest\CreateUserRequest;
 use App\Repository\InviteRepository;
 use App\User\{InviteManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\FormInterface;
 use Symfony\Component\HttpFoundation\{Request, Response};
 
-class UserController extends Controller
+class UserController extends AbstractController
 {
     public function register(
         string $inviteCode,

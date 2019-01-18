@@ -3,12 +3,12 @@
 namespace App\Controller;
 
 use App\Form\LoginType;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\FormInterface;
 use Symfony\Component\HttpFoundation\Response;
 
-class MainController extends Controller
+class MainController extends AbstractController
 {
     public function index(): Response
     {

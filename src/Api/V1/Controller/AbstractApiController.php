@@ -3,10 +3,10 @@
 namespace App\Api\V1\Controller;
 
 use App\Api\V1\DTO\ApiResponse;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\{JsonResponse, Response};
 
-abstract class AbstractApiController extends Controller
+abstract class AbstractApiController extends AbstractController
 {
     protected const DEFAULT_SERIALIZER_GROUPS = ['api'];
 

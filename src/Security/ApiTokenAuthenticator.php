@@ -3,70 +3,89 @@
 namespace App\Security;
 
 use App\Api\V1\DTO\ApiResponse;
+use App\Entity\User;
+use App\Repository\ApiTokenRepository;
 use App\Security\Token\AuthenticatedApiToken;
-use Symfony\Component\HttpFoundation\{JsonResponse, Request};
-use Symfony\Component\Security\Core\Authentication\Token\{PreAuthenticatedToken, TokenInterface};
-use Symfony\Component\Security\Core\Exception\{AuthenticationException, BadCredentialsException, CustomUserMessageAuthenticationException};
-use Symfony\Component\Security\Core\User\UserProviderInterface;
-use Symfony\Component\Security\Http\Authentication\{AuthenticationFailureHandlerInterface, SimplePreAuthenticatorInterface};
+use Symfony\Component\HttpFoundation\{JsonResponse, Request, RequestStack, Response};
+use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
+use Symfony\Component\Security\Core\Exception\AuthenticationException;
+use Symfony\Component\Security\Core\User\{UserInterface, UserProviderInterface};
+use Symfony\Component\Security\Guard\AbstractGuardAuthenticator;
 use Symfony\Component\Serializer\SerializerInterface;
 
-class ApiTokenAuthenticator implements SimplePreAuthenticatorInterface, AuthenticationFailureHandlerInterface
+class ApiTokenAuthenticator extends AbstractGuardAuthenticator
 {
     public const TOKEN_HEADER = 'api-token';
+
+    /** @var ApiTokenRepository */
+    private $tokenRepo;
 
     /** @var SerializerInterface */
     private $serializer;
 
-    public function __construct(SerializerInterface $serializer)
+    /** @var RequestStack */
+    private $requestStack;
+
+    public function __construct(SerializerInterface $serializer, ApiTokenRepository $tokenRepo, RequestStack $requestStack)
     {
         $this->serializer = $serializer;
+        $this->tokenRepo = $tokenRepo;
+        // Crutch for Guard simplified auth to retrieve 'api-token' header in the createAuthenticatedToken()
+        $this->requestStack = $requestStack;
     }
 
-    /** Takes request data and creates token which will be ready to auth check */
-    public function createToken(Request $request, $providerKey)
+    public function supports(Request $request): bool
     {
-        if (!($tokenKey = $request->headers->get(self::TOKEN_HEADER))) {
-            // Throwing exception here will break anonymous authentication for login method
-            //throw new BadCredentialsException(sprintf('\'%s\' is invalid or not defined', self::TOKEN_HEADER));
+        return $request->headers->has(self::TOKEN_HEADER);
+    }
+
+    public function getCredentials(Request $request)
+    {
+        return [
+            'token' => $request->headers->get(self::TOKEN_HEADER),
+        ];
+    }
+
+    public function getUser($credentials, UserProviderInterface $userProvider): ?User
+    {
+        if (null === $token = $credentials['token']) {
             return null;
         }
 
-        return new PreAuthenticatedToken(
-            'anon.',
-            $tokenKey,
-            $providerKey
-        );
+        return $this->tokenRepo->findUserByTokenKey($token);
     }
 
-    public function authenticateToken(TokenInterface $token, UserProviderInterface $userProvider, $providerKey)
+    public function start(Request $request, AuthenticationException $authException = null)
     {
-        if (!$userProvider instanceof ApiTokenUserProvider) {
-            throw new \InvalidArgumentException(sprintf(
-                'The user provider for providerKey = \'%s\' must be an instance of %s, %s given.',
-                $providerKey,
-                ApiTokenUserProvider::class,
-                get_class($userProvider)
-            ));
-        }
+        $message = sprintf('You need to use \'%s\' in your request: %s', self::TOKEN_HEADER, $authException ? $authException->getMessage() : '');
 
-        $apiTokenKey = $token->getCredentials();
-
-        $user = $userProvider->loadUserByUsername($apiTokenKey);
-
-        if (!$user) {
-            throw new CustomUserMessageAuthenticationException(sprintf(
-                'API token \'%s\' does not exist.', $apiTokenKey
-            ));
-        }
-
-        return new AuthenticatedApiToken(
-            $user,
-            $apiTokenKey,
-            $providerKey,
-            $user->getRoles()
+        $json = $this->serializer->serialize(
+            new ApiResponse(null, JsonResponse::HTTP_UNAUTHORIZED, $message),
+            'json',
+            ['groups' => ['api']]
         );
+
+        return new JsonResponse($json, Response::HTTP_UNAUTHORIZED,[], true);
     }
+
+    public function checkCredentials($credentials, UserInterface $user)
+    {
+        // No credentials check needed in case of token auth
+        return true;
+    }
+
+    public function onAuthenticationSuccess(Request $request, TokenInterface $token, $providerKey)
+    {
+        // No response object needed in token auth
+        return null;
+    }
+
+    public function supportsRememberMe()
+    {
+        // Remember me functionality don't needed in token auth
+        return false;
+    }
+
 
     public function onAuthenticationFailure(Request $request, AuthenticationException $exception): JsonResponse
     {
@@ -74,15 +93,21 @@ class ApiTokenAuthenticator implements SimplePreAuthenticatorInterface, Authenti
         $json = $this->serializer->serialize(
             new ApiResponse(null, JsonResponse::HTTP_UNAUTHORIZED, $exception->getMessage()),
             'json',
-            ['groups' => ['api_v1']]
+            ['groups' => ['api']]
         );
 
         return new JsonResponse($json, JsonResponse::HTTP_UNAUTHORIZED,[], true);
     }
 
-
-    public function supportsToken(TokenInterface $token, $providerKey)
+    public function createAuthenticatedToken(UserInterface $user, $providerKey)
     {
-        return $token instanceof PreAuthenticatedToken && $token->getProviderKey() === $providerKey;
+        $tokenKey = $this->requestStack->getCurrentRequest()->headers->get(self::TOKEN_HEADER);
+
+        return new AuthenticatedApiToken(
+            $user,
+            $tokenKey,
+            $providerKey,
+            $user->getRoles()
+        );
     }
 }
