@@ -43,4 +43,4 @@ services:
     # Torrent searcher
     App\Search\TorrentSearcher:
         arguments:
-            $metadataFactory: '@doctrine.orm.magneticod_entity_manager.metadata_factory'
+            $em: '@doctrine.orm.magneticod_entity_manager'

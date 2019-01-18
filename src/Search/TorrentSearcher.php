@@ -4,8 +4,7 @@ namespace App\Search;
 
 use App\Magnetico\Entity\Torrent;
 use App\Magnetico\Repository\TorrentRepository;
-use Doctrine\Common\Persistence\Mapping\ClassMetadataFactory;
-use Doctrine\ORM\QueryBuilder;
+use Doctrine\ORM\{EntityManagerInterface, QueryBuilder};
 
 class TorrentSearcher
 {
@@ -14,13 +13,13 @@ class TorrentSearcher
     /** @var TorrentRepository */
     private $torrentRepo;
 
-    /** @var ClassMetadataFactory */
-    private $metadataFactory;
+    /** @var EntityManagerInterface */
+    private $em;
 
-    public function __construct(TorrentRepository $torrentRepo, ClassMetadataFactory $metadataFactory)
+    public function __construct(TorrentRepository $torrentRepo, EntityManagerInterface $em)
     {
         $this->torrentRepo = $torrentRepo;
-        $this->metadataFactory = $metadataFactory;
+        $this->em = $em;
     }
 
     public function createSearchQueryBuilder(string $query, string $orderBy = null, string $order = 'asc'): QueryBuilder
@@ -65,7 +64,7 @@ class TorrentSearcher
     {
         return (
             !\in_array($orderBy, self::ORDER_DISABLED_FIELDS, true)
-            && $this->metadataFactory->getMetadataFor(Torrent::class)->hasField($orderBy)
+            && $this->em->getClassMetadata(Torrent::class)->hasField($orderBy)
         );
     }
 
