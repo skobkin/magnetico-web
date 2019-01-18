@@ -6,10 +6,10 @@ use App\Magnetico\Entity\Torrent;
 use App\Search\TorrentSearcher;
 use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\{Request, Response};
 
-class TorrentController extends Controller
+class TorrentController extends AbstractController
 {
     private const PER_PAGE = 20;
 

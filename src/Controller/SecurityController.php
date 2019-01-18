@@ -3,13 +3,13 @@
 namespace App\Controller;
 
 use App\Form\LoginType;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\{FormError, FormInterface};
 use Symfony\Component\HttpFoundation\{Request, Response};
 use Symfony\Component\Security\Http\Authentication\AuthenticationUtils;
 
-class SecurityController extends Controller
+class SecurityController extends AbstractController
 {
     public function login(Request $request, AuthenticationUtils $authenticationUtils): Response
     {

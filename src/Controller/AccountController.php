@@ -4,10 +4,10 @@ namespace App\Controller;
 
 use App\Entity\User;
 use App\Repository\InviteRepository;
-use Symfony\Bundle\FrameworkBundle\Controller\Controller;
+use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Response;
 
-class AccountController extends Controller
+class AccountController extends AbstractController
 {
     public function invites(InviteRepository $inviteRepo): Response
     {

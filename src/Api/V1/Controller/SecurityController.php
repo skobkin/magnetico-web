@@ -45,16 +45,19 @@ class SecurityController extends AbstractApiController
 
     public function logout(TokenStorageInterface $tokenStorage, ApiTokenRepository $apiTokenRepo, EntityManagerInterface $em): JsonResponse
     {
-        $token = $tokenStorage->getToken();
+        if (null === $token = $tokenStorage->getToken()) {
+            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Can\'t retrieve user token.');
+        }
 
         if (!$token instanceof AuthenticatedApiToken) {
-            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Invalid session token type retrieved.');
-        }
-        if (null === $apiTokenKey = $token->getTokenKey()) {
-            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Can\'t retrieve token key from session.');
+            return $this->createJsonResponse(null, [], JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Invalid session token type retrieved.');
         }
 
-        if (null === $apiToken = $apiTokenRepo->findOneBy(['key' => $apiTokenKey])) {
+        if (null === $tokenKey = $token->getTokenKey()) {
+            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Can\'t retrieve token key from the session.');
+        }
+
+        if (null === $apiToken = $apiTokenRepo->findOneBy(['key' => $tokenKey])) {
             return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'API token with such key not found in the database.');
         }
 

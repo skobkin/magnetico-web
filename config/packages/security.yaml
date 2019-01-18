@@ -6,8 +6,6 @@ security:
                 class: App\Entity\User
                 property: username
                 manager_name: default
-        api_token_provider:
-            id: App\Security\ApiTokenUserProvider
     encoders:
         App\Entity\User:
             algorithm: 'argon2i'
@@ -22,9 +20,9 @@ security:
             pattern: ^/api/
             anonymous: ~
             stateless: true
-            simple_preauth:
-                authenticator: App\Security\ApiTokenAuthenticator
-            provider: api_token_provider
+            guard:
+                authenticators:
+                    - App\Security\ApiTokenAuthenticator
         main:
             pattern: ^/
             anonymous: ~
