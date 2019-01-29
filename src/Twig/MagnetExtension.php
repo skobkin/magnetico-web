@@ -2,42 +2,31 @@
 
 namespace App\Twig;
 
+use App\Magnet\MagnetGenerator;
 use Twig\Extension\AbstractExtension;
-use Twig\TwigFunction;
+use Twig\{TwigFilter, TwigFunction};
 
 class MagnetExtension extends AbstractExtension
 {
-    private const MAGNET_TEMPLATE = 'magnet:?xt=urn:btih:%s&dn=%s';
+    /** @var MagnetGenerator */
+    private $magnetGenerator;
 
-    /** @var string[] Array of public trackers which will be added to the magnet link */
-    private $publicTrackers = [];
-
-    /**
-     * @param string[] $publicTrackers
-     */
-    public function __construct(array $publicTrackers = [])
+    public function __construct(MagnetGenerator $magnetGenerator)
     {
-        $this->publicTrackers = $publicTrackers;
+        $this->magnetGenerator = $magnetGenerator;
     }
-
 
     public function getFunctions(): array
     {
         return [
-            new TwigFunction('magnet', [$this, 'createMagnet']),
+            new TwigFunction('magnet', [$this->magnetGenerator, 'generate']),
         ];
     }
 
-    public function createMagnet(string $name, string $infoHash, bool $addPublicTrackers = true): string
+    public function getFilters()
     {
-        $magnetUrl = sprintf(self::MAGNET_TEMPLATE, urlencode($infoHash), urlencode($name));
-
-        if ($addPublicTrackers) {
-            foreach ($this->publicTrackers as $tracker) {
-                $magnetUrl .= '&tr='.urlencode($tracker);
-            }
-        }
-
-        return $magnetUrl;
+        return [
+            new TwigFilter('magnet', [$this->magnetGenerator, 'generate']),
+        ];
     }
 }
