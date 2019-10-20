@@ -8,14 +8,15 @@
             <td>{{ torrent.name }}</td>
         </tr>
         <tr>
-            <td>Hash</td>
+            <td>Magnet</td>
             <td>
-                <a href="{{ magnet(torrent.infoHash, torrent.name) }}">{{ torrent.infoHash }}</a>
+                <a href="{{ magnet(torrent.infoHash, torrent.name) }}"><code>{{ torrent.infoHash }}</code></a>
+                (<a href="{{ path('magnet_redirect', {'infoHash': torrent.infoHash}) }}">Redirect</a>)
             </td>
         </tr>
         <tr>
             <td>Size</td>
-            <td>{{ torrent.totalSize | readable_size }}</td>
+            <td><abbr title="{{ torrent.totalSize }} bytes">{{ torrent.totalSize | readable_size }}</abbr></td>
         </tr>
         <tr>
             <td>Discovered</td>
