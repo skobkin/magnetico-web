@@ -39,7 +39,7 @@ class TorrentSearcher
         $where = $qb->expr()->andX();
 
         foreach ($this->splitQueryToParts($query) as $idx => $part) {
-            $where->add($qb->expr()->like('LOWER(t.name)', ':part_'.$idx));
+            $where->add('ILIKE(t.name , :part_'.$idx.') = TRUE');
             $qb->setParameter('part_'.$idx, '%'.strtolower($part).'%');
         }
 
