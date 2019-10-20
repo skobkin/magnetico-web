@@ -6,7 +6,7 @@ use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation as Serializer;
 
 /**
- * @ORM\Table(name="files", indexes={
+ * @ORM\Table(schema="magneticod", name="files", indexes={
  *     @ORM\Index(name="file_info_hash_index", columns={"torrent_id"})
  * })
  * @ORM\Entity(readOnly=true)
@@ -34,7 +34,7 @@ class File
      *
      * @Serializer\Groups({"api_v1_show"})
      *
-     * @ORM\Column(name="size", type="integer", nullable=false)
+     * @ORM\Column(name="size", type="bigint", nullable=false)
      */
     private $size;
 

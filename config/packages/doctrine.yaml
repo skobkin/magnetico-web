@@ -15,7 +15,7 @@ doctrine:
                 url: '%env(resolve:APP_DATABASE_URL)%'
                 #server_version: 9.6
             magneticod:
-                driver: 'pdo_sqlite'
+                driver: 'pdo_pgsql'
                 url: '%env(resolve:MAGNETICOD_DATABASE_URL)%'
     orm:
         auto_generate_proxy_classes: '%kernel.debug%'
@@ -41,4 +41,3 @@ doctrine:
                         dir: '%kernel.project_dir%/src/Magnetico/Entity'
                         prefix: 'App\Magnetico'
                         alias: Magnetico
-

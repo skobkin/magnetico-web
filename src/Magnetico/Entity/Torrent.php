@@ -7,7 +7,7 @@ use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation as Serializer;
 
 /**
- * @ORM\Table(name="torrents", indexes={
+ * @ORM\Table(schema="magneticod", name="torrents", indexes={
  *     @ORM\Index(name="discovered_on_index", columns={"discovered_on"}),
  *     @ORM\Index(name="info_hash_index", columns={"info_hash"})
  * })
@@ -53,7 +53,7 @@ class Torrent
      *
      * @Serializer\Groups({"api_v1_search", "api_v1_show"})
      *
-     * @ORM\Column(name="total_size", type="integer", nullable=false)
+     * @ORM\Column(name="total_size", type="bigint", nullable=false)
      */
     private $totalSize;
 
