@@ -41,3 +41,6 @@ doctrine:
                         dir: '%kernel.project_dir%/src/Magnetico/Entity'
                         prefix: 'App\Magnetico'
                         alias: Magnetico
+                dql:
+                    string_functions:
+                        ILIKE: 'App\Doctrine\ORM\AST\Ilike'

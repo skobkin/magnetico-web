@@ -43,4 +43,4 @@ services:
     # Torrent searcher
     App\Search\TorrentSearcher:
         arguments:
-            $em: '@doctrine.orm.magneticod_entity_manager'
+            $classMetadata: '@=service(''doctrine.orm.magneticod_entity_manager'').getClassMetadata(''App\\Magnetico\\Entity\\Torrent'')'
