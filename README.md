@@ -67,4 +67,11 @@ php app/console user:add <your_username> <your_email> [your_password] [--invites
 ```bash
 php app/console assets:install public --symlink
 ```
+## Running using Docker Compose
 
+```shell
+docker-compose up
+
+# or with image rebuild
+docker-compose up --build
+```

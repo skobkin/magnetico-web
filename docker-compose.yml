@@ -1,0 +1,18 @@
+version: '3.7'
+
+services:
+    magnetico-web:
+        image: skobkin/magnetico-web-fpm
+        build:
+            context: ./docker
+        container_name: magnetico-web-fpm
+        ports:
+            - "127.0.0.1:${PHP_FPM_PORT:-9000}:9000/tcp"
+        restart: unless-stopped
+        volumes:
+            - "${APP_LOCAL_PATH}:${APP_LOCAL_PATH}"
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "${LOG_MAX_SIZE:-5m}"
+                max-file: "${LOG_MAX_FILE:-5}"
