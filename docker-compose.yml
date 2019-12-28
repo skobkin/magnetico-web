@@ -6,6 +6,7 @@ services:
         build:
             context: ./docker
         container_name: magnetico-web-fpm
+        network_mode: host
         ports:
             - "127.0.0.1:${PHP_FPM_PORT:-9000}:9000/tcp"
         restart: unless-stopped
