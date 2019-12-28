@@ -4,6 +4,7 @@ parameters:
     # environment variables are not available yet.
     # You should not need to change this value.
     env(APP_DATABASE_URL): ''
+    env(POSTGRES_VERSION): '10.10'
     env(MAGNETICOD_DATABASE_URL): ''
 
 doctrine:
@@ -13,10 +14,11 @@ doctrine:
             default:
                 driver: 'pdo_pgsql'
                 url: '%env(resolve:APP_DATABASE_URL)%'
-                #server_version: 9.6
+                server_version: '%env(resolve:POSTGRES_VERSION)%'
             magneticod:
                 driver: 'pdo_pgsql'
                 url: '%env(resolve:MAGNETICOD_DATABASE_URL)%'
+                server_version: '%env(resolve:POSTGRES_VERSION)%'
     orm:
         auto_generate_proxy_classes: '%kernel.debug%'
         default_entity_manager: default
