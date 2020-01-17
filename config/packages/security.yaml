@@ -8,10 +8,8 @@ security:
                 manager_name: default
     encoders:
         App\Entity\User:
-            algorithm: 'argon2i'
-            memory_cost:    16384
-            time_cost:      2
-            threads:        4
+            # https://symfony.com/blog/new-in-symfony-4-3-native-password-encoder
+            algorithm: 'auto'
     firewalls:
         dev:
             pattern: ^/(_(profiler|wdt)|css|images|js)/
