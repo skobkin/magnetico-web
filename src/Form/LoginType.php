@@ -11,8 +11,8 @@ class LoginType extends AbstractType
     public function buildForm(FormBuilderInterface $builder, array $options)
     {
         $builder
-            ->add('_username', TextType::class, ['mapped' => false])
-            ->add('_password', PasswordType::class, ['mapped' => false])
+            ->add('_username', TextType::class, ['mapped' => false, 'required' => true])
+            ->add('_password', PasswordType::class, ['mapped' => false, 'required' => true])
         ;
     }
 
@@ -21,6 +21,4 @@ class LoginType extends AbstractType
         // Empty prefix for default UsernamePasswordFrormAuthenticationListener
         return '';
     }
-
-
 }

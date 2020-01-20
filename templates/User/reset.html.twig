@@ -1,0 +1,11 @@
+{% extends 'base.html.twig' %}
+
+{% block content %}
+    {% if message is defined and message is not empty %}
+        <div class="alert alert-success" role="alert">{{ message }}</div>
+    {% endif %}
+
+    <div id="form-reset">
+        {{ form(form) }}
+    </div>
+{% endblock %}

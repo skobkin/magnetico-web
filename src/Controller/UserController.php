@@ -2,38 +2,39 @@
 
 namespace App\Controller;
 
-use App\Form\{CreateUserRequestType};
-use App\FormRequest\CreateUserRequest;
+use App\Entity\{Invite, PasswordResetToken};
+use App\Repository\PasswordResetTokenRepository;
+use App\Form\{Data\PasswordResetRequestData, Data\PasswordResetData, PasswordResetRequestType, PasswordResetType, RegisterType, Data\RegisterData};
 use App\Repository\InviteRepository;
-use App\User\{InviteManager, UserManager};
+use App\User\{Exception\UserNotFoundException, InviteManager, PasswordResetManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\Form\Extension\Core\Type\SubmitType;
-use Symfony\Component\Form\FormInterface;
+use Symfony\Component\Form\{Extension\Core\Type\SubmitType, FormError, FormInterface};
 use Symfony\Component\HttpFoundation\{Request, Response};
 
 class UserController extends AbstractController
 {
     public function register(
-        string $inviteCode,
+        string $code,
         Request $request,
         EntityManagerInterface $em,
         UserManager $userManager,
         InviteManager $inviteManager,
         InviteRepository $inviteRepo
     ): Response {
-        $createUserRequest = new CreateUserRequest($inviteCode);
-        $form = $this->createRegisterForm($createUserRequest, $inviteCode);
+        $formData = new RegisterData($code);
+        $form = $this->createRegisterForm($formData, $code);
 
-        $invite = $inviteRepo->findOneBy(['code' => $inviteCode, 'usedBy' => null]);
+        /** @var Invite $invite */
+        $invite = $inviteRepo->findOneBy(['code' => $code, 'usedBy' => null]);
 
         $form->handleRequest($request);
 
         if ($form->isSubmitted() && $form->isValid()) {
             $user = $userManager->createUserByInvite(
-                $createUserRequest->username,
-                $createUserRequest->password,
-                $createUserRequest->email,
+                $formData->username,
+                $formData->password,
+                $formData->email,
                 $invite
             );
 
@@ -46,14 +47,96 @@ class UserController extends AbstractController
 
         return $this->render('User/register.html.twig', [
             'form' => $form->createView(),
-            'inviteValid' => $invite ? true : null,
+            'invite' => $invite,
         ]);
     }
 
-    private function createRegisterForm(CreateUserRequest $createUserRequest, string $inviteCode): FormInterface
+    public function requestReset(Request $request, EntityManagerInterface $em, PasswordResetManager $manager): Response
     {
-        $form = $this->createForm(CreateUserRequestType::class, $createUserRequest, [
-            'action' => $this->generateUrl('user_register', ['inviteCode' => $inviteCode]),
+        $formData = new PasswordResetRequestData();
+        $form = $this->createResetRequestForm($formData);
+
+        $form->handleRequest($request);
+
+        $message = null;
+
+        if ($form->isSubmitted() && $form->isValid()) {
+            try {
+                $manager->sendResetLink($formData->email);
+
+                $message = 'Password reset link was sent';
+            } catch (UserNotFoundException $e) {
+                $form->addError(new FormError('User not found'));
+            } catch (\Throwable $e) {
+                \Sentry\captureException($e);
+                $form->addError(new FormError('Something happened. Try again later or contact the administrator.'));
+            }
+        }
+
+        return $this->render('User/reset.html.twig', [
+            'form' => $form->createView(),
+            'message' => $message,
+        ]);
+    }
+
+    public function reset(
+        string $code,
+        Request $request,
+        EntityManagerInterface $em,
+        UserManager $manager,
+        PasswordResetTokenRepository $tokenRepository
+    ): Response
+    {
+        $formData = new PasswordResetData();
+        $form = $this->createResetForm($formData, $code);
+
+        /** @var PasswordResetToken $token */
+        $token = $tokenRepository->find($code);
+
+        $form->handleRequest($request);
+
+        if ($form->isSubmitted() && $form->isValid()) {
+            if ($token && $token->isValid()) {
+                $manager->changePassword($token->getUser(), $formData->password);
+
+                $em->remove($token);
+                $em->flush();
+
+                return $this->redirectToRoute('user_auth_login');
+            } else {
+                $form->addError(new FormError('Invalid token.'));
+            }
+        }
+
+        return $this->render('User/reset.html.twig', [
+            'form' => $form->createView(),
+        ]);
+    }
+
+    private function createResetRequestForm(PasswordResetRequestData $formData): FormInterface
+    {
+        $form = $this->createForm(PasswordResetRequestType::class, $formData, [
+            'action' => $this->generateUrl('user_reset_request'),
+        ]);
+        $form->add('submit', SubmitType::class);
+
+        return $form;
+    }
+
+    private function createResetForm(PasswordResetData $formData, string $code): FormInterface
+    {
+        $form = $this->createForm(PasswordResetType::class, $formData, [
+            'action' => $this->generateUrl('user_reset', ['code' => $code]),
+        ]);
+        $form->add('submit', SubmitType::class);
+
+        return $form;
+    }
+
+    private function createRegisterForm(RegisterData $formData, string $code): FormInterface
+    {
+        $form = $this->createForm(RegisterType::class, $formData, [
+            'action' => $this->generateUrl('user_register', ['code' => $code]),
         ]);
 
         $form->add('submit', SubmitType::class);

@@ -1,6 +1,6 @@
 <?php
 
-namespace App\FormRequest;
+namespace App\Form\Data;
 
 use Symfony\Component\Validator\Constraints as Assert;
 use App\Validator\Constraints as AppAssert;
@@ -8,7 +8,7 @@ use App\Validator\Constraints as AppAssert;
 /**
  * @todo implement UniqueEntity constraint for DTO and use it here
  */
-class CreateUserRequest
+class RegisterData
 {
     /**
      * @var string

@@ -19,7 +19,7 @@
                 {% if invite.usedBy %}
                     Used by <strong>{{ invite.usedBy.username }}</strong>.
                 {% else %}
-                    {% set invite_url = url('user_register', { inviteCode: invite.code }) %}
+                    {% set invite_url = url('user_register', { code: invite.code }) %}
                     <input class="form-control" type="url" value="{{ invite_url }}" readonly="readonly" onclick="this.select()">
                 {% endif %}
             </td>

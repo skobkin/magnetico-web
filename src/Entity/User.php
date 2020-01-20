@@ -4,6 +4,7 @@ namespace App\Entity;
 
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
+use Symfony\Component\Security\Core\Encoder\PasswordEncoderInterface;
 use Symfony\Component\Security\Core\User\UserInterface;
 
 /**
@@ -63,10 +64,10 @@ class User implements UserInterface, \Serializable
      */
     private $invites;
 
-    public function __construct(string $username, string $password, string $email, array $roles = [])
+    public function __construct(string $username, PasswordEncoderInterface $encoder, string $rawPassword, string $email, array $roles = [])
     {
         $this->username = $username;
-        $this->password = $password;
+        $this->password = $encoder->encodePassword($rawPassword, null);
         $this->email = $email;
         $this->roles = $roles ?: ['ROLE_USER'];
         $this->createdAt = new \DateTime();
@@ -87,9 +88,9 @@ class User implements UserInterface, \Serializable
         return $this->password;
     }
 
-    public function updatePassword(string $password): void
+    public function changePassword(PasswordEncoderInterface $encoder, string $rawPassword): void
     {
-        $this->password = $password;
+        $this->password = $encoder->encodePassword($rawPassword, null);
     }
 
     public function getSalt()
@@ -143,10 +144,10 @@ class User implements UserInterface, \Serializable
     /** @see \Serializable::unserialize() */
     public function unserialize($serialized)
     {
-        list(
+        [
             $this->id,
             $this->username,
             $this->password
-        ) = unserialize($serialized, ['allowed_classes' => false]);
+        ] = unserialize($serialized, ['allowed_classes' => false]);
     }
 }
