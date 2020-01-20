@@ -21,6 +21,4 @@ class LoginType extends AbstractType
         // Empty prefix for default UsernamePasswordFrormAuthenticationListener
         return '';
     }
-
-
 }

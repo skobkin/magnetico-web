@@ -29,7 +29,7 @@ class SecurityController extends AbstractController
     private function createLoginForm(string $username): FormInterface
     {
         $form = $this->createForm(LoginType::class, null, [
-            'action' => $this->generateUrl('user_login'),
+            'action' => $this->generateUrl('user_auth_login'),
         ]);
         $form->get('_username')->setData($username);
         $form->add('submit', SubmitType::class);

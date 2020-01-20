@@ -1,7 +1,7 @@
 {% extends 'base.html.twig' %}
 
 {% block content %}
-    {% if inviteValid %}
+    {% if invite is not null %}
     <div id="form-register">
         {{ form(form) }}
     </div>

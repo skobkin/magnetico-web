@@ -3,7 +3,7 @@
 parameters:
     locale: 'en'
     env(TRACKER_LIST_FILE): '%kernel.project_dir%/config/public_trackers.json'
-    env(NEW_USER_INVITES): 10
+    env(NEW_USER_INVITES): '10'
 
 services:
     # default configuration for services in *this* file
@@ -16,6 +16,7 @@ services:
         bind:
             $publicTrackers: '%env(json:file:resolve:TRACKER_LIST_FILE)%'
             $newUserInvites: '%env(NEW_USER_INVITES)%'
+            $fromAddress: '%env(MAILER_FROM)%'
 
     App\:
         resource: '../src/*'
@@ -44,3 +45,6 @@ services:
     App\Search\TorrentSearcher:
         arguments:
             $classMetadata: '@=service(''doctrine.orm.magneticod_entity_manager'').getClassMetadata(''App\\Magnetico\\Entity\\Torrent'')'
+
+    Monolog\Processor\PsrLogMessageProcessor:
+        tags: { name: monolog.processor, handler: sentry }
