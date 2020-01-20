@@ -196,16 +196,19 @@
         "version": "2.1.0"
     },
     "sentry/sentry": {
-        "version": "1.10.0"
+        "version": "2.3.0"
     },
     "sentry/sentry-symfony": {
-        "version": "1.0",
+        "version": "3.0",
         "recipe": {
             "repo": "github.com/symfony/recipes-contrib",
             "branch": "master",
-            "version": "1.0",
-            "ref": "fa1a2dfc020798cd7076b5419596e72dca07047a"
-        }
+            "version": "3.0",
+            "ref": "9746f0823302d7980e5273ef7a69ef3f5ac80914"
+        },
+        "files": [
+            "config/packages/sentry.yaml"
+        ]
     },
     "symfony/cache": {
         "version": "v4.1.0"
