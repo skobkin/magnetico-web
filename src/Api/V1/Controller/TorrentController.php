@@ -4,8 +4,8 @@ namespace App\Api\V1\Controller;
 
 use App\Api\V1\DTO\ListPage;
 use App\Magnetico\Entity\Torrent;
+use App\Pager\PagelessDoctrineORMAdapter;
 use App\Search\TorrentSearcher;
-use Pagerfanta\Adapter\DoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Component\HttpFoundation\{JsonResponse, Request};
 
@@ -20,9 +20,10 @@ class TorrentController extends AbstractApiController
         $orderBy = $request->query->get('order-by');
         $order = $request->query->get('order', 'asc');
 
-        $pagerAdapter = new DoctrineORMAdapter($searcher->createSearchQueryBuilder($query, $orderBy, $order));
+        $pagerAdapter = new PagelessDoctrineORMAdapter($searcher->createSearchQueryBuilder($query, $orderBy, $order));
         $pager = new Pagerfanta($pagerAdapter);
         $pager
+            ->setAllowOutOfRangePages(true)
             ->setCurrentPage($page)
             ->setMaxPerPage(self::PER_PAGE)
         ;

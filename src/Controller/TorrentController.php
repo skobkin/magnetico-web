@@ -4,7 +4,7 @@ namespace App\Controller;
 
 use App\Magnetico\Entity\Torrent;
 use App\Search\TorrentSearcher;
-use Pagerfanta\Adapter\DoctrineORMAdapter;
+use App\Pager\PagelessDoctrineORMAdapter;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\{Request, Response};
@@ -20,9 +20,10 @@ class TorrentController extends AbstractController
         $orderBy = $request->query->get('order-by');
         $order = $request->query->get('order', 'asc');
 
-        $pagerAdapter = new DoctrineORMAdapter($searcher->createSearchQueryBuilder($query, $orderBy, $order));
+        $pagerAdapter = new PagelessDoctrineORMAdapter($searcher->createSearchQueryBuilder($query, $orderBy, $order));
         $pager = new Pagerfanta($pagerAdapter);
         $pager
+            ->setAllowOutOfRangePages(true)
             ->setCurrentPage($page)
             ->setMaxPerPage(self::PER_PAGE)
         ;
