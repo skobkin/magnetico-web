@@ -4,9 +4,10 @@ namespace App\Security\Token;
 
 use App\Entity\User;
 use Symfony\Component\Security\Core\Authentication\Token\PreAuthenticatedToken;
+use Symfony\Component\Security\Guard\Token\GuardTokenInterface;
 
 /** This token stores ApiToken key even after eraseCredentials() called */
-class AuthenticatedApiToken extends PreAuthenticatedToken
+class AuthenticatedApiToken extends PreAuthenticatedToken implements GuardTokenInterface
 {
     /** @var string|null This token is stored only for this request and will not be erased by eraseCredentials() or serialized */
     private $tokenKey;

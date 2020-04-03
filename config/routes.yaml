@@ -90,3 +90,12 @@ api_v1_torrents_show:
         method: GET
         _format:  json
         id: '\d+'
+
+api_v1_rss_last:
+    path: /api/v1/feed/rss/last
+    controller: App\Api\V1\Controller\RssController::last
+    defaults:
+        _format: xml
+    requirements:
+        method: GET
+        _format: xml

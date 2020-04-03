@@ -36,13 +36,18 @@ class ApiTokenAuthenticator extends AbstractGuardAuthenticator
 
     public function supports(Request $request): bool
     {
-        return $request->headers->has(self::TOKEN_HEADER);
+        // Let's also support cookies and query params for some cases like torrent clients.
+        return $request->headers->has(self::TOKEN_HEADER) ||
+            $request->cookies->has(self::TOKEN_HEADER) ||
+            $request->query->has(self::TOKEN_HEADER);
     }
 
     public function getCredentials(Request $request)
     {
         return [
-            'token' => $request->headers->get(self::TOKEN_HEADER),
+            'token' => $request->headers->get(self::TOKEN_HEADER) ?:
+                $request->cookies->get(self::TOKEN_HEADER) ?:
+                $request->query->get(self::TOKEN_HEADER),
         ];
     }
 
@@ -101,7 +106,12 @@ class ApiTokenAuthenticator extends AbstractGuardAuthenticator
 
     public function createAuthenticatedToken(UserInterface $user, $providerKey)
     {
-        $tokenKey = $this->requestStack->getCurrentRequest()->headers->get(self::TOKEN_HEADER);
+        $request = $this->requestStack->getCurrentRequest();
+
+        $tokenKey = $request->headers->get(self::TOKEN_HEADER) ?:
+            $request->cookies->get(self::TOKEN_HEADER) ?:
+            $request->query->get(self::TOKEN_HEADER)
+        ;
 
         return new AuthenticatedApiToken(
             $user,
