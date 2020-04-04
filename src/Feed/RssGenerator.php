@@ -56,6 +56,7 @@ class RssGenerator
         }
 
         // TODO feed pagination
+        // @see https://tools.ietf.org/html/rfc5005#section-3
 
         return $feed;
     }
@@ -101,6 +102,7 @@ class RssGenerator
         $item
             ->title($torrent->getName())
             ->description($torrent->getInfoHash())
+            ->pubDate($torrent->getDiscoveredOn())
             ->url($this->generateUrl('torrents_show', ['id' => $torrent->getId()]))
             ->enclosure(
                 $this->magnetGenerator->generate($torrent->getInfoHash(), $torrent->getName()),
