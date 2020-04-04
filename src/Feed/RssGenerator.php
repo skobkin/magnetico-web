@@ -6,9 +6,7 @@ namespace App\Feed;
 use App\Magnet\MagnetGenerator;
 use App\Magnetico\Entity\Torrent;
 use App\Magnetico\Repository\TorrentRepository;
-use App\Pager\PagelessDoctrineORMAdapter;
 use Doctrine\ORM\QueryBuilder;
-use Pagerfanta\Pagerfanta;
 use Suin\RSSWriter\{Channel, Feed, Item};
 use Symfony\Component\Routing\{Generator\UrlGeneratorInterface, RouterInterface};
 
@@ -35,20 +33,19 @@ class RssGenerator
 
     public function generateLast(int $page): string
     {
-        $qb = $this->createLastTorrentsQueryBuilder();
-        $pager = new Pagerfanta(new PagelessDoctrineORMAdapter($qb));
-        $pager
-            ->setAllowOutOfRangePages(true)
-            ->setCurrentPage($page)
-            ->setMaxPerPage(self::PER_PAGE)
-        ;
+        $qb = $this->createLastTorrentsQueryBuilder(self::PER_PAGE, $page * self::PER_PAGE);
 
-        $feed = $this->createFeedFromTorrents($pager->getCurrentPageResults());
+        $feed = $this->createFeedFromTorrents($qb->getQuery()->getResult());
 
         return $feed->render();
     }
 
-    private function createFeedFromTorrents(\Traversable $torrents): Feed
+    /**
+     * @param Torrent[] $torrents
+     *
+     * @return Feed
+     */
+    private function createFeedFromTorrents(array $torrents): Feed
     {
         $feed = new Feed();
         $channel = $this->createChannel();
@@ -83,11 +80,11 @@ class RssGenerator
     }
 
     /**
-     * @param Torrent[]|\Traversable $torrents
+     * @param Torrent[] $torrents
      *
      * @return Item[]
      */
-    private function createItemsFromTorrents(\Traversable $torrents): array
+    private function createItemsFromTorrents(array $torrents): array
     {
         $items = [];
 
@@ -116,12 +113,15 @@ class RssGenerator
         return $item;
     }
 
-    private function createLastTorrentsQueryBuilder(): QueryBuilder
+    private function createLastTorrentsQueryBuilder(int $limit = self::PER_PAGE, int $offset = 0): QueryBuilder
     {
         $qb = $this->repo->createQueryBuilder('t');
         $qb
             ->select('t')
-            ->orderBy('t.id', 'DESC');
+            ->orderBy('t.id', 'DESC')
+            ->setMaxResults($limit)
+            ->setFirstResult($offset)
+        ;
 
         return $qb;
     }
