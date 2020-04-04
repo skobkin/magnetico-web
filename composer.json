@@ -19,6 +19,7 @@
         "excelwebzone/recaptcha-bundle": "^1.5",
         "sensio/framework-extra-bundle": "^5.1",
         "sentry/sentry-symfony": "^3.4",
+        "suin/php-rss-writer": "^1.6",
         "symfony/console": "^4.1",
         "symfony/dotenv": "^4.1",
         "symfony/expression-language": "^4.1",
