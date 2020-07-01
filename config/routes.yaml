@@ -47,9 +47,21 @@ user_auth_login:
 user_auth_logout:
     path: /auth/logout
 
-user_account_invites:
-    path: /account/invites
-    controller: App\Controller\AccountController::invites
+user_account:
+    path: /account
+    controller: App\Controller\AccountController::account
+    requirements:
+        method: GET
+
+user_account_token_create:
+    path: /profile/api/token/create
+    controller: App\Controller\AccountController::addApiToken
+    requirements:
+        method: GET
+
+user_account_token_revoke:
+    path: /profile/api/token/revoke/{key}
+    controller: App\Controller\AccountController::revokeApiToken
     requirements:
         method: GET
 
