@@ -28,3 +28,9 @@ framework:
 
         # APCu (not recommended with heavy random-write workloads as memory fragmentation can cause perf issues)
         #app: cache.adapter.apcu
+        prefix_seed: magnetico-web
+        pools:
+            magneticod.cache:
+                adapter: cache.adapter.redis
+                provider: '%env(REDIS_DSN)%'
+                default_lifetime: 600
