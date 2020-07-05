@@ -20,7 +20,7 @@
         </th>
         <td>
             {# We can't use constant() in the hash so it's necessay to hard-code query parameter here #}
-            <input class="form-control" type="text" value="{{ url('api_v1_rss_last') }}?{{ {'api-key': token.key} | url_encode }}" readonly onclick="this.select();">
+            <input class="form-control" type="text" value="{{ url('api_v1_rss_last') }}?{{ {'api-token': token.key} | url_encode }}" readonly onclick="this.select();">
         </td>
         <td>
             {{ token.createdAt | date('Y-m-d H:i:s') }}
