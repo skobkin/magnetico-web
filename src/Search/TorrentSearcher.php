@@ -7,6 +7,9 @@ use Doctrine\ORM\{Mapping\ClassMetadata, QueryBuilder};
 
 class TorrentSearcher
 {
+    /** Minimal word length to be used when searching in the database. */
+    public const MIN_PART_LENGTH = 3;
+
     private const ORDER_DISABLED_FIELDS = ['infoHash'];
 
     /** @var TorrentRepository */
@@ -73,6 +76,20 @@ class TorrentSearcher
         $query = trim($query);
         $query = preg_replace('/\s+/', ' ', $query);
 
-        return explode(' ', $query);
+        $parts = explode(' ', $query);
+
+        return $this->removeShortParts($parts);
+    }
+
+    /**
+     * @param string[] $words
+     *
+     * @return string[]
+     */
+    private function removeShortParts(array $words): array
+    {
+        return array_filter($words, function (string $word) {
+            return mb_strlen($word) >= self::MIN_PART_LENGTH;
+        });
     }
 }

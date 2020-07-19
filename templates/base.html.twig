@@ -44,17 +44,24 @@
 <main id="content" role="main" class="container">
     {% if is_granted('ROLE_USER') %}
     <div class id="form-search">
-            <form class="" action="{{ path('torrents_search') }}" method="get">
-                <div class="input-group  mb-3">
-                    <input name="query" class="form-control" type="text" placeholder="Torrent" aria-label="Search"
-                           value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}"
-                           {# @var app \Symfony\Bridge\Twig\AppVariable #}
-                           {% if 'index' == app.request.get('_route') %}autofocus{% endif %} />
-                    <div class="input-group-append">
-                        <button class="btn btn-outline-primary my-2 my-sm-0" type="submit"><i class="fas fa-search"></i> Search</button>
-                    </div>
+        <form class="" action="{{ path('torrents_search') }}" method="get">
+            <div class="input-group mb-3">
+                <input name="query" class="form-control" type="text" placeholder="Torrent" aria-label="Search"
+                       value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}"
+                       {# @var app \Symfony\Bridge\Twig\AppVariable #}
+                       {% if 'index' == app.request.get('_route') %}autofocus{% endif %} />
+                <div class="input-group-append">
+                    <button class="btn btn-outline-primary my-2 my-sm-0" type="submit"><i class="fas fa-search"></i> Search</button>
+                    <button class="btn btn-outline-info" type="button" data-toggle="collapse" data-target="#search-rules" aria-expanded="false" aria-controls="search-rules">
+                        <i class="fa fa-question-circle"></i>
+                    </button>
                 </div>
-            </form>
+            </div>
+        </form>
+
+        <div class="alert alert-info collapse" role="alert" id="search-rules">
+            {{ include('search_rules_help.html.twig') }}
+        </div>
     </div>
     {% endif %}
 
