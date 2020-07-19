@@ -1,0 +1,19 @@
+<p>
+    Use words consisting of <strong>{{ constant('\\App\\Search\\TorrentSearcher::MIN_PART_LENGTH') }}+</strong> characters.
+    Shorter words will be <u>ignored</u>.
+</p>
+<p>
+    The search will find torrents containing <strong>all</strong> words you used <u>regardless of their order and case</u>.
+</p>
+<p>
+    Examples: <br/>
+    Use <code>pirates silicon valley</code> if you want to find "Pirates of Silicon Valley". Note that <code>of</code> will be ignored even
+    if you use it in the query. <br/>
+    Use <code>some series s08e10</code> if you want to find specific episode of some season of TV show. <br/>
+    Use <code>some series season</code> if you want to find full season. <br/>
+    It's also useful to use popular keywords if you want to find specific quality or format: <br/>
+    <code>some show 2160 265</code> should be enough to find what you need in 4k encoded with H.265 (HEVC).
+</p>
+<p>
+    Use your imagination <i class="fas fa-smile-wink"></i>
+</p>
