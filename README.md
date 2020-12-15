@@ -36,9 +36,14 @@ composer install
 composer install --no-dev --optimize-autoloader
 ```
 
-After dependencies installation you may be needed to create `.env` file (see `.env.dist`) 
+After dependencies installation you may be needed to create `.env.local` file (see `.env` for reference) 
 or set appropriate [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
 for production usage.
+
+Check [Symfony documentation](https://symfony.com/doc/5.1/configuration.html#overriding-environment-values-via-env-local) for more details about `.env` files.
+
+You can also check [this post](https://symfony.com/doc/5.1/configuration/dot-env-changes.html) about `.env` changes in Symfony if you're updating from an 
+old version of the project.
 
 ## Database configuration
 
@@ -50,8 +55,8 @@ You **must** set environment variables for both databases: magneticod's and magn
 ## Database schema migration
 
 ```bash
-# Only for 'default' EntityManager (PostgreSQL)
-php app/console doc:mig:mig --em=default
+# Only for 'default' EntityManager (Application entities)
+php bin/console doc:mig:mig --em=default
 ```
 
 ## User creation
@@ -59,19 +64,11 @@ php app/console doc:mig:mig --em=default
 ```bash
 # see --help for more info
 # If you don't specify the password it'll be requested from you in the command line
-php app/console user:add <your_username> <your_email> [your_password] [--invites=10]
+php bin/console user:add <your_username> <your_email> [your_password] [--invites=10]
 ```
 
 ## Web assets installation
 
 ```bash
-php app/console assets:install public --symlink
-```
-## Running using Docker Compose
-
-```shell
-docker-compose up
-
-# or with image rebuild
-docker-compose up --build
+php bin/console assets:install public --symlink
 ```
