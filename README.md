@@ -59,6 +59,12 @@ You **must** set environment variables for both databases: magneticod's and magn
 php bin/console doc:mig:mig --em=default
 ```
 
+## Web assets installation
+
+```bash
+php bin/console assets:install public --symlink
+```
+
 ## User creation
 
 ```bash
@@ -67,8 +73,9 @@ php bin/console doc:mig:mig --em=default
 php bin/console user:add <your_username> <your_email> [your_password] [--invites=10]
 ```
 
-## Web assets installation
+## Giving invites to the user
 
 ```bash
-php bin/console assets:install public --symlink
+# see --help for more info
+php bin/console invite:add <username> <number-of-invites>
 ```
