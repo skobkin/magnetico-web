@@ -1,5 +1,17 @@
 {% extends 'base.html.twig' %}
 
+{% block css %}
+    {{ parent() }}
+    <!-- BSTreeView plugin -->
+    <link href="{{ asset('assets/bstreeview/css/bstreeview.min.css') }}" rel="stylesheet">
+{% endblock %}
+
+{% block javascript %}
+    {{ parent() }}
+    <!-- BSTreeView plugin -->
+    <script src="{{ asset('assets/bstreeview/js/bstreeview.min.js') }}"></script>
+{% endblock %}
+
 {% block content %}
     {# @var torrent \App\Magnetico\Entity\Torrent #}
     <table class="table">
@@ -16,7 +28,7 @@
         </tr>
         <tr>
             <td>Size</td>
-            <td><abbr title="{{ torrent.totalSize }} bytes">{{ torrent.totalSize | readable_size }}</abbr></td>
+            <td><abbr title="{{ torrent.totalSize }} bytes">{{ torrent.totalSize | humanize_size }}</abbr></td>
         </tr>
         <tr>
             <td>Discovered</td>
@@ -24,21 +36,5 @@
         </tr>
     </table>
 
-    <table class="table">
-        <thead>
-        <tr>
-            <th scope="col">File</th>
-            <th scope="col">Size</th>
-        </tr>
-        </thead>
-        <tbody>
-        {# @var file \App\Magnetico\Entity\File #}
-        {% for file in torrent.files | sort %}
-            <tr>
-                <td>{{ file.path }}</td>
-                <td>{{ file.size | readable_size }}</td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+    {% include 'torrent_files.html.twig' with {'torrent': torrent} only %}
 {% endblock %}

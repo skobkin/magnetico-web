@@ -1,0 +1,10 @@
+<div class="file-tree"></div>
+
+{# @var \App\Magnetico\Entity\Torrent torrent #}
+<script type="text/javascript">
+    document.addEventListener('DOMContentLoaded', function(){
+        let tree = {{ torrent | torrent_file_tree | json_encode | raw }};
+
+        $('.file-tree').bstreeview({data: tree});
+    });
+</script>

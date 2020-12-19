@@ -1,11 +1,8 @@
 <?php
 
-namespace App\Twig;
+namespace App\Helper;
 
-use Twig\Extension\AbstractExtension;
-use Twig\TwigFilter;
-
-class HumanReadableSizeExtension extends AbstractExtension
+class FileSizeHumanizer
 {
     // Can't really exceed 'EB' on 64-bit platform but let it go
     private const SIZE_SUFFIXES = ['B','kB','MB','GB','TB','PB','EB','ZB','YB'];
@@ -21,14 +18,7 @@ class HumanReadableSizeExtension extends AbstractExtension
         $this->binaryPrefix = $useBinaryPrefix;
     }
 
-    public function getFilters(): array
-    {
-        return [
-            new TwigFilter('readable_size', [$this, 'humanizeSize']),
-        ];
-    }
-
-    public function humanizeSize(int $bytes, int $decimals = 2, bool $forceBinary = false): string
+    public function humanize(int $bytes, int $decimals = 2, bool $forceBinary = false): string
     {
         $bytesString = (string) $bytes;
 

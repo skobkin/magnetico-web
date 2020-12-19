@@ -21,7 +21,7 @@
         <tr>
             <td><a href="{{ magnet(torrent.infoHash, torrent.name) }}">&#128279;</a></td>
             <td><a href="{{ path('torrents_show', {'id': torrent.id}) }}">{{ torrent.name }}</a></td>
-            <td>{{ torrent.totalSize | readable_size }}</td>
+            <td>{{ torrent.totalSize | humanize_size }}</td>
             <td>{{ torrent.discoveredOn | date('Y-m-d H:i:s')}}</td>
         </tr>
         {% endfor %}

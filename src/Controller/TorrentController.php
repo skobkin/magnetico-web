@@ -5,6 +5,7 @@ namespace App\Controller;
 use App\Magnetico\Entity\Torrent;
 use App\Search\TorrentSearcher;
 use App\Pager\PagelessDoctrineORMAdapter;
+use App\View\Torrent\FileTreeNode;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\{Request, Response};
@@ -38,6 +39,7 @@ class TorrentController extends AbstractController
     {
         return $this->render('torrent_show.html.twig', [
             'torrent' => $torrent,
+            'files' => FileTreeNode::createFromTorrent($torrent),
         ]);
     }
 }
