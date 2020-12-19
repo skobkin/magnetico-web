@@ -39,9 +39,15 @@ class TorrentSearcher
     {
         $qb = $this->torrentRepo->createQueryBuilder('t');
 
+        $queryParts = $this->splitQueryToParts($query);
+
+        if (count($queryParts) < 1) {
+            return $qb;
+        }
+
         $where = $qb->expr()->andX();
 
-        foreach ($this->splitQueryToParts($query) as $idx => $part) {
+        foreach ($queryParts as $idx => $part) {
             $where->add('ILIKE(t.name , :part_'.$idx.') = TRUE');
             $qb->setParameter('part_'.$idx, '%'.strtolower($part).'%');
         }
