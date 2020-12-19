@@ -66,7 +66,7 @@ class AddUserCommand extends Command
         }
 
         if (!$password) {
-            $output->writeln('User password cannot be empty.');
+            $output->writeln('<error>User password cannot be empty.</error>');
 
             return 1;
         }
@@ -86,7 +86,7 @@ class AddUserCommand extends Command
 
         $this->em->flush();
 
-        $output->writeln(sprintf('User \'%s\' registered, %d invites added.', $user->getUsername(), $invites));
+        $output->writeln(sprintf('<info>User \'%s\' registered, %d invites added.</info>', $user->getUsername(), $invites));
 
         return 0;
     }
