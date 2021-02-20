@@ -32,11 +32,15 @@ Set up appropriate [write permissions](https://symfony.com/doc/current/setup/fil
 ```bash
 # In developer environment:
 composer install
+
 # In production environment
+# You should tell the app that it's running in the production environment.
+# You can use environment variables or set it in the .env.local file like that:
+echo 'APP_ENV=prod' > ./.env.local
 composer install --no-dev --optimize-autoloader
 ```
 
-After dependencies installation you may be needed to create `.env.local` file (see `.env` for reference) 
+After dependencies installation you may need to create `.env.local` file (see `.env` for reference) 
 or set appropriate [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
 for production usage.
 
@@ -51,6 +55,14 @@ See [Symfony database configuration](https://symfony.com/doc/current/doctrine.ht
 documentation for more details.
 
 You **must** set environment variables for both databases: magneticod's and magnetico-web's PostgreSQL.
+
+### Schema considerations
+
+Make sure that `magnetico-web` and `magneticod` are using the same schema for storing torrents in the PostgreSQL database.
+Check `magneticod` docs [here](https://github.com/boramalper/magnetico/tree/master/pkg#postgresql-database-engine-only-magneticod-part-implemented)
+and make sure that `schema` parameter either not set or set to `magneticod` (default value).
+
+`magnetico-web` uses `magneticod` schema to search for torrents so if you set `magenticod` to use another schema search **will not work**.
 
 ## Database schema migration
 
