@@ -1,11 +1,19 @@
 sentry:
     options:
         send_default_pii: true
-        excluded_exceptions:
-            - 'Symfony\Component\HttpKernel\Exception\NotFoundHttpException'
-            - 'Symfony\Component\HttpKernel\Exception\BadRequestHttpException'
-            - 'Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException'
-    monolog:
-        error_handler:
-            enabled: true
-            level: error
+        integrations:
+            - 'Sentry\Integration\IgnoreErrorsIntegration'
+
+services:
+    Sentry\Integration\IgnoreErrorsIntegration:
+        arguments:
+            $options:
+                ignore_exceptions:
+                    - 'Symfony\Component\HttpKernel\Exception\NotFoundHttpException'
+                    - 'Symfony\Component\HttpKernel\Exception\BadRequestHttpException'
+                    - 'Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException'
+
+    Sentry\Monolog\Handler:
+        arguments:
+            $hub: '@Sentry\State\HubInterface'
+            $level: !php/const Monolog\Logger::ERROR
