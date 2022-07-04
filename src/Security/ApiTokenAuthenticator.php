@@ -108,6 +108,7 @@ class ApiTokenAuthenticator extends AbstractGuardAuthenticator
         return new JsonResponse($json, JsonResponse::HTTP_UNAUTHORIZED,[], true);
     }
 
+    /** @deprecated use AuthenticatorInterface::createToken() instead */
     public function createAuthenticatedToken(UserInterface $user, $providerKey)
     {
         $request = $this->requestStack->getCurrentRequest();
