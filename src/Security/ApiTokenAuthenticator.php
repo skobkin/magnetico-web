@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Security;
 
@@ -13,6 +14,9 @@ use Symfony\Component\Security\Core\User\{UserInterface, UserProviderInterface};
 use Symfony\Component\Security\Guard\AbstractGuardAuthenticator;
 use Symfony\Component\Serializer\SerializerInterface;
 
+/**
+ * @deprecated Refactor to new Authenticators system @see https://gitlab.com/skobkin/magnetico-web/-/issues/26
+ */
 class ApiTokenAuthenticator extends AbstractGuardAuthenticator
 {
     public const TOKEN_HEADER = 'api-token';
@@ -108,9 +112,9 @@ class ApiTokenAuthenticator extends AbstractGuardAuthenticator
     {
         $request = $this->requestStack->getCurrentRequest();
 
-        $tokenKey = $request->headers->get(self::TOKEN_HEADER) ?:
-            $request->cookies->get(self::TOKEN_HEADER) ?:
-            $request->query->get(self::TOKEN_HEADER)
+        $tokenKey = $request?->headers?->get(self::TOKEN_HEADER) ?:
+            $request?->cookies?->get(self::TOKEN_HEADER) ?:
+            $request?->query?->get(self::TOKEN_HEADER)
         ;
 
         return new AuthenticatedApiToken(
