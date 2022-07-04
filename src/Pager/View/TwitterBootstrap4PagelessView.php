@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Pager\View;
 
 use Pagerfanta\Pagerfanta;
@@ -27,7 +29,7 @@ class TwitterBootstrap4PagelessView implements ViewInterface
         $this->template = $template ?: $this->createDefaultTemplate();
     }
 
-    public function render(PagerfantaInterface $pagerfanta, $routeGenerator, array $options = array())
+    public function render(PagerfantaInterface $pagerfanta, callable $routeGenerator, array $options = []): string
     {
         $this->initializePagerfanta($pagerfanta);
 
@@ -36,7 +38,7 @@ class TwitterBootstrap4PagelessView implements ViewInterface
         return $this->generate();
     }
 
-    public function getName()
+    public function getName(): string
     {
         return 'twitter_bootstrap4_pageless';
     }
