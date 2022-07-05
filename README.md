@@ -91,3 +91,24 @@ php bin/console user:add <your_username> <your_email> [your_password] [--invites
 # see --help for more info
 php bin/console invite:add <username> <number-of-invites>
 ```
+
+## Enabling dev mode
+
+```shell
+echo 'APP_ENV=dev > .env.local'
+```
+
+## Running in [RoadRunner](https://roadrunner.dev)
+
+```shell
+# First time only:
+./vendor/bin/rr get --location bin/
+
+# Running the server:
+./bin/rr serve
+
+# Running the server in dev mode (watching enabled)
+bin/rr serve -c .rr.dev.yaml
+```
+
+Read more [here](https://github.com/baldinof/roadrunner-bundle) and [here](https://github.com/roadrunner-server/roadrunner).

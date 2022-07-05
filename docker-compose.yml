@@ -2,16 +2,19 @@ version: '3.7'
 
 services:
     magnetico-web:
-        image: skobkin/magnetico-web-fpm
+        image: skobkin/magnetico-web
         build:
-            context: ./docker
-        container_name: magnetico-web-fpm
-        network_mode: host
+            context: .
+        container_name: magnetico-web
+        hostname: magnetico-web
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
         ports:
-            - "127.0.0.1:${PHP_FPM_PORT:-9000}:9000/tcp"
+            - "127.0.0.1:${EXT_HTTP_PORT:-8080}:8080/tcp"
         restart: unless-stopped
+        user: "$UID"
         volumes:
-            - "${APP_LOCAL_PATH}:${APP_LOCAL_PATH}"
+            - "${LOG_PATH:-./var/log}:/app/var/log"
         logging:
             driver: "json-file"
             options:
