@@ -53,8 +53,7 @@
         "symfony/yaml": "^5.4"
     },
     "require-dev": {
-        "symfony/web-profiler-bundle": "^5.4",
-        "symfony/web-server-bundle": "^4.1"
+        "symfony/web-profiler-bundle": "^5.4"
     },
     "config": {
         "preferred-install": {
@@ -100,7 +99,8 @@
     },
     "extra": {
         "symfony": {
-            "allow-contrib": false
+            "allow-contrib": false,
+            "require": "5.4.*"
         }
     }
 }
