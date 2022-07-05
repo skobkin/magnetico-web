@@ -18,9 +18,9 @@ RUN apk update && \
     docker-php-ext-install -j$(nproc) intl && \
     docker-php-ext-install -j$(nproc) pdo_pgsql && \
     docker-php-ext-install -j$(nproc) sockets && \
-    #pecl install igbinary-3.2.7 && \
+    pecl install igbinary-3.2.7 && \
     pecl install redis-5.3.7 && \
-    #docker-php-ext-enable igbinary && \
+    docker-php-ext-enable igbinary && \
     docker-php-ext-enable intl && \
     docker-php-ext-enable pdo_pgsql && \
     docker-php-ext-enable redis && \
