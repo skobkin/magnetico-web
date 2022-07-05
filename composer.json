@@ -18,6 +18,7 @@
         "ext-iconv": "*",
         "ext-json": "*",
         "babdev/pagerfanta-bundle": "^3.0",
+        "baldinof/roadrunner-bundle": "^2.2",
         "composer/package-versions-deprecated": "1.11.99.5",
         "doctrine/annotations": "^1.0",
         "doctrine/doctrine-bundle": "^2",
