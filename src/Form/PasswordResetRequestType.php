@@ -4,7 +4,7 @@ namespace App\Form;
 
 use App\Form\Data\PasswordResetRequestData;
 use Symfony\Component\Form\{AbstractType, Extension\Core\Type\EmailType, FormBuilderInterface};
-use EWZ\Bundle\RecaptchaBundle\Form\Type\EWZRecaptchaType;
+use MeteoConcept\HCaptchaBundle\Form\HCaptchaType;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 
 class PasswordResetRequestType extends AbstractType
@@ -13,7 +13,7 @@ class PasswordResetRequestType extends AbstractType
     {
         $builder
             ->add('email', EmailType::class, ['required' => true])
-            ->add('recaptcha', EWZRecaptchaType::class)
+            ->add('captcha', HCaptchaType::class)
         ;
     }
 

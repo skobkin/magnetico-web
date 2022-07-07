@@ -14,11 +14,4 @@ class PasswordResetRequestData
      * @Assert\NotBlank()
      */
     public $email;
-
-    /**
-     * @var string
-     *
-     * @ReCaptcha\IsTrue
-     */
-    public $recaptcha;
 }

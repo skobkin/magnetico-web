@@ -59,3 +59,8 @@ services:
         class: App\Pager\View\TwitterBootstrap4PagelessView
         public: false
         tags: [{ name: pagerfanta.view, alias: twitter_bootstrap4_pageless }]
+
+    # for hCaptcha
+    # https://github.com/Meteo-Concept/hcaptcha-bundle#configuration
+    Psr\Http\Client\ClientInterface:
+        class: Symfony\Component\HttpClient\Psr18Client

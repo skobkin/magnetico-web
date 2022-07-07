@@ -51,7 +51,7 @@ class UserController extends AbstractController
         ]);
     }
 
-    public function requestReset(Request $request, EntityManagerInterface $em, PasswordResetManager $manager): Response
+    public function requestReset(Request $request, PasswordResetManager $manager): Response
     {
         $formData = new PasswordResetRequestData();
         $form = $this->createResetRequestForm($formData);
