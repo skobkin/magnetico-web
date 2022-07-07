@@ -18,7 +18,7 @@ class PasswordResetRequestData
     /**
      * @var string
      *
-     * @ReCaptcha\IsTrue
+     * @ReCaptcha\IsTrueV3()
      */
     public $recaptcha;
 }
