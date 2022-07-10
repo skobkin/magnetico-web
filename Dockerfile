@@ -34,8 +34,10 @@ RUN apk update && \
     chmod +x /app/bin/console && \
     /usr/local/bin/composer install --no-dev --no-progress --no-interaction --optimize-autoloader
 
-EXPOSE 80/tcp
+EXPOSE 8080/tcp
 
 VOLUME /var/log
+
+HEALTHCHECK --retries=3 --timeout=10s CMD curl http://localhost:8080 || exit 1
 
 CMD ["/app/bin/rr", "serve"]
