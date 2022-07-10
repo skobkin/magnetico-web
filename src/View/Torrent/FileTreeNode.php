@@ -1,9 +1,9 @@
 <?php
+declare(strict_types=1);
 
 namespace App\View\Torrent;
 
-use App\Magnetico\Entity\File;
-use App\Magnetico\Entity\Torrent;
+use App\Magnetico\Entity\{File, Torrent};
 
 class FileTreeNode
 {
@@ -52,7 +52,7 @@ class FileTreeNode
 
         // If we have file only file and not a tree.
         if (1 === count($pathParts)) {
-            $this->addChild($path, FileTreeNode::createFromFile($path, $file, $this));
+            $this->addChild($path, self::createFromFile($path, $file, $this));
 
             return;
         }
@@ -89,12 +89,7 @@ class FileTreeNode
         return array_key_exists($name, $this->children);
     }
 
-    /**
-     * @param string $name
-     *
-     * @return FileTreeNode|File
-     */
-    public function getChild(string $name)
+    public function getChild(string $name): File|FileTreeNode
     {
         if (!array_key_exists($name, $this->children)) {
             throw new \InvalidArgumentException(sprintf(
@@ -119,7 +114,7 @@ class FileTreeNode
         $files = [];
 
         foreach ($this->children as $name => $child) {
-            if ($child instanceof FileTreeNode) {
+            if ($child instanceof self) {
                 $dirs[$name] = $child;
             } elseif ($child instanceof File) {
                 $files[] = $child;

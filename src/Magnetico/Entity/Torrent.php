@@ -1,78 +1,49 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Magnetico\Entity;
 
+use App\Magnetico\Repository\TorrentRepository;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation as Serializer;
 
-/**
- * @ORM\Table(schema="magneticod", name="torrents", indexes={
- *     @ORM\Index(name="discovered_on_index", columns={"discovered_on"}),
- *     @ORM\Index(name="info_hash_index", columns={"info_hash"})
- * })
- * @ORM\Entity(readOnly=true, repositoryClass="App\Magnetico\Repository\TorrentRepository")
- */
+#[ORM\Entity(repositoryClass: TorrentRepository::class, readOnly: true)]
+#[ORM\Table(schema: 'magneticod', name: 'torrents')]
+#[ORM\Index(name: 'discovered_on_index', columns: ['discovered_on'])]
+#[ORM\Index(name: 'info_hash_index', columns: ['info_hash'])]
 class Torrent
 {
-    /**
-     * @var int
-     *
-     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
-     *
-     * @ORM\Column(name="id", type="integer")
-     * @ORM\Id
-     */
-    private $id;
+    #[Serializer\Groups(['api_v1_search', 'api_v1_show'])]
+    #[ORM\Id]
+    #[ORM\Column(name: 'id', type: 'integer')]
+    private int $id;
 
-    /**
-     * @var resource Resource pointing to info-hash BLOB
-     *
-     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
-     *
-     * @ORM\Column(name="info_hash", type="blob", nullable=false)
-     */
+    /** @var resource Resource pointing to info-hash BLOB */
+    #[Serializer\Groups(['api_v1_search', 'api_v1_show'])]
+    #[ORM\Column(name: 'info_hash', type: 'blob', nullable: false)]
     private $infoHash;
 
-    /**
-     * @var string Cached value of self::infoHash in HEX string
-     */
-    private $infoHashHexCache;
+    /** Cached value of self::infoHash in HEX string */
+    private ?string $infoHashHexCache = null;
 
-    /**
-     * @var string Torrent name
-     *
-     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
-     *
-     * @ORM\Column(name="name", type="text", nullable=false)
-     */
-    private $name;
+    #[Serializer\Groups(['api_v1_search', 'api_v1_show'])]
+    #[ORM\Column(name: 'name', type: 'text', nullable: false)]
+    private string $name;
 
-    /**
-     * @var int Torrent files total size in bytes
-     *
-     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
-     *
-     * @ORM\Column(name="total_size", type="bigint", nullable=false)
-     */
-    private $totalSize;
+    /** Torrent files total size in bytes */
+    #[Serializer\Groups(['api_v1_search', 'api_v1_show'])]
+    #[ORM\Column(name: 'total_size', type: 'bigint', nullable: false)]
+    private int $totalSize;
 
-    /**
-     * @var int Torrent discovery timestamp
-     *
-     * @Serializer\Groups({"api_v1_search", "api_v1_show"})
-     *
-     * @ORM\Column(name="discovered_on", type="integer", nullable=false)
-     */
+    /** Torrent discovery timestamp */
+    #[Serializer\Groups(['api_v1_search', 'api_v1_show'])]
+    #[ORM\Column(name: 'discovered_on', type: 'integer', nullable: false)]
     private $discoveredOn;
 
-    /**
-     * @var File[]|ArrayCollection
-     *
-     * @Serializer\Groups({"api_v1_show"})
-     *
-     * @ORM\OneToMany(targetEntity="App\Magnetico\Entity\File", fetch="EXTRA_LAZY", mappedBy="torrent")
-     */
+    /** @var File[]|ArrayCollection */
+    #[Serializer\Groups(['api_v1_show'])]
+    #[ORM\OneToMany(targetEntity: File::class, fetch: 'EXTRA_LAZY', mappedBy: 'torrent')]
     private $files;
 
     public function getId(): int

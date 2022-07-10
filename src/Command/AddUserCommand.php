@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Command;
 
@@ -13,26 +14,13 @@ use Symfony\Component\Console\Question\Question;
 
 class AddUserCommand extends Command
 {
-    /** @var EntityManagerInterface */
-    private $em;
-
-    /** @var UserManager */
-    private $userManager;
-
-    /** @var UserRepository */
-    private $userRepo;
-
-    /** @var InviteManager */
-    private $inviteManager;
-
-    public function __construct(EntityManagerInterface $em, UserManager $userManager, UserRepository $userRepo, InviteManager $inviteManager)
-    {
+    public function __construct(
+        private readonly EntityManagerInterface $em,
+        private readonly UserManager $userManager,
+        private readonly UserRepository $userRepo,
+        private readonly InviteManager $inviteManager,
+    ) {
         parent::__construct();
-
-        $this->em = $em;
-        $this->userManager = $userManager;
-        $this->userRepo = $userRepo;
-        $this->inviteManager = $inviteManager;
     }
 
     protected function configure()
@@ -47,7 +35,7 @@ class AddUserCommand extends Command
         ;
     }
 
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $username = $input->getArgument('username');
         $email = $input->getArgument('email');
@@ -68,7 +56,7 @@ class AddUserCommand extends Command
         if (!$password) {
             $output->writeln('<error>User password cannot be empty.</error>');
 
-            return 1;
+            return Command::FAILURE;
         }
 
         if ($roles) {
@@ -88,7 +76,7 @@ class AddUserCommand extends Command
 
         $output->writeln(sprintf('<info>User \'%s\' registered, %d invites added.</info>', $user->getUsername(), $invites));
 
-        return 0;
+        return Command::SUCCESS;
     }
 
 }

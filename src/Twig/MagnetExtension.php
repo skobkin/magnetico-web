@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Twig;
 
@@ -8,12 +9,10 @@ use Twig\{TwigFilter, TwigFunction};
 
 class MagnetExtension extends AbstractExtension
 {
-    /** @var MagnetGenerator */
-    private $magnetGenerator;
+    public function __construct(
+        private readonly MagnetGenerator $magnetGenerator
+    ) {
 
-    public function __construct(MagnetGenerator $magnetGenerator)
-    {
-        $this->magnetGenerator = $magnetGenerator;
     }
 
     public function getFunctions(): array
@@ -23,7 +22,7 @@ class MagnetExtension extends AbstractExtension
         ];
     }
 
-    public function getFilters()
+    public function getFilters(): array
     {
         return [
             new TwigFilter('magnet', [$this->magnetGenerator, 'generate']),

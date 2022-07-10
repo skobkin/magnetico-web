@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Form\Data;
 
@@ -7,18 +8,10 @@ use Symfony\Component\Validator\Constraints as Assert;
 
 class PasswordResetRequestData
 {
-    /**
-     * @var string
-     *
-     * @Assert\Email()
-     * @Assert\NotBlank()
-     */
-    public $email;
+    #[Assert\Email]
+    #[Assert\NotBlank]
+    public string $email;
 
-    /**
-     * @var string
-     *
-     * @ReCaptcha\IsTrueV3()
-     */
-    public $recaptcha;
+    #[ReCaptcha\IsTrueV3]
+    public string $recaptcha;
 }

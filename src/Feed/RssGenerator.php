@@ -1,7 +1,6 @@
 <?php
 declare(strict_types=1);
 
-
 namespace App\Feed;
 
 use App\Magnet\MagnetGenerator;
@@ -21,15 +20,12 @@ class RssGenerator
     private const PER_PAGE = 1000;
     private const MIME_TYPE = 'application/x-bittorrent';
 
-    private TorrentRepository $repo;
-    private RouterInterface $router;
-    private MagnetGenerator $magnetGenerator;
+    public function __construct(
+        private readonly TorrentRepository $repo,
+        private readonly RouterInterface $router,
+        private readonly MagnetGenerator $magnetGenerator
+    ) {
 
-    public function __construct(TorrentRepository $repo, RouterInterface $router, MagnetGenerator $magnetGenerator)
-    {
-        $this->repo = $repo;
-        $this->router = $router;
-        $this->magnetGenerator = $magnetGenerator;
     }
 
     public function generateLast(int $page): string
@@ -43,8 +39,6 @@ class RssGenerator
 
     /**
      * @param Torrent[] $torrents
-     *
-     * @return Feed
      */
     private function createFeedFromTorrents(array $torrents): Feed
     {

@@ -1,11 +1,10 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\ApiToken;
-use App\Entity\User;
-use App\Repository\ApiTokenRepository;
-use App\Repository\InviteRepository;
+use App\Entity\{ApiToken, User};
+use App\Repository\{ApiTokenRepository, InviteRepository};
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\Response;

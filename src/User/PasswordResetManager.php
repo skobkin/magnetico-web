@@ -1,5 +1,5 @@
 <?php
-
+declare(strict_types=1);
 
 namespace App\User;
 
@@ -14,38 +14,15 @@ use Symfony\Component\Routing\{Generator\UrlGeneratorInterface, RouterInterface}
 
 class PasswordResetManager
 {
-    /** @var UserRepository */
-    private $userRepo;
-
-    /** @var PasswordResetTokenRepository */
-    private $tokenRepo;
-
-    /** @var EntityManagerInterface */
-    private $em;
-
-    /** @var MailerInterface */
-    private $mailer;
-
-    /** @var RouterInterface */
-    private $router;
-
-    /** @var string */
-    private $fromAddress;
-
     public function __construct(
-        UserRepository $userRepo,
-        PasswordResetTokenRepository $tokenRepo,
-        EntityManagerInterface $em,
-        MailerInterface $mailer,
-        RouterInterface $router,
-        string $fromAddress
+        private readonly UserRepository $userRepo,
+        private readonly PasswordResetTokenRepository $tokenRepo,
+        private readonly EntityManagerInterface $em,
+        private readonly MailerInterface $mailer,
+        private readonly RouterInterface $router,
+        private readonly string $fromAddress
     ) {
-        $this->userRepo = $userRepo;
-        $this->tokenRepo = $tokenRepo;
-        $this->em = $em;
-        $this->mailer = $mailer;
-        $this->router = $router;
-        $this->fromAddress = $fromAddress;
+
     }
 
     public function sendResetLink(string $address): void

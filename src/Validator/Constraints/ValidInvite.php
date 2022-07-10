@@ -1,12 +1,11 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Validator\Constraints;
 
 use Symfony\Component\Validator\Constraint;
 
-/**
- * @Annotation
- */
+#[\Attribute(\Attribute::TARGET_PROPERTY | \Attribute::TARGET_METHOD)]
 class ValidInvite extends Constraint
 {
     public $notFoundMessage = 'Invite {{ code }} not found.';
@@ -14,6 +13,6 @@ class ValidInvite extends Constraint
 
     public function validatedBy(): string
     {
-        return get_class($this).'Validator';
+        return static::class.'Validator';
     }
 }

@@ -1,46 +1,27 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Api\V1\DTO;
 
 use Pagerfanta\Pagerfanta;
-use Symfony\Component\Serializer\Annotation as Serializer;
+use Symfony\Component\Serializer\Annotation\Groups;
 
 class ListPage
 {
-    /**
-     * @var int
-     *
-     * @Serializer\Groups({"api"})
-     */
-    private $numberOfPages;
+    #[Groups(['api'])]
+    private int $numberOfPages;
 
-    /**
-     * @var int
-     *
-     * @Serializer\Groups({"api"})
-     */
-    private $currentPage;
+    #[Groups(['api'])]
+    private int $currentPage;
 
-    /**
-     * @var int
-     *
-     * @Serializer\Groups({"api"})
-     */
-    private $numberOfResults;
+    #[Groups(['api'])]
+    private int $numberOfResults;
 
-    /**
-     * @var int
-     *
-     * @Serializer\Groups({"api"})
-     */
-    private $maxPerPage;
+    #[Groups(['api'])]
+    private int $maxPerPage;
 
-    /**
-     * @var \Traversable
-     *
-     * @Serializer\Groups({"api"})
-     */
-    protected $items;
+    #[Groups(['api'])]
+    protected \Traversable $items;
 
     public function __construct(\Traversable $items, int $numberOfResults, int $numberOfPages, int $currentPage, int $maxPerPage)
     {

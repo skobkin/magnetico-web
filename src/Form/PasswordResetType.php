@@ -1,10 +1,11 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Form;
 
 use App\Form\Data\PasswordResetData;
 use Symfony\Component\Form\AbstractType;
-use Symfony\Component\Form\Extension\Core\Type\{HiddenType, PasswordType, RepeatedType};
+use Symfony\Component\Form\Extension\Core\Type\{PasswordType, RepeatedType};
 use Symfony\Component\Form\FormBuilderInterface;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 

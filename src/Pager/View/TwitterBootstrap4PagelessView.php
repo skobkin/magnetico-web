@@ -1,13 +1,11 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Pager\View;
 
 use Pagerfanta\Pagerfanta;
 use Pagerfanta\PagerfantaInterface;
-use Pagerfanta\View\Template\TemplateInterface;
-use Pagerfanta\View\Template\TwitterBootstrap4Template;
+use Pagerfanta\View\Template\{TemplateInterface, TwitterBootstrap4Template};
 use Pagerfanta\View\ViewInterface;
 
 /**
@@ -48,31 +46,31 @@ class TwitterBootstrap4PagelessView implements ViewInterface
         return new TwitterBootstrap4Template();
     }
 
-    private function initializePagerfanta(PagerfantaInterface $pagerfanta)
+    private function initializePagerfanta(PagerfantaInterface $pagerfanta): void
     {
         $this->pagerfanta = $pagerfanta;
         $this->currentPage = $pagerfanta->getCurrentPage();
     }
 
-    private function configureTemplate($routeGenerator, $options)
+    private function configureTemplate($routeGenerator, $options): void
     {
         $this->template->setRouteGenerator($routeGenerator);
         $this->template->setOptions($options);
     }
 
-    private function generate()
+    private function generate(): array|string
     {
         $pages = $this->generatePages();
 
         return $this->generateContainer($pages);
     }
 
-    private function generateContainer($pages)
+    private function generateContainer($pages): array|string
     {
         return str_replace('%pages%', $pages, $this->template->container());
     }
 
-    private function generatePages()
+    private function generatePages(): string
     {
         return $this->previous().$this->currentPage().$this->next();
     }

@@ -1,51 +1,35 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Repository\InviteRepository;
 use Doctrine\ORM\Mapping as ORM;
 
-/**
- * @ORM\Table(name="invites", schema="users")
- * @ORM\Entity(repositoryClass="App\Repository\InviteRepository")
- */
+#[ORM\Table(name: 'invites', schema: 'users')]
+#[ORM\Entity(repositoryClass: InviteRepository::class)]
 class Invite
 {
-    /**
-     * @var int
-     *
-     * @ORM\Id()
-     * @ORM\GeneratedValue(strategy="AUTO")
-     * @ORM\Column(name="id", type="integer")
-     */
-    private $id;
+    #[ORM\Id]
+    #[ORM\GeneratedValue(strategy: 'AUTO')]
+    #[ORM\Column(name: 'id', type: 'integer')]
+    private int $id;
 
-    /**
-     * @var User
-     *
-     * @ORM\ManyToOne(targetEntity="App\Entity\User", inversedBy="invites")
-     * @ORM\JoinColumn(name="user_id", nullable=false)
-     */
-    private $user;
+    #[ORM\ManyToOne(targetEntity: User::class, inversedBy: 'invites')]
+    #[ORM\JoinColumn(name: 'user_id', nullable: false)]
+    private User $user;
 
-    /**
-     * @var string
-     *
-     * @ORM\Column(name="code", type="string", length=32, unique=true)
-     */
-    private $code;
+    #[ORM\Column(name: 'code', type: 'string', length: 32, unique: true)]
+    private string $code;
 
-    /**
-     * @var User|null
-     *
-     * @ORM\ManyToOne(targetEntity="App\Entity\User")
-     * @ORM\JoinColumn(name="used_by_id", nullable=true)
-     */
-    private $usedBy;
+    #[ORM\ManyToOne(targetEntity: User::class)]
+    #[ORM\JoinColumn(name: 'used_by_id', nullable: true)]
+    private ?User $usedBy;
 
     public function __construct(User $forUser)
     {
         $this->user = $forUser;
-        $this->code = md5(random_bytes(100));
+        $this->code = md5(\random_bytes(100));
     }
 
     public function getId(): int

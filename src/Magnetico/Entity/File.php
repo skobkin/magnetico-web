@@ -1,51 +1,32 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Magnetico\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation as Serializer;
 
-/**
- * @ORM\Table(schema="magneticod", name="files", indexes={
- *     @ORM\Index(name="file_info_hash_index", columns={"torrent_id"})
- * })
- * @ORM\Entity(readOnly=true)
- */
+#[ORM\Entity(readOnly: true)]
+#[ORM\Table(schema: 'magneticod', name: 'files')]
+#[ORM\Index(name: 'file_info_hash_index', columns: ['torrent_id'])]
 class File
 {
-    /**
-     * @var int
-     *
-     * @ORM\Column(name="id", type="integer")
-     * @ORM\Id
-     */
-    private $id;
+    #[ORM\Id]
+    #[ORM\Column(name: 'id', type: 'integer')]
+    private int $id;
 
-    /**
-     * @var Torrent
-     *
-     * @ORM\ManyToOne(targetEntity="App\Magnetico\Entity\Torrent", inversedBy="files")
-     * @ORM\JoinColumn(name="torrent_id")
-     */
-    private $torrent;
+    #[ORM\ManyToOne(targetEntity: Torrent::class, inversedBy: 'files')]
+    #[ORM\JoinColumn(name: 'torrent_id')]
+    private Torrent $torrent;
 
-    /**
-     * @var int File size in bytes
-     *
-     * @Serializer\Groups({"api_v1_show"})
-     *
-     * @ORM\Column(name="size", type="bigint", nullable=false)
-     */
-    private $size;
+    /** File size in bytes */
+    #[Serializer\Groups(['api_v1_show'])]
+    #[ORM\Column(name: 'size', type: 'bigint', nullable: false)]
+    private int $size;
 
-    /**
-     * @var string
-     *
-     * @Serializer\Groups({"api_v1_show"})
-     *
-     * @ORM\Column(name="path", type="text", nullable=false)
-     */
-    private $path;
+    #[Serializer\Groups(['api_v1_show'])]
+    #[ORM\Column(name: 'path', type: 'text', nullable: false)]
+    private string $path;
 
     public function getId(): int
     {

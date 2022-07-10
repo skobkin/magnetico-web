@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Validator\Constraints;
 
@@ -8,19 +9,16 @@ use Symfony\Component\Validator\{Constraint, ConstraintValidator};
 
 class ValidInviteValidator extends ConstraintValidator
 {
-    /** @var InviteRepository */
-    private $inviteRepo;
+    public function __construct(
+        private readonly InviteRepository $inviteRepo
+    ) {
 
-    public function __construct(InviteRepository $inviteRepo)
-    {
-        $this->inviteRepo = $inviteRepo;
     }
 
     /**
-     * @param mixed $value
      * @param ValidInvite $constraint
      */
-    public function validate($value, Constraint $constraint)
+    public function validate(mixed $value, Constraint $constraint)
     {
         /** @var Invite $invite */
         if (null === $invite = $this->inviteRepo->findOneBy(['code' => $value])) {

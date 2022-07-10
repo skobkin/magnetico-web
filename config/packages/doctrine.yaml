@@ -30,7 +30,7 @@ doctrine:
                 mappings:
                     App:
                         is_bundle: false
-                        type: annotation
+                        type: attribute
                         dir: '%kernel.project_dir%/src/Entity'
                         prefix: 'App\Entity'
                         alias: App
@@ -39,7 +39,7 @@ doctrine:
                 mappings:
                     Magnetico:
                         is_bundle: false
-                        type: annotation
+                        type: attribute
                         dir: '%kernel.project_dir%/src/Magnetico/Entity'
                         prefix: 'App\Magnetico'
                         alias: Magnetico

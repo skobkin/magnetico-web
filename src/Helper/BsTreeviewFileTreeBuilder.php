@@ -1,11 +1,12 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Helper;
 
 use App\Magnetico\Entity\Torrent;
 use App\View\Torrent\FileTreeNode;
 
-class BstreeviewFileTreeBuilder
+class BsTreeviewFileTreeBuilder
 {
     private const DEFAULT_FILE_ICON = 'fas fa-file';
     private const DEFAULT_DIR_ICON = 'fas fa-folder';

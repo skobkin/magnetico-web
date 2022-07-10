@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Form\Data;
 
@@ -10,37 +11,21 @@ use App\Validator\Constraints as AppAssert;
  */
 class RegisterData
 {
-    /**
-     * @var string
-     *
-     * @Assert\NotBlank()
-     * @Assert\Length(min="2", max="25")
-     */
-    public $username;
+    #[Assert\NotBlank]
+    #[Assert\Length(min: 2, max: 25)]
+    public string $username;
 
-    /**
-     * @var string
-     *
-     * @Assert\NotBlank()
-     * @Assert\Length(min="8", max="4096")
-     */
-    public $password;
+    #[Assert\NotBlank]
+    #[Assert\Length(min: 8, max: 4096)]
+    public string $password;
 
-    /**
-     * @var string
-     *
-     * @Assert\Email()
-     */
-    public $email;
+    #[Assert\Email]
+    public string $email;
 
-    /**
-     * @var string
-     *
-     * @Assert\NotBlank()
-     * @Assert\Length(min="32", max="32")
-     * @AppAssert\ValidInvite()
-     */
-    public $inviteCode;
+    #[Assert\NotBlank]
+    #[Assert\Length(min: 32, max: 32)]
+    #[AppAssert\ValidInvite()]
+    public string $inviteCode;
 
     public function __construct(string $inviteCode = null)
     {

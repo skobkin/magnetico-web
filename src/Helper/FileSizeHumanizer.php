@@ -30,11 +30,7 @@ class FileSizeHumanizer
 
         $maxSuffixIndex = count(self::SIZE_SUFFIXES) - 1;
 
-        if ($maxSuffixIndex >= $factor) {
-            $suffixIndex = $factor;
-        } else {
-            $suffixIndex = $maxSuffixIndex;
-        }
+        $suffixIndex = min($maxSuffixIndex, $factor);
 
         $suffix = self::SIZE_SUFFIXES[$suffixIndex];
 

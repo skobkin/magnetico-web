@@ -6,10 +6,9 @@ security:
                 class: App\Entity\User
                 property: username
                 manager_name: default
-    encoders:
+    password_hashers:
         App\Entity\User:
-            # https://symfony.com/blog/new-in-symfony-4-3-native-password-encoder
-            algorithm: 'auto'
+            algorithm: sodium
     firewalls:
         dev:
             pattern: ^/(_(profiler|wdt)|css|images|js)/

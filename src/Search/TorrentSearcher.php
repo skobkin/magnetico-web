@@ -13,16 +13,11 @@ class TorrentSearcher
 
     private const ORDER_DISABLED_FIELDS = ['infoHash'];
 
-    /** @var TorrentRepository */
-    private $torrentRepo;
+    public function __construct(
+        private readonly TorrentRepository $torrentRepo,
+        private readonly ClassMetadata $classMetadata
+    ) {
 
-    /** @var ClassMetadata */
-    private $classMetadata;
-
-    public function __construct(TorrentRepository $torrentRepo, ClassMetadata $classMetadata)
-    {
-        $this->torrentRepo = $torrentRepo;
-        $this->classMetadata = $classMetadata;
     }
 
     public function createSearchQueryBuilder(string $query, string $orderBy = null, string $order = 'asc'): QueryBuilder

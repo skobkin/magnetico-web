@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Command;
 
@@ -11,22 +12,12 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class AddInvitesCommand extends Command
 {
-    /** @var EntityManagerInterface */
-    private $em;
-
-    /** @var UserRepository */
-    private $userRepo;
-
-    /** @var InviteManager */
-    private $inviteManager;
-
-    public function __construct(EntityManagerInterface $em, UserRepository $userRepo, InviteManager $inviteManager)
-    {
+    public function __construct(
+        private readonly EntityManagerInterface $em,
+        private readonly UserRepository $userRepo,
+        private readonly InviteManager $inviteManager
+    ) {
         parent::__construct();
-
-        $this->em = $em;
-        $this->userRepo = $userRepo;
-        $this->inviteManager = $inviteManager;
     }
 
     protected function configure()
@@ -38,15 +29,15 @@ class AddInvitesCommand extends Command
         ;
     }
 
-    protected function execute(InputInterface $input, OutputInterface $output)
+    protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $username = $input->getArgument('username');
-        $number = $input->getArgument('number');
+        $number = (int) $input->getArgument('number');
 
         if (null === $user = $this->userRepo->findOneBy(['username' => $username])) {
             $output->writeln('<error>User not found.</error>');
 
-            return 1;
+            return Command::FAILURE;
         }
 
         $this->inviteManager->createInvitesForUser($user, $number);
@@ -55,6 +46,6 @@ class AddInvitesCommand extends Command
 
         $output->writeln(sprintf('<info>%d invites added to \'%s\'.</info>', $number, $user->getUsername()));
 
-        return 0;
+        return Command::SUCCESS;
     }
 }

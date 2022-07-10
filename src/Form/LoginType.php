@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Form;
 
@@ -16,9 +17,9 @@ class LoginType extends AbstractType
         ;
     }
 
-    public function getBlockPrefix()
+    public function getBlockPrefix(): string
     {
-        // Empty prefix for default UsernamePasswordFrormAuthenticationListener
+        // Empty prefix for default UsernamePasswordFormAuthenticationListener
         return '';
     }
 }

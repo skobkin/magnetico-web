@@ -1,40 +1,27 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Repository\ApiTokenRepository;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation as Serializer;
 
-/**
- * @ORM\Table(name="api_tokens", schema="users")
- * @ORM\Entity(repositoryClass="App\Repository\ApiTokenRepository", readOnly=true)
- */
+#[ORM\Table(name: 'api_tokens', schema: 'users')]
+#[ORM\Entity(repositoryClass: ApiTokenRepository::class, readOnly: true)]
 class ApiToken
 {
-    /**
-     * @var User
-     *
-     * @ORM\ManyToOne(targetEntity="App\Entity\User")
-     * @ORM\JoinColumn(name="user_id", nullable=false)
-     */
-    private $user;
+    #[ORM\ManyToOne(targetEntity: User::class)]
+    #[ORM\JoinColumn(name: 'user_id', nullable: false)]
+    private User $user;
 
-    /**
-     * @var string
-     *
-     * @Serializer\Groups({"api", "api_v1_login"})
-     *
-     * @ORM\Id()
-     * @ORM\Column(name="key", type="string", length=32)
-     */
-    private $key;
+    #[Serializer\Groups(['api', 'api_v1_login'])]
+    #[ORM\Id]
+    #[ORM\Column(name: 'key', type: 'string', length: 32)]
+    private string $key;
 
-    /**
-     * @var \DateTime
-     *
-     * @ORM\Column(name="created_at", type="datetime")
-     */
-    private $createdAt;
+    #[ORM\Column(name: 'created_at', type: 'datetime')]
+    private \DateTime $createdAt;
 
     public function __construct(User $user)
     {

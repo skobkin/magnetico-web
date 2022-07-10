@@ -1,5 +1,4 @@
 <?php
-
 declare(strict_types=1);
 
 namespace App\Doctrine\ORM\AST;
@@ -14,14 +13,13 @@ use Doctrine\ORM\Query\{AST\Functions\FunctionNode, AST\Node, Lexer, Parser, Sql
  */
 abstract class BaseFunction extends FunctionNode
 {
-    /** @var string */
-    protected $functionPrototype;
+    protected string $functionPrototype;
 
     /** @var string[] */
-    protected $nodesMapping = [];
+    protected array $nodesMapping = [];
 
     /** @var Node[] */
-    protected $nodes = [];
+    protected array $nodes = [];
 
     abstract protected function customiseFunction(): void;
 

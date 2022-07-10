@@ -1,73 +1,46 @@
 <?php
+declare(strict_types=1);
 
 namespace App\Entity;
 
+use App\Repository\UserRepository;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
-use Symfony\Component\Security\Core\Encoder\PasswordEncoderInterface;
-use Symfony\Component\Security\Core\User\UserInterface;
+use Symfony\Component\PasswordHasher\PasswordHasherInterface;
+use Symfony\Component\Security\Core\User\{PasswordAuthenticatedUserInterface, UserInterface};
 
-/**
- * @ORM\Table(name="users", schema="users")
- * @ORM\Entity(repositoryClass="App\Repository\UserRepository")
- */
-class User implements UserInterface, \Serializable
+#[ORM\Table(name: 'users', schema: 'users')]
+#[ORM\Entity(repositoryClass: UserRepository::class)]
+class User implements UserInterface, PasswordAuthenticatedUserInterface
 {
-    /**
-     * @var int
-     *
-     * @ORM\Id
-     * @ORM\Column(name="id", type="integer")
-     * @ORM\GeneratedValue(strategy="AUTO")
-     */
-    private $id;
+    #[ORM\Id]
+    #[ORM\Column(name: 'id', type: 'integer')]
+    #[ORM\GeneratedValue(strategy: 'AUTO')]
+    private int $id;
 
-    /**
-     * @var string
-     *
-     * @ORM\Column(name="username", type="string", length=25, unique=true)
-     */
-    private $username;
+    #[ORM\Column(name: 'username', type: 'string', length: 25, unique: true)]
+    private string $username;
 
-    /**
-     * @var string
-     *
-     * @ORM\Column(name="password", type="text")
-     */
-    private $password;
+    #[ORM\Column(name: 'password', type: 'text')]
+    private string $password;
 
-    /**
-     * @var string
-     *
-     * @ORM\Column(name="email", type="string", length=254, unique=true)
-     */
-    private $email;
+    #[ORM\Column(name: 'email', type: 'string', length: 254, unique: true)]
+    private string $email;
 
-    /**
-     * @var string[]
-     *
-     * @ORM\Column(name="roles", type="json")
-     */
-    private $roles = [];
+    #[ORM\Column(name: 'roles', type: 'json')]
+    private array $roles = [];
 
-    /**
-     * @var \DateTime
-     *
-     * @ORM\Column(name="created_at", type="datetime")
-     */
-    private $createdAt;
+    #[ORM\Column(name: 'created_at', type: 'datetime')]
+    private \DateTime $createdAt;
 
-    /**
-     * @var Invite[]|ArrayCollection
-     *
-     * @ORM\OneToMany(targetEntity="App\Entity\Invite", mappedBy="user", fetch="EXTRA_LAZY")
-     */
+    /** @var Invite[]|ArrayCollection */
+    #[ORM\OneToMany(targetEntity: Invite::class, mappedBy: 'user', fetch: 'EXTRA_LAZY')]
     private $invites;
 
-    public function __construct(string $username, PasswordEncoderInterface $encoder, string $rawPassword, string $email, array $roles = [])
+    public function __construct(string $username, PasswordHasherInterface $hasher, string $rawPassword, string $email, array $roles = [])
     {
         $this->username = $username;
-        $this->password = $encoder->encodePassword($rawPassword, null);
+        $this->password = $hasher->hash($rawPassword);
         $this->email = $email;
         $this->roles = $roles ?: ['ROLE_USER'];
         $this->createdAt = new \DateTime();
@@ -78,22 +51,29 @@ class User implements UserInterface, \Serializable
         return $this->id;
     }
 
-    public function getUsername()
+    public function getUserIdentifier(): string
     {
         return $this->username;
     }
 
-    public function getPassword()
+    /** @deprecated since Symfony 5.3, use getUserIdentifier() instead */
+    public function getUsername(): string
+    {
+        return $this->username;
+    }
+
+    public function getPassword(): string
     {
         return $this->password;
     }
 
-    public function changePassword(PasswordEncoderInterface $encoder, string $rawPassword): void
+    public function changePassword(PasswordHasherInterface $hasher, string $rawPassword): void
     {
-        $this->password = $encoder->encodePassword($rawPassword, null);
+        $this->password = $hasher->hash($rawPassword);
     }
 
-    public function getSalt()
+    /** @deprecated since Symfony 5.3 */
+    public function getSalt(): ?string
     {
         // Salt is not needed when using Argon2i
         // @see https://symfony.com/doc/current/reference/configuration/security.html#using-the-argon2i-password-encoder
@@ -132,7 +112,7 @@ class User implements UserInterface, \Serializable
     }
 
     /** @see \Serializable::serialize() */
-    public function serialize()
+    public function serialize(): string
     {
         return serialize([
             $this->id,
@@ -142,7 +122,7 @@ class User implements UserInterface, \Serializable
     }
 
     /** @see \Serializable::unserialize() */
-    public function unserialize($serialized)
+    public function unserialize($serialized): void
     {
         [
             $this->id,

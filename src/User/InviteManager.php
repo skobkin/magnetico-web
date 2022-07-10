@@ -1,4 +1,5 @@
 <?php
+declare(strict_types=1);
 
 namespace App\User;
 
@@ -7,16 +8,11 @@ use App\Repository\InviteRepository;
 
 class InviteManager
 {
-    /** @var InviteRepository */
-    private $inviteRepo;
+    public function __construct(
+        private readonly InviteRepository $inviteRepo,
+        private readonly int $newUserInvites = 0
+    ) {
 
-    /** @var int Which amount of invites we need to give to the new user */
-    private $newUserInvites;
-
-    public function __construct(InviteRepository $inviteRepo, int $newUserInvites = 0)
-    {
-        $this->inviteRepo = $inviteRepo;
-        $this->newUserInvites = $newUserInvites;
     }
 
     /**
@@ -28,7 +24,7 @@ class InviteManager
             return [];
         }
 
-        $amount = (null !== $forceAmount) ? $forceAmount : $this->newUserInvites;
+        $amount = $forceAmount ?? $this->newUserInvites;
 
         $invites = [];
 
