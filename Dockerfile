@@ -34,6 +34,8 @@ RUN apk update && \
     chmod +x /app/bin/console && \
     /usr/local/bin/composer install --no-dev --no-progress --no-interaction --optimize-autoloader
 
+EXPOSE 80/tcp
+
 VOLUME /var/log
 
 CMD ["/app/bin/rr", "serve"]
