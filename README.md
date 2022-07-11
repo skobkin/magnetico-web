@@ -1,5 +1,4 @@
-[![Codeship Status for skobkin/magnetico-web](https://app.codeship.com/projects/9da4d3e0-57cf-0136-9885-5644a850740d/status?branch=master)](https://app.codeship.com/projects/295041)
-[![Total Downloads](https://poser.pugx.org/skobkin/magnetico-web/downloads)](https://packagist.org/packages/skobkin/magnetico-web)
+[![Build Status](https://ci.skobk.in/api/badges/skobkin/magnetico-web/status.svg)](https://ci.skobk.in/skobkin/magnetico-web)
 [![License](https://poser.pugx.org/skobkin/magnetico-web/license)](https://packagist.org/packages/skobkin/magnetico-web)
 
 # Magnetico Web PHP
@@ -98,7 +97,7 @@ php bin/console invite:add <username> <number-of-invites>
 echo 'APP_ENV=dev > .env.local'
 ```
 
-## Running in [RoadRunner](https://roadrunner.dev)
+## Running using [RoadRunner](https://roadrunner.dev) instead of [PHP-FPM](https://www.php.net/manual/en/install.fpm.php)
 
 ```shell
 # First time only:
@@ -112,3 +111,68 @@ bin/rr serve -c .rr.dev.yaml
 ```
 
 Read more [here](https://github.com/baldinof/roadrunner-bundle) and [here](https://github.com/roadrunner-server/roadrunner).
+
+### Trusted proxies
+
+If you're running the app in RoadRunner and experiencing problems with proper URL generation (HTTP instead of HTTPS),
+check beginning of the section about running in Docker below.
+
+## Running in Docker
+
+### Docker Compose example:
+
+When running in Docker **DO NOT FORGET** to use Nginx or other reverse-proxy server and properly set `TRUSTED_PROXIES`
+environment variable. You can read more about it [here](https://symfony.com/doc/current/deployment/proxies.html#but-what-if-the-ip-of-my-reverse-proxy-changes-constantly).
+
+```yaml
+version: '3.7'
+
+services:
+    magnetico-web:
+        image: skobkin/magnetico-web
+        container_name: magnetico-web
+        hostname: magnetico-web
+        extra_hosts:
+            - 'host.docker.internal:host-gateway'
+        ports:
+            - "127.0.0.1:${EXT_HTTP_PORT:-8080}:8080/tcp"
+        restart: unless-stopped
+        user: "$UID"
+        volumes:
+            - "${LOG_PATH:-./var/log}:/app/var/log"
+        env_file: .env
+        logging:
+            driver: "json-file"
+            options:
+                max-size: "${LOG_MAX_SIZE:-5m}"
+                max-file: "${LOG_MAX_FILE:-5}"
+```
+
+Use dotenv file to configure this stack:
+
+```dotenv
+# Example with some useful parameters
+APP_SECRET=qwerty
+
+APP_DATABASE_URL=postgres://magnetico-web:password@host.docker.internal:5432/magnetico-web?application_name=magnetico_web
+MAGNETICOD_DATABASE_URL=postgres://magneticod:password@host.docker.internal:5432/magneticod?application_name=magnetico_web
+
+REDIS_DSN=redis://host.docker.internal:6379/0
+
+# BE CAREFUL WITH 'REMOTE_ADDR'. Use ONLY with trusted reverse-proxy
+TRUSTED_PROXIES=127.0.0.1,REMOTE_ADDR
+
+###> sentry/sentry-symfony ###
+SENTRY_DSN=https://abcabcdaefdaef@sentry.io/123456
+###< sentry/sentry-symfony ###
+
+###> symfony/mailer ###
+MAILER_DSN=smtp://mail@domain.tld:password@smtp.domain.tld:587
+MAILER_FROM=no-reply@domain.tld
+###< symfony/mailer ###
+
+###> excelwebzone/recaptcha-bundle ###
+EWZ_RECAPTCHA_SITE_KEY=key
+EWZ_RECAPTCHA_SECRET=secret
+###< excelwebzone/recaptcha-bundle ###
+```

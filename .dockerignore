@@ -38,3 +38,13 @@
 
 # DotEnv
 .env.local
+
+# Git files
+/.git
+/.gitignore
+
+# Drone config
+/.drone.yml
+
+# Docker Ignore
+/.dockerignore

@@ -13,6 +13,8 @@ services:
                     - 'Symfony\Component\HttpKernel\Exception\BadRequestHttpException'
                     - 'Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException'
 
+    # TODO: update:
+    # https://docs.sentry.io/platforms/php/guides/symfony/#monolog-integration
     Sentry\Monolog\Handler:
         arguments:
             $hub: '@Sentry\State\HubInterface'
