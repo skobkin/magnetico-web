@@ -32,18 +32,12 @@ class ApiTokenAuthenticator extends AbstractAuthenticator
      */
     public function supports(Request $request): bool
     {
-        // Let's also support cookies and query params for some cases like torrent clients.
-        return $request->headers->has(self::TOKEN_HEADER) ||
-            $request->cookies->has(self::TOKEN_HEADER) ||
-            $request->query->has(self::TOKEN_HEADER);
+        return static::requestHasToken($request);
     }
 
     public function authenticate(Request $request): Passport
     {
-        $tokenKey = $request?->headers?->get(self::TOKEN_HEADER) ?:
-            $request?->cookies?->get(self::TOKEN_HEADER) ?:
-                $request?->query?->get(self::TOKEN_HEADER)
-        ;
+        $tokenKey = static::getTokenKeyFromRequest($request);
 
         if (null === $tokenKey) {
             throw new CustomUserMessageAuthenticationException('No API token provided');
@@ -72,5 +66,20 @@ class ApiTokenAuthenticator extends AbstractAuthenticator
         );
 
         return new JsonResponse($json, JsonResponse::HTTP_UNAUTHORIZED, json: true);
+    }
+
+    public static function getTokenKeyFromRequest(Request $request): ?string
+    {
+        $request?->headers?->get(self::TOKEN_HEADER) ?:
+            $request?->cookies?->get(self::TOKEN_HEADER) ?:
+                $request?->query?->get(self::TOKEN_HEADER);
+    }
+
+    public static function requestHasToken(Request $request): bool
+    {
+        // Let's also support cookies and query params for some cases like torrent clients.
+        return $request->headers->has(self::TOKEN_HEADER) ||
+            $request->cookies->has(self::TOKEN_HEADER) ||
+            $request->query->has(self::TOKEN_HEADER);
     }
 }

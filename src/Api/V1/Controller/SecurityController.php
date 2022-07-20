@@ -5,11 +5,10 @@ namespace App\Api\V1\Controller;
 
 use App\Entity\{ApiToken, User};
 use App\Repository\{ApiTokenRepository, UserRepository};
-use App\Security\Token\AuthenticatedApiToken;
+use App\Security\ApiTokenAuthenticator;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\HttpFoundation\{JsonResponse, Request};
-use Symfony\Component\Security\Core\Authentication\Token\Storage\TokenStorageInterface;
-use Symfony\Component\Security\Core\Encoder\UserPasswordEncoderInterface;
+use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 
 class SecurityController extends AbstractApiController
 {
@@ -18,18 +17,18 @@ class SecurityController extends AbstractApiController
         EntityManagerInterface $em,
         UserRepository $userRepo,
         ApiTokenRepository $tokenRepo,
-        UserPasswordEncoderInterface $passwordEncoder
+        UserPasswordHasherInterface $passwordHasher,
     ): JsonResponse {
         $username = $request->request->get('username');
         $password = $request->request->get('password');
 
         /** @var User $user */
         if (null === $user = $userRepo->findOneBy(['username' => $username])) {
-            return $this->createJsonResponse(null, [], JsonResponse::HTTP_UNAUTHORIZED, 'User not found');
+            return $this->createJsonResponse(code: JsonResponse::HTTP_UNAUTHORIZED, message: 'User not found');
         }
 
-        if (!$passwordEncoder->isPasswordValid($user, $password)) {
-            return $this->createJsonResponse(null, [], JsonResponse::HTTP_UNAUTHORIZED, 'Invalid password');
+        if (!$passwordHasher->isPasswordValid($user, $password)) {
+            return $this->createJsonResponse(code: JsonResponse::HTTP_UNAUTHORIZED, message: 'Invalid password');
         }
 
         $apiToken = new ApiToken($user);
@@ -38,28 +37,19 @@ class SecurityController extends AbstractApiController
         try {
             $em->flush();
         } catch (\Exception $ex) {
-            return $this->createJsonResponse(null, [], JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Token persisting error');
+            return $this->createJsonResponse(code: JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message: 'Token persisting error');
         }
 
         return $this->createJsonResponse($apiToken->getKey());
     }
 
-    public function logout(TokenStorageInterface $tokenStorage, ApiTokenRepository $apiTokenRepo, EntityManagerInterface $em): JsonResponse
-    {
-        if (null === $token = $tokenStorage->getToken()) {
-            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Can\'t retrieve user token.');
-        }
-
-        if (!$token instanceof AuthenticatedApiToken) {
-            return $this->createJsonResponse(null, [], JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Invalid session token type retrieved.');
-        }
-
-        if (null === $tokenKey = $token->getTokenKey()) {
-            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'Can\'t retrieve token key from the session.');
+    public function logout(Request $request, ApiTokenRepository $apiTokenRepo, EntityManagerInterface $em): JsonResponse {
+        if (null === $tokenKey = ApiTokenAuthenticator::getTokenKeyFromRequest($request)) {
+            return $this->createJsonResponse(null, code:JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message:  'No API token provided.');
         }
 
         if (null === $apiToken = $apiTokenRepo->findOneBy(['key' => $tokenKey])) {
-            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'API token with such key not found in the database.');
+            return $this->createJsonResponse(null, code:JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message: 'API token with such key not found in the database.');
         }
 
         $em->remove($apiToken);
