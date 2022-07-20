@@ -74,7 +74,7 @@ class AddUserCommand extends Command
 
         $this->em->flush();
 
-        $output->writeln(sprintf('<info>User \'%s\' registered, %d invites added.</info>', $user->getUsername(), $invites));
+        $output->writeln(sprintf('<info>User \'%s\' registered, %d invites added.</info>', $user->getUserIdentifier(), $invites));
 
         return Command::SUCCESS;
     }

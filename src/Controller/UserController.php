@@ -5,13 +5,15 @@ namespace App\Controller;
 
 use App\Entity\{Invite, PasswordResetToken};
 use App\Repository\PasswordResetTokenRepository;
-use App\Form\{Data\PasswordResetRequestData, Data\PasswordResetData, PasswordResetRequestType, PasswordResetType, RegisterType, Data\RegisterData};
+use App\Form\Data\{PasswordResetRequestData, PasswordResetData, RegisterData};
+use App\Form\{PasswordResetRequestType, PasswordResetType, RegisterType};
 use App\Repository\InviteRepository;
 use App\User\{Exception\UserNotFoundException, InviteManager, PasswordResetManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\Form\{Extension\Core\Type\SubmitType, FormError, FormInterface};
 use Symfony\Component\HttpFoundation\{Request, Response};
+use Symfony\Component\PasswordHasher\Hasher\PasswordHasherFactoryInterface;
 
 class UserController extends AbstractController
 {
@@ -23,8 +25,8 @@ class UserController extends AbstractController
         InviteManager $inviteManager,
         InviteRepository $inviteRepo
     ): Response {
-        $formData = new RegisterData($code);
-        $form = $this->createRegisterForm($formData, $code);
+        $data = new RegisterData($code);
+        $form = $this->createRegisterForm($data, $code);
 
         /** @var Invite $invite */
         $invite = $inviteRepo->findOneBy(['code' => $code, 'usedBy' => null]);
@@ -33,9 +35,9 @@ class UserController extends AbstractController
 
         if ($form->isSubmitted() && $form->isValid()) {
             $user = $userManager->createUserByInvite(
-                $formData->username,
-                $formData->password,
-                $formData->email,
+                $data->username,
+                $data->password,
+                $data->email,
                 $invite
             );
 
@@ -54,8 +56,8 @@ class UserController extends AbstractController
 
     public function requestReset(Request $request, EntityManagerInterface $em, PasswordResetManager $manager): Response
     {
-        $formData = new PasswordResetRequestData();
-        $form = $this->createResetRequestForm($formData);
+        $data = new PasswordResetRequestData();
+        $form = $this->createResetRequestForm($data);
 
         $form->handleRequest($request);
 
@@ -63,7 +65,7 @@ class UserController extends AbstractController
 
         if ($form->isSubmitted() && $form->isValid()) {
             try {
-                $manager->sendResetLink($formData->email);
+                $manager->sendResetLink($data->email);
 
                 $message = 'Password reset link was sent';
             } catch (UserNotFoundException $e) {
@@ -84,12 +86,12 @@ class UserController extends AbstractController
         string $code,
         Request $request,
         EntityManagerInterface $em,
-        UserManager $manager,
-        PasswordResetTokenRepository $tokenRepository
+        PasswordHasherFactoryInterface $hasherFactory,
+        PasswordResetTokenRepository $tokenRepository,
     ): Response
     {
-        $formData = new PasswordResetData();
-        $form = $this->createResetForm($formData, $code);
+        $data = new PasswordResetData();
+        $form = $this->createPasswordResetForm($data, $code);
 
         /** @var PasswordResetToken $token */
         $token = $tokenRepository->find($code);
@@ -98,15 +100,17 @@ class UserController extends AbstractController
 
         if ($form->isSubmitted() && $form->isValid()) {
             if ($token && $token->isValid()) {
-                $manager->changePassword($token->getUser(), $formData->password);
+                $user = $token->getUser();
+                $hasher = $hasherFactory->getPasswordHasher($user);
+                $user->changePassword($hasher, $data->password);
 
                 $em->remove($token);
                 $em->flush();
 
                 return $this->redirectToRoute('user_auth_login');
-            } else {
-                $form->addError(new FormError('Invalid token.'));
             }
+
+            $form->addError(new FormError('Invalid token.'));
         }
 
         return $this->render('User/reset.html.twig', [
@@ -116,32 +120,28 @@ class UserController extends AbstractController
 
     private function createResetRequestForm(PasswordResetRequestData $formData): FormInterface
     {
-        $form = $this->createForm(PasswordResetRequestType::class, $formData, [
-            'action' => $this->generateUrl('user_reset_request'),
-        ]);
-        $form->add('submit', SubmitType::class);
-
-        return $form;
+        return $this
+            ->createForm(PasswordResetRequestType::class, $formData, [
+                'action' => $this->generateUrl('user_reset_request'),
+            ])
+            ->add('submit', SubmitType::class);
     }
 
-    private function createResetForm(PasswordResetData $formData, string $code): FormInterface
+    private function createPasswordResetForm(PasswordResetData $data, string $code): FormInterface
     {
-        $form = $this->createForm(PasswordResetType::class, $formData, [
-            'action' => $this->generateUrl('user_reset', ['code' => $code]),
-        ]);
-        $form->add('submit', SubmitType::class);
-
-        return $form;
+        return $this
+            ->createForm(PasswordResetType::class, $data, [
+                'action' => $this->generateUrl('user_reset', ['code' => $code]),
+            ])
+            ->add('submit', SubmitType::class);
     }
 
     private function createRegisterForm(RegisterData $formData, string $code): FormInterface
     {
-        $form = $this->createForm(RegisterType::class, $formData, [
-            'action' => $this->generateUrl('user_register', ['code' => $code]),
-        ]);
-
-        $form->add('submit', SubmitType::class);
-
-        return $form;
+        return $this
+            ->createForm(RegisterType::class, $formData, [
+                'action' => $this->generateUrl('user_register', ['code' => $code]),
+            ])
+            ->add('submit', SubmitType::class);
     }
 }

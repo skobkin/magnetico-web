@@ -53,6 +53,12 @@ user_account:
     requirements:
         method: GET
 
+user_account_password_change:
+    path: /account/password
+    controller: App\Controller\AccountController::changePassword
+    requirements:
+        method: POST
+
 user_account_token_create:
     path: /profile/api/token/create
     controller: App\Controller\AccountController::addApiToken

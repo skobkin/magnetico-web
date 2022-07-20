@@ -44,7 +44,7 @@ class AddInvitesCommand extends Command
 
         $this->em->flush();
 
-        $output->writeln(sprintf('<info>%d invites added to \'%s\'.</info>', $number, $user->getUsername()));
+        $output->writeln(sprintf('<info>%d invites added to \'%s\'.</info>', $number, $user->getUserIdentifier()));
 
         return Command::SUCCESS;
     }

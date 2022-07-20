@@ -5,14 +5,21 @@ namespace App\Controller;
 
 use App\Entity\{ApiToken, User};
 use App\Repository\{ApiTokenRepository, InviteRepository};
+use App\Form\Data\PasswordChangeData;
+use App\Form\PasswordChangeType;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Form\Extension\Core\Type\SubmitType;
+use Symfony\Component\Form\FormInterface;
+use Symfony\Component\HttpFoundation\{Request, Response};
+use Symfony\Component\PasswordHasher\Hasher\PasswordHasherFactoryInterface;
 
 class AccountController extends AbstractController
 {
-    public function account(InviteRepository $inviteRepo, ApiTokenRepository $apiTokenRepo): Response
-    {
+    public function account(
+        InviteRepository $inviteRepo,
+        ApiTokenRepository $apiTokenRepo
+    ): Response {
         /** @var User $user */
         if (null === $user = $this->getUser()) {
             throw $this->createAccessDeniedException('User not found exception');
@@ -23,6 +30,32 @@ class AccountController extends AbstractController
             'invites' => $inviteRepo->findInvitesByUser($user),
             'tokens' => $apiTokenRepo->findBy(['user' => $user->getId()]),
             'user' => $user,
+        ]);
+    }
+
+    public function changePassword(
+        Request $request,
+        EntityManagerInterface $em,
+        PasswordHasherFactoryInterface $hasherFactory,
+    ): Response {
+        $data = new PasswordChangeData();
+        $form = $this->createChangePasswordForm($data);
+        $form->handleRequest($request);
+
+        if ($form->isSubmitted() && $form->isValid()) {
+            /** @var User $user */
+            $user = $this->getUser();
+            $hasher = $hasherFactory->getPasswordHasher($user);
+
+            $user->changePassword($hasher, $data->newPassword);
+            $em->flush();
+            $this->addFlash('success', 'Password changed.');
+
+            return $this->redirectToRoute('user_account');
+        }
+
+        return $this->renderForm('Account/password.html.twig', [
+            'form' => $form,
         ]);
     }
 
@@ -56,5 +89,14 @@ class AccountController extends AbstractController
         $this->addFlash('success', 'API token removed.');
 
         return $this->redirectToRoute('user_account');
+    }
+
+    private function createChangePasswordForm(PasswordChangeData $data): FormInterface
+    {
+        return $this
+            ->createForm(PasswordChangeType::class, $data, [
+                'action' => $this->generateUrl('user_account_password_change'),
+            ])
+            ->add('submit', SubmitType::class);
     }
 }

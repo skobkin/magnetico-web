@@ -34,11 +34,6 @@ class UserManager
         return $user;
     }
 
-    public function changePassword(User $user, string $rawPassword): void
-    {
-        $user->changePassword($this->hasherFactory->getPasswordHasher(User::class), $rawPassword);
-    }
-
     public function createUserByInvite(string $username, string $password, string $email, Invite $invite, array $roles = self::DEFAULT_ROLES): User
     {
         if (null !== $invite->getUsedBy()) {
