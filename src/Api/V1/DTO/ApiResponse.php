@@ -24,7 +24,7 @@ class ApiResponse
     #[Groups(['api'])]
     private ?string $message;
 
-    /** @Response body. In case of 'error' or 'fail' contains cause or exception name. */
+    /** Response body. In case of 'error' or 'fail' contains cause or exception name. */
     #[Groups(['api'])]
     private string|object|array|null $data;
 

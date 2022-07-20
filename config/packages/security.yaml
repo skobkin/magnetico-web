@@ -6,6 +6,7 @@ security:
                 class: App\Entity\User
                 property: username
                 manager_name: default
+    enable_authenticator_manager: true
     password_hashers:
         App\Entity\User:
             algorithm: sodium
@@ -15,14 +16,11 @@ security:
             security: false
         api:
             pattern: ^/api/
-            anonymous: ~
             stateless: true
-            guard:
-                authenticators:
-                    - App\Security\ApiTokenAuthenticator
+            custom_authenticators:
+                - App\Security\ApiTokenAuthenticator
         main:
             pattern: ^/
-            anonymous: ~
             provider: default_provider
             form_login:
                 login_path: user_auth_login
@@ -40,10 +38,10 @@ security:
     # Easy way to control access for large sections of your site
     # Note: Only the *first* access control that matches will be used
     access_control:
-        - { path: ^/api/v1/login$, roles: IS_AUTHENTICATED_ANONYMOUSLY }
+        - { path: ^/api/v1/login$, roles: PUBLIC_ACCESS }
         - { path: ^/api/, roles: ROLE_USER }
-        - { path: ^/$, roles: IS_AUTHENTICATED_ANONYMOUSLY }
-        - { path: ^/auth/, roles: IS_AUTHENTICATED_ANONYMOUSLY }
-        - { path: ^/register/, roles: IS_AUTHENTICATED_ANONYMOUSLY }
-        - { path: ^/magnet/, roles: IS_AUTHENTICATED_ANONYMOUSLY }
+        - { path: ^/$, roles: PUBLIC_ACCESS }
+        - { path: ^/auth/, roles: PUBLIC_ACCESS }
+        - { path: ^/register/, roles: PUBLIC_ACCESS }
+        - { path: ^/magnet/, roles: PUBLIC_ACCESS }
         - { path: ^/, roles: ROLE_USER }

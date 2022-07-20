@@ -4,40 +4,32 @@ declare(strict_types=1);
 namespace App\Security;
 
 use App\Api\V1\DTO\ApiResponse;
-use App\Entity\User;
 use App\Repository\ApiTokenRepository;
-use App\Security\Token\AuthenticatedApiToken;
-use Symfony\Component\HttpFoundation\{JsonResponse, Request, RequestStack, Response};
+use Symfony\Component\HttpFoundation\{JsonResponse, Request, Response};
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
-use Symfony\Component\Security\Core\Exception\AuthenticationException;
-use Symfony\Component\Security\Core\User\{UserInterface, UserProviderInterface};
-use Symfony\Component\Security\Guard\AbstractGuardAuthenticator;
+use Symfony\Component\Security\Core\Exception\{AuthenticationException, CustomUserMessageAuthenticationException};
+use Symfony\Component\Security\Http\Authenticator\AbstractAuthenticator;
+use Symfony\Component\Security\Http\Authenticator\Passport\{Badge\UserBadge, Passport, SelfValidatingPassport};
 use Symfony\Component\Serializer\SerializerInterface;
 
-/**
- * @deprecated Refactor to new Authenticators system @see https://gitlab.com/skobkin/magnetico-web/-/issues/26
- */
-class ApiTokenAuthenticator extends AbstractGuardAuthenticator
+class ApiTokenAuthenticator extends AbstractAuthenticator
 {
     public const TOKEN_HEADER = 'api-token';
 
-    /** @var ApiTokenRepository */
-    private $tokenRepo;
+    public function __construct(
+        private readonly SerializerInterface $serializer,
+        private readonly ApiTokenRepository $tokenRepo,
+    ) {
 
-    /** @var SerializerInterface */
-    private $serializer;
-
-    /** @var RequestStack */
-    private $requestStack;
-
-    public function __construct(SerializerInterface $serializer, ApiTokenRepository $tokenRepo, RequestStack $requestStack)
-    {
-        $this->serializer = $serializer;
-        $this->tokenRepo = $tokenRepo;
-        // Crutch for Guard simplified auth to retrieve 'api-token' header in the createAuthenticatedToken()
-        $this->requestStack = $requestStack;
     }
 
+    /**
+     * Called on every request to decide if this authenticator should be
+     * used for the request. Returning `false` will cause this authenticator
+     * to be skipped.
+     *
+     * @see https://symfony.com/doc/6.1/security/custom_authenticator.html
+     */
     public function supports(Request $request): bool
     {
         // Let's also support cookies and query params for some cases like torrent clients.
@@ -46,83 +38,39 @@ class ApiTokenAuthenticator extends AbstractGuardAuthenticator
             $request->query->has(self::TOKEN_HEADER);
     }
 
-    public function getCredentials(Request $request)
+    public function authenticate(Request $request): Passport
     {
-        return [
-            'token' => $request->headers->get(self::TOKEN_HEADER) ?:
-                $request->cookies->get(self::TOKEN_HEADER) ?:
-                $request->query->get(self::TOKEN_HEADER),
-        ];
-    }
+        $tokenKey = $request?->headers?->get(self::TOKEN_HEADER) ?:
+            $request?->cookies?->get(self::TOKEN_HEADER) ?:
+                $request?->query?->get(self::TOKEN_HEADER)
+        ;
 
-    public function getUser($credentials, UserProviderInterface $userProvider): ?User
-    {
-        if (null === $token = $credentials['token']) {
-            return null;
+        if (null === $tokenKey) {
+            throw new CustomUserMessageAuthenticationException('No API token provided');
         }
 
-        return $this->tokenRepo->findUserByTokenKey($token);
-    }
-
-    public function start(Request $request, AuthenticationException $authException = null)
-    {
-        $message = sprintf('You need to use \'%s\' in your request: %s', self::TOKEN_HEADER, $authException ? $authException->getMessage() : '');
-
-        $json = $this->serializer->serialize(
-            new ApiResponse(null, JsonResponse::HTTP_UNAUTHORIZED, $message),
-            'json',
-            ['groups' => ['api']]
+        return new SelfValidatingPassport(
+            new UserBadge($tokenKey, function (string $userIdentifier) {
+                return $this->tokenRepo->findUserByTokenKey($userIdentifier);
+            })
         );
-
-        return new JsonResponse($json, Response::HTTP_UNAUTHORIZED,[], true);
     }
 
-    public function checkCredentials($credentials, UserInterface $user)
-    {
-        // No credentials check needed in case of token auth
-        return true;
-    }
-
-    public function onAuthenticationSuccess(Request $request, TokenInterface $token, $providerKey)
+    public function onAuthenticationSuccess(Request $request, TokenInterface $token, string $firewallName): ?Response
     {
         // No response object needed in token auth
         return null;
     }
 
-    public function supportsRememberMe()
-    {
-        // Remember me functionality don't needed in token auth
-        return false;
-    }
-
-
     public function onAuthenticationFailure(Request $request, AuthenticationException $exception): JsonResponse
     {
         // @todo Decouple with App\Api\V1\DTO
         $json = $this->serializer->serialize(
-            new ApiResponse(null, JsonResponse::HTTP_UNAUTHORIZED, $exception->getMessage()),
+            new ApiResponse(null, JsonResponse::HTTP_UNAUTHORIZED, $exception->getMessageKey()),
             'json',
             ['groups' => ['api']]
         );
 
-        return new JsonResponse($json, JsonResponse::HTTP_UNAUTHORIZED,[], true);
-    }
-
-    /** @deprecated use AuthenticatorInterface::createToken() instead */
-    public function createAuthenticatedToken(UserInterface $user, $providerKey)
-    {
-        $request = $this->requestStack->getCurrentRequest();
-
-        $tokenKey = $request?->headers?->get(self::TOKEN_HEADER) ?:
-            $request?->cookies?->get(self::TOKEN_HEADER) ?:
-            $request?->query?->get(self::TOKEN_HEADER)
-        ;
-
-        return new AuthenticatedApiToken(
-            $user,
-            $tokenKey,
-            $providerKey,
-            $user->getRoles()
-        );
+        return new JsonResponse($json, JsonResponse::HTTP_UNAUTHORIZED, json: true);
     }
 }
