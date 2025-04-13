@@ -22,7 +22,7 @@ class TwitterBootstrap4PagelessView implements ViewInterface
 
     private int $currentPage;
 
-    public function __construct(TemplateInterface $template = null)
+    public function __construct(?TemplateInterface $template = null)
     {
         $this->template = $template ?: $this->createDefaultTemplate();
     }
