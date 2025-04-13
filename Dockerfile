@@ -12,7 +12,7 @@ COPY . /app/
 
 RUN apk update && \
     # linux-headers for this: https://github.com/php/php-src/issues/8681
-    apk add autoconf build-base icu libpq linux-headers postgresql-dev && \
+    apk add autoconf build-base git icu libpq linux-headers postgresql-dev && \
     docker-php-ext-configure intl && \
     docker-php-ext-configure pdo_pgsql && \
     docker-php-ext-configure sockets && \
@@ -20,12 +20,9 @@ RUN apk update && \
     docker-php-ext-install -j$(nproc) pdo_pgsql && \
     docker-php-ext-install -j$(nproc) sockets && \
     pecl install igbinary-3.2.7 && \
-    pecl install redis-5.3.7 && \
     docker-php-ext-enable igbinary && \
     docker-php-ext-enable intl && \
     docker-php-ext-enable pdo_pgsql && \
-    docker-php-ext-enable redis && \
-    apk del autoconf build-base linux-headers postgresql-dev && \
     mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini" && \
     echo "date.timezone = $PHP_TIMEZONE" > $PHP_INI_DIR/conf.d/timezone.ini && \
     mkdir -p /usr/local/bin && \
@@ -33,7 +30,8 @@ RUN apk update && \
     chmod +x /usr/local/bin/composer && \
     ls -la /app && ls -la /app/bin && \
     chmod +x /app/bin/console && \
-    /usr/local/bin/composer install --no-dev --no-progress --no-interaction --optimize-autoloader
+    /usr/local/bin/composer install --no-dev --no-progress --no-interaction --optimize-autoloader && \
+    apk del autoconf build-base git linux-headers postgresql-dev
 
 EXPOSE 8080/tcp
 

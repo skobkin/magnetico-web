@@ -29,6 +29,7 @@
         "pagerfanta/twig": "^3.6",
         "phpdocumentor/reflection-docblock": "^5.3",
         "phpstan/phpdoc-parser": "^1.6",
+        "predis/predis": "^2.3",
         "sensio/framework-extra-bundle": "^6.0",
         "sentry/sentry-symfony": "^5.2",
         "suin/php-rss-writer": "^1.6",
