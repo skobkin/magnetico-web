@@ -1,5 +1,4 @@
-# https://roadrunner.dev/docs/intro-config/2.x/en
-version: "2.7"
+version: "3"
 
 server:
   command: "php public/index.php"
@@ -9,16 +8,14 @@ server:
 
 http:
   address: 0.0.0.0:8080
+  pool:
+    debug: false
   middleware: [ "static", "gzip" ]
   uploads:
     forbid: [ ".php", ".exe", ".bat" ]
   static:
     dir: "public"
     forbid: [ ".php", ".htaccess" ]
-  pool:
-    max_jobs: 16
-    supervisor:
-      max_worker_memory: 256
 
 logs:
   mode: production
