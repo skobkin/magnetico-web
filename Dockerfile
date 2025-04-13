@@ -1,6 +1,6 @@
 # https://github.com/roadrunner-server/roadrunner/pkgs/container/roadrunner
 FROM ghcr.io/roadrunner-server/roadrunner:latest AS roadrunner
-FROM php:8.1-alpine
+FROM php:8.2-alpine
 
 ENV PHP_TIMEZONE Europe/Moscow
 ENV APP_ENV=prod
@@ -11,7 +11,8 @@ COPY --from=roadrunner /usr/bin/rr /app/bin/rr
 COPY . /app/
 
 RUN apk update && \
-    apk add autoconf build-base icu libpq postgresql-dev && \
+    # linux-headers for this: https://github.com/php/php-src/issues/8681
+    apk add autoconf build-base icu libpq linux-headers postgresql-dev && \
     docker-php-ext-configure intl && \
     docker-php-ext-configure pdo_pgsql && \
     docker-php-ext-configure sockets && \
@@ -24,7 +25,7 @@ RUN apk update && \
     docker-php-ext-enable intl && \
     docker-php-ext-enable pdo_pgsql && \
     docker-php-ext-enable redis && \
-    apk del autoconf build-base postgresql-dev && \
+    apk del autoconf build-base linux-headers postgresql-dev && \
     mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini" && \
     echo "date.timezone = $PHP_TIMEZONE" > $PHP_INI_DIR/conf.d/timezone.ini && \
     mkdir -p /usr/local/bin && \
@@ -40,4 +41,4 @@ VOLUME /var/log
 
 HEALTHCHECK --retries=3 --timeout=10s CMD curl http://localhost:8080 || exit 1
 
-CMD ["/app/bin/rr", "serve"]
+CMD rr serve -c .rr.yaml
