@@ -33,28 +33,28 @@
         "sensio/framework-extra-bundle": "^6.0",
         "sentry/sentry-symfony": "^5.2",
         "suin/php-rss-writer": "^1.6",
-        "symfony/asset": "^5.4",
-        "symfony/console": "^5.4",
-        "symfony/dotenv": "^5.4",
-        "symfony/expression-language": "^5.4",
-        "symfony/flex": "^1.0",
-        "symfony/form": "^5.4",
-        "symfony/framework-bundle": "^5.4",
-        "symfony/http-client": "^5.4",
-        "symfony/mailer": "^5.4",
+        "symfony/asset": "^6.4",
+        "symfony/console": "^6.4",
+        "symfony/dotenv": "^6.4",
+        "symfony/expression-language": "^6.4",
+        "symfony/flex": "^2.0",
+        "symfony/form": "^6.4",
+        "symfony/framework-bundle": "^6.4",
+        "symfony/http-client": "^6.4",
+        "symfony/mailer": "^6.4",
         "symfony/monolog-bundle": "^3.3",
-        "symfony/property-access": "^5.4",
-        "symfony/property-info": "^5.4",
+        "symfony/property-access": "^6.4",
+        "symfony/property-info": "^6.4",
         "symfony/runtime": "^6.4",
-        "symfony/security-bundle": "^5.4",
-        "symfony/serializer": "^5.4",
-        "symfony/translation": "^5.4",
-        "symfony/twig-bundle": "^5.4",
-        "symfony/validator": "^5.4",
-        "symfony/yaml": "^5.4"
+        "symfony/security-bundle": "^6.4",
+        "symfony/serializer": "^6.4",
+        "symfony/translation": "^6.4",
+        "symfony/twig-bundle": "^6.4",
+        "symfony/validator": "^6.4",
+        "symfony/yaml": "^6.4"
     },
     "require-dev": {
-        "symfony/web-profiler-bundle": "^5.4"
+        "symfony/web-profiler-bundle": "^6.4"
     },
     "config": {
         "preferred-install": {
@@ -102,7 +102,7 @@
     "extra": {
         "symfony": {
             "allow-contrib": false,
-            "require": "5.4.*"
+            "require": "6.4.*"
         }
     }
 }
