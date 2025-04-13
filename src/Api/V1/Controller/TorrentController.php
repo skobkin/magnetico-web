@@ -17,6 +17,7 @@ class TorrentController extends AbstractApiController
     public function search(Request $request, TorrentSearcher $searcher): JsonResponse
     {
         $query = $request->query->get('query', '');
+
         $page = (int) $request->query->get('page', '1');
         $orderBy = $request->query->get('order-by');
         $order = $request->query->get('order', 'asc');
@@ -34,10 +35,6 @@ class TorrentController extends AbstractApiController
 
     public function show(Torrent $torrent): JsonResponse
     {
-        return $this->createJsonResponse($torrent, ['api_v1_show'], JsonResponse::HTTP_OK,null, '');
+        return $this->createJsonResponse($torrent, ['api_v1_show']);
     }
-
-
-
-
 }
