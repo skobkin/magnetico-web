@@ -3,24 +3,20 @@ declare(strict_types=1);
 
 namespace App\Api\V1\DTO;
 
+use App\Api\V1\Enum\StatusEnum;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Serializer\Annotation\Groups;
 
 class ApiResponse
 {
-    public const STATUS_SUCCESS = 'success';
-    public const STATUS_ERROR = 'error';
-    public const STATUS_FAIL = 'fail';
-    public const STATUS_UNKNOWN = 'unknown';
-
     #[Groups(['api'])]
     private int $code;
 
-    /** Status text: 'success' (1xx-3xx), 'error' (4xx), 'fail' (5xx) or 'unknown' */
+    /** Status: 'success' (1xx-3xx), 'error' (4xx), 'fail' (5xx) or 'unknown' */
     #[Groups(['api'])]
-    private string $status;
+    private StatusEnum $status;
 
-    /** Used for 'fail' and 'error') */
+    /** Used for 'fail' and 'error' */
     #[Groups(['api'])]
     private ?string $message;
 
@@ -28,28 +24,20 @@ class ApiResponse
     #[Groups(['api'])]
     private string|object|array|null $data;
 
-    public function __construct($data = null, int $code = Response::HTTP_OK, string $message = null, string $status = '')
+    public function __construct($data = null, int $code = Response::HTTP_OK, string $message = null, ?StatusEnum $status = null)
     {
         $this->data = $data;
         $this->code = $code;
         $this->message = $message;
 
-        if ('' === $status) {
-            switch ($code) {
-                case ($code >= 100 && $code < 300):
-                    $this->status = self::STATUS_SUCCESS;
-                    break;
-                case ($code >= 400 && $code < 500):
-                    $this->status = self::STATUS_ERROR;
-                    break;
-                case ($code >= 500 && $code < 600):
-                    $this->status = self::STATUS_FAIL;
-                    break;
-                default:
-                    $this->status = self::STATUS_UNKNOWN;
-            }
+        if ($code >= 100 && $code < 300) {
+            $this->status = StatusEnum::Success;
+        } elseif ($code >= 400 && $code < 500) {
+            $this->status = StatusEnum::Error;
+        } elseif ($code >= 500 && $code < 600) {
+            $this->status = StatusEnum::Fail;
         } else {
-            $this->status = $status;
+            $this->status = StatusEnum::Unknown;
         }
     }
 
@@ -58,7 +46,7 @@ class ApiResponse
         return $this->code;
     }
 
-    public function getStatus(): string
+    public function getStatus(): StatusEnum
     {
         return $this->status;
     }
