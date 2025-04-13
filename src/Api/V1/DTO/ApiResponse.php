@@ -24,7 +24,7 @@ class ApiResponse
     #[Groups(['api'])]
     private string|object|array|null $data;
 
-    public function __construct($data = null, int $code = Response::HTTP_OK, string $message = null, ?StatusEnum $status = null)
+    public function __construct($data = null, int $code = Response::HTTP_OK, ?string $message = null, ?StatusEnum $status = null)
     {
         $this->data = $data;
         $this->code = $code;
