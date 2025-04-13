@@ -70,7 +70,7 @@ class ApiTokenAuthenticator extends AbstractAuthenticator
 
     public static function getTokenKeyFromRequest(Request $request): ?string
     {
-        $request?->headers?->get(self::TOKEN_HEADER) ?:
+        return $request?->headers?->get(self::TOKEN_HEADER) ?:
             $request?->cookies?->get(self::TOKEN_HEADER) ?:
                 $request?->query?->get(self::TOKEN_HEADER);
     }
