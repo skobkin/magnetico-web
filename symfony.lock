@@ -3,12 +3,12 @@
         "version": "v2.4.3"
     },
     "baldinof/roadrunner-bundle": {
-        "version": "2.2",
+        "version": "3.2",
         "recipe": {
             "repo": "github.com/symfony/recipes-contrib",
             "branch": "main",
-            "version": "2.0",
-            "ref": "cdd398712fbc03897c0550c856df05fb9ab2b36b"
+            "version": "3.0",
+            "ref": "0da69c96650460102ed0a2a0004e5b347f7220c9"
         },
         "files": [
             "config/packages/baldinof_road_runner.yaml"
