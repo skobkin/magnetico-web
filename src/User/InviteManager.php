@@ -18,7 +18,7 @@ class InviteManager
     /**
      * @return Invite[]
      */
-    public function createInvitesForUser(User $user, int $forceAmount = null): iterable
+    public function createInvitesForUser(User $user, ?int $forceAmount = null): iterable
     {
         if (!in_array('ROLE_USER', $user->getRoles(), true)) {
             return [];
