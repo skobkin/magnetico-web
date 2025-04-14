@@ -1,5 +1,13 @@
 twig:
     paths: ['%kernel.project_dir%/templates']
-    debug: '%kernel.debug%'
-    strict_variables: '%kernel.debug%'
+    file_name_pattern: '*.twig'
     form_themes: ['bootstrap_4_layout.html.twig']
+
+when@test:
+    twig:
+        strict_variables: true
+
+when@dev:
+    twig:
+        strict_variables: true
+        debug: true
