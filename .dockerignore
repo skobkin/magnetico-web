@@ -48,3 +48,5 @@
 
 # Docker Ignore
 /.dockerignore
+
+/README.md
