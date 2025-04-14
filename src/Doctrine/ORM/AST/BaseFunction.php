@@ -3,7 +3,13 @@ declare(strict_types=1);
 
 namespace App\Doctrine\ORM\AST;
 
-use Doctrine\ORM\Query\{AST\Functions\FunctionNode, AST\Node, Lexer, Parser, SqlWalker};
+use App\Doctrine\ORM\DoctrineOrm;
+use Doctrine\ORM\Query\AST\Functions\FunctionNode;
+use Doctrine\ORM\Query\AST\Node;
+use Doctrine\ORM\Query\Lexer;
+use Doctrine\ORM\Query\Parser;
+use Doctrine\ORM\Query\SqlWalker;
+use Doctrine\ORM\Query\TokenType;
 
 /**
  * @since 0.1
@@ -15,13 +21,38 @@ abstract class BaseFunction extends FunctionNode
 {
     protected string $functionPrototype;
 
-    /** @var string[] */
+    /**
+     * @var list<string>
+     */
     protected array $nodesMapping = [];
 
-    /** @var Node[] */
+    /**
+     * @var list<Node|null>
+     */
     protected array $nodes = [];
 
-    abstract protected function customiseFunction(): void;
+    /**
+     * This method is meant for internal use only, and it is not suggested that the forks of the library depend on it.
+     * It will be made abstract from version 3.0.
+     *
+     * @internal
+     *
+     * @see customiseFunction()
+     */
+    /* abstract */
+    protected function customizeFunction(): void
+    {
+        // Void
+    }
+
+    /**
+     * @deprecated
+     */
+    protected function customiseFunction(): void
+    {
+        \trigger_error('The internal-use method of `customiseFunction()` is deprecated and is now renamed to `customizeFunction()`. `customiseFunction()` will be removed from version 3.0 onwards.', E_USER_DEPRECATED);
+        $this->customizeFunction();
+    }
 
     protected function setFunctionPrototype(string $functionPrototype): void
     {
@@ -35,12 +66,14 @@ abstract class BaseFunction extends FunctionNode
 
     public function parse(Parser $parser): void
     {
-        $this->customiseFunction();
+        $shouldUseLexer = DoctrineOrm::isPre219();
 
-        $parser->match(Lexer::T_IDENTIFIER);
-        $parser->match(Lexer::T_OPEN_PARENTHESIS);
+        $this->customizeFunction();
+
+        $parser->match($shouldUseLexer ? Lexer::T_IDENTIFIER : TokenType::T_IDENTIFIER);
+        $parser->match($shouldUseLexer ? Lexer::T_OPEN_PARENTHESIS : TokenType::T_OPEN_PARENTHESIS);
         $this->feedParserWithNodes($parser);
-        $parser->match(Lexer::T_CLOSE_PARENTHESIS);
+        $parser->match($shouldUseLexer ? Lexer::T_CLOSE_PARENTHESIS : TokenType::T_CLOSE_PARENTHESIS);
     }
 
     /**
@@ -52,9 +85,10 @@ abstract class BaseFunction extends FunctionNode
         $lastNode = $nodesMappingCount - 1;
         for ($i = 0; $i < $nodesMappingCount; $i++) {
             $parserMethod = $this->nodesMapping[$i];
+            // @phpstan-ignore-next-line
             $this->nodes[$i] = $parser->{$parserMethod}();
             if ($i < $lastNode) {
-                $parser->match(Lexer::T_COMMA);
+                $parser->match(\class_exists(TokenType::class) ? TokenType::T_COMMA : Lexer::T_COMMA);
             }
         }
     }
@@ -63,7 +97,7 @@ abstract class BaseFunction extends FunctionNode
     {
         $dispatched = [];
         foreach ($this->nodes as $node) {
-            $dispatched[] = $node->dispatch($sqlWalker);
+            $dispatched[] = $node instanceof Node ? $node->dispatch($sqlWalker) : 'null';
         }
 
         return \vsprintf($this->functionPrototype, $dispatched);

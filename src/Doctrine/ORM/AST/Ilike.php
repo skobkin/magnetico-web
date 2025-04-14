@@ -15,7 +15,7 @@ namespace App\Doctrine\ORM\AST;
  */
 class Ilike extends BaseFunction
 {
-    protected function customiseFunction(): void
+    protected function customizeFunction(): void
     {
         $this->setFunctionPrototype('%s ilike %s');
         $this->addNodeMapping('StringPrimary');
