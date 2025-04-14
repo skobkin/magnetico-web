@@ -1,5 +1,4 @@
 [![Build Status](https://ci.skobk.in/api/badges/skobkin/magnetico-web/status.svg)](https://ci.skobk.in/skobkin/magnetico-web)
-[![License](https://poser.pugx.org/skobkin/magnetico-web/license)](https://packagist.org/packages/skobkin/magnetico-web)
 
 # Magnetico Web PHP
 
