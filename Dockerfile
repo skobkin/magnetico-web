@@ -39,4 +39,4 @@ VOLUME /var/log
 
 HEALTHCHECK --retries=3 --timeout=10s CMD curl http://localhost:8080 || exit 1
 
-CMD rr serve -c .rr.yaml
+CMD /app/bin/rr serve -c /app/.rr.yaml
