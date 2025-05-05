@@ -30,9 +30,11 @@ security:
                 target: /
             remember_me:
                 secret: '%kernel.secret%'
-                lifetime: 1209600
+                # https://symfony.com/doc/current/security/remember_me.html
+                # 3 months in seconds
+                lifetime: 7257600
                 path: /
-                always_remember_me: true
+                #always_remember_me: true
 
 
     # Easy way to control access for large sections of your site

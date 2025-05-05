@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\Form;
 
 use Symfony\Component\Form\AbstractType;
-use Symfony\Component\Form\Extension\Core\Type\{PasswordType, TextType};
+use Symfony\Component\Form\Extension\Core\Type\{CheckboxType, PasswordType, TextType};
 use Symfony\Component\Form\FormBuilderInterface;
 
 class LoginType extends AbstractType
@@ -14,6 +14,7 @@ class LoginType extends AbstractType
         $builder
             ->add('_username', TextType::class, ['mapped' => false, 'required' => true])
             ->add('_password', PasswordType::class, ['mapped' => false, 'required' => true])
+            ->add('_remember_me', CheckboxType::class, ['mapped' => false, 'required' => false])
         ;
     }
 
