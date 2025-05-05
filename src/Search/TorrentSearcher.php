@@ -20,7 +20,7 @@ class TorrentSearcher
 
     }
 
-    public function createSearchQueryBuilder(string $query, string $orderBy = null, string $order = 'asc'): QueryBuilder
+    public function createSearchQueryBuilder(string $query, ?string $orderBy = null, string $order = 'asc'): QueryBuilder
     {
         $qb = $this->createFindLikeSplitPartsQueryBuilder($query);
 
