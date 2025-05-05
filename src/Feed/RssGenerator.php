@@ -7,7 +7,7 @@ use App\Magnet\MagnetGenerator;
 use App\Magnetico\Entity\Torrent;
 use App\Magnetico\Repository\TorrentRepository;
 use Doctrine\ORM\QueryBuilder;
-use Suin\RSSWriter\{Channel, Feed, Item};
+use Laminas\Feed\Writer\{Entry, Feed};
 use Symfony\Component\Routing\{Generator\UrlGeneratorInterface, RouterInterface};
 
 /**
@@ -34,7 +34,7 @@ class RssGenerator
 
         $feed = $this->createFeedFromTorrents($qb->getQuery()->getResult());
 
-        return $feed->render();
+        return $feed->export('rss');
     }
 
     /**
@@ -43,11 +43,28 @@ class RssGenerator
     private function createFeedFromTorrents(array $torrents): Feed
     {
         $feed = new Feed();
-        $channel = $this->createChannel();
-        $feed->addChannel($channel);
 
-        foreach ($this->createItemsFromTorrents($torrents) as $item) {
-            $channel->addItem($item);
+        $date = new \DateTime();
+
+        $indexUrl = $this->generateUrl('index');
+
+        $feed
+            ->setTitle('Last')
+            ->setDescription('Last Last torrents')
+            ->setLink($indexUrl)
+            ->setFeedLink($this->generateUrl('api_v1_rss_last'), 'atom')
+            ->setLanguage('en-US')
+            ->setDateCreated($date)
+            ->setLastBuildDate($date)
+        ;
+
+        $feed->addAuthor([
+            'name' => 'Magnetico Web',
+            'uri' => $indexUrl,
+        ]);
+
+        foreach ($this->createItemsFromTorrents($torrents, $feed) as $item) {
+            $feed->addEntry($item);
         }
 
         // TODO feed pagination
@@ -56,55 +73,39 @@ class RssGenerator
         return $feed;
     }
 
-    private function createChannel(): Channel
-    {
-        $time = time();
-
-        $channel = new Channel();
-        $channel
-            ->title('Last')
-            ->description('Last torrents')
-            ->url($this->generateUrl('index'))
-            ->feedUrl($this->generateUrl('api_v1_rss_last'))
-            ->language('en-US')
-            ->pubDate($time)
-            ->lastBuildDate($time)
-            ->ttl(15)
-        ;
-
-        return $channel;
-    }
-
     /**
      * @param Torrent[] $torrents
      *
-     * @return Item[]
+     * @return Entry[]
      */
-    private function createItemsFromTorrents(array $torrents): array
+    private function createItemsFromTorrents(array $torrents, Feed $feed): array
     {
         $items = [];
 
         foreach ($torrents as $torrent) {
-            $items[] = $this->createItemFromTorrent($torrent);
+            $items[] = $this->createItemFromTorrent($torrent, $feed);
         }
 
         return $items;
     }
 
-    private function createItemFromTorrent(Torrent $torrent): Item
+    private function createItemFromTorrent(Torrent $torrent, Feed $feed): Entry
     {
-        $item = new Item();
+        $url = $this->magnetGenerator->generate($torrent->getInfoHash(), $torrent->getName());
+
+        $item = $feed->createEntry();
         $item
-            ->title($torrent->getName())
-            ->description($torrent->getInfoHash())
-            ->pubDate($torrent->getDiscoveredOn())
-            ->url($this->generateUrl('torrents_show', ['id' => $torrent->getId()]))
-            ->enclosure(
-                $this->magnetGenerator->generate($torrent->getInfoHash(), $torrent->getName()),
-                $torrent->getTotalSize(),
-                self::MIME_TYPE
-            )
-            ->guid($torrent->getInfoHash())
+            ->setId($torrent->getInfoHash())
+            ->setTitle($torrent->getName())
+            ->setDescription($torrent->getInfoHash())
+            ->setDateCreated($torrent->getDiscoveredOn())
+            ->setDateModified($torrent->getDiscoveredOn())
+            ->setLink($this->generateUrl('torrents_show', ['id' => $torrent->getId()]))
+            ->setEnclosure([
+                'uri' => $url,
+                'length' => (string) $torrent->getTotalSize(),
+                'type' => self::MIME_TYPE,
+            ])
         ;
 
         return $item;
