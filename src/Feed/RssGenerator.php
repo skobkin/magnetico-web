@@ -91,7 +91,7 @@ class RssGenerator
 
     private function createItemFromTorrent(Torrent $torrent, Feed $feed): Entry
     {
-        $url = $this->magnetGenerator->generate($torrent->getInfoHash(), $torrent->getName());
+        $magnetUrl = $this->magnetGenerator->generate($torrent->getInfoHash(), $torrent->getName());
 
         $item = $feed->createEntry();
         $item
@@ -100,9 +100,10 @@ class RssGenerator
             ->setDescription($torrent->getInfoHash())
             ->setDateCreated($torrent->getDiscoveredOn())
             ->setDateModified($torrent->getDiscoveredOn())
-            ->setLink($this->generateUrl('torrents_show', ['id' => $torrent->getId()]))
+            ->setLink($magnetUrl)
+            ->setCommentLink($this->generateUrl('torrents_show', ['id' => $torrent->getId()]))
             ->setEnclosure([
-                'uri' => $url,
+                'uri' => $magnetUrl,
                 'length' => (string) $torrent->getTotalSize(),
                 'type' => self::MIME_TYPE,
             ])
