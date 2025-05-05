@@ -12,14 +12,19 @@ use Symfony\Contracts\Cache\ItemInterface;
 class RssController extends AbstractController
 {
     private const CONTENT_TYPE = 'application/rss+xml';
-    private const CACHE_KEY = 'rss_last';
+    private const CACHE_KEY = 'rss_last_page_';
     private const CACHE_LIFETIME = 600;
+    private const PAGE_MAX = 10;
 
     public function last(Request $request, RssGenerator $generator, CacheInterface $magneticodCache): Response
     {
         $page = (int) $request->query->get('page', '1');
 
-        $xml = $magneticodCache->get(self::CACHE_KEY, function (ItemInterface $item) use ($generator, $page) {
+        if ($page > self::PAGE_MAX) {
+            $page = self::PAGE_MAX;
+        }
+
+        $xml = $magneticodCache->get(self::CACHE_KEY . $page, function (ItemInterface $item) use ($generator, $page) {
             $item->expiresAfter(self::CACHE_LIFETIME);
 
             return $generator->generateLast($page);
