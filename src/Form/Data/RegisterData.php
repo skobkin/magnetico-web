@@ -27,7 +27,7 @@ class RegisterData
     #[AppAssert\ValidInvite()]
     public string $inviteCode;
 
-    public function __construct(string $inviteCode = null)
+    public function __construct(?string $inviteCode = null)
     {
         $this->inviteCode = $inviteCode;
     }
