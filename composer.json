@@ -24,7 +24,7 @@
         "doctrine/doctrine-migrations-bundle": "^3",
         "doctrine/orm": "^3.3",
         "excelwebzone/recaptcha-bundle": "^1.5",
-        "laminas/laminas-feed": "^2.23",
+        "laminas/laminas-feed": "^2.24",
         "pagerfanta/doctrine-orm-adapter": "^4.7",
         "pagerfanta/twig": "^4.7",
         "phpdocumentor/reflection-docblock": "^5.3",
