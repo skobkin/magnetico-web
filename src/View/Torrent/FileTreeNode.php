@@ -7,21 +7,15 @@ use App\Magnetico\Entity\{File, Torrent};
 
 class FileTreeNode
 {
-    private ?string $name;
-
-    private bool $isDir = true;
-
-    private ?int $size;
-
-    private ?FileTreeNode $parent;
-
     /** @var FileTreeNode[]|File[] */
-    private array $children = [];
+    public array $children = [];
 
-    private function __construct(string $name)
-    {
-        $this->name = $name;
-    }
+    private function __construct(
+        public readonly ?string $name,
+        public readonly bool $isDir = true,
+        public readonly ?int $size = null,
+        public readonly ?FileTreeNode $parent = null
+    ) {}
 
     public static function createFromTorrent(Torrent $torrent): FileTreeNode
     {
@@ -36,12 +30,7 @@ class FileTreeNode
 
     public static function createFromFile(string $name, File $file, ?FileTreeNode $parent): FileTreeNode
     {
-        $node = new static($name);
-        $node->isDir = false;
-        $node->size = $file->getSize();
-        $node->parent = $parent;
-
-        return $node;
+        return new static($name, false, $file->getSize(), $parent);
     }
 
     public function addFileToPath(string $path, File $file): void
@@ -62,8 +51,7 @@ class FileTreeNode
         $childNodeChildPath = implode('/', $pathParts);
 
         if (!$this->hasChild($childNodeName)) {
-            $childNode = new static($childNodeName);
-            $childNode->parent = $this;
+            $childNode = new static($childNodeName, true, null, $this);
             $this->addChild($childNodeName, $childNode);
         } else {
             $childNode = $this->getChild($childNodeName);
@@ -132,10 +120,5 @@ class FileTreeNode
     public function countChildren(): int
     {
         return count($this->children);
-    }
-
-    public function getSize(): ?int
-    {
-        return $this->size;
     }
 }

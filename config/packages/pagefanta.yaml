@@ -1,2 +1,2 @@
 babdev_pagerfanta:
-    default_view: twitter_bootstrap4_pageless
+    default_view: picocss_pageless

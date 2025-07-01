@@ -1,26 +1,18 @@
 {% extends 'base.html.twig' %}
 
 {% block content %}
-    <ul class="nav nav-tabs" id="myTab" role="tablist">
-        <li class="nav-item">
-            <a class="nav-link active" id="home-tab" data-toggle="tab" href="#profile" role="tab" aria-controls="home" aria-selected="true">Profile</a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link" id="profile-tab" data-toggle="tab" href="#invites" role="tab" aria-controls="profile" aria-selected="false">Invites</a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link" id="contact-tab" data-toggle="tab" href="#api" role="tab" aria-controls="contact" aria-selected="false">RSS / API</a>
-        </li>
-    </ul>
-    <div class="tab-content" id="myTabContent">
-        <div class="tab-pane fade show active" id="profile" role="tabpanel" aria-labelledby="home-tab">
-            {% include 'Account/profile.html.twig' with {'user': user} %}
-        </div>
-        <div class="tab-pane fade" id="invites" role="tabpanel" aria-labelledby="profile-tab">
-            {% include 'Account/invites.html.twig' with {'invites': invites} %}
-        </div>
-        <div class="tab-pane fade" id="api" role="tabpanel" aria-labelledby="contact-tab">
-            {% include 'Account/api.html.twig' with {'tokens': tokens} %}
-        </div>
-    </div>
+    <details>
+        <summary><i class="fas fa-user"></i> Profile</summary>
+        {% include 'Account/profile.html.twig' with {'user': user} %}
+    </details>
+    <details>
+        <summary><i class="fas fa-link"></i> Invites</summary>
+        {% include 'Account/invites.html.twig' with {'invites': invites} %}
+    </details>
+    <details>
+        <summary><i class="fas fa-rss"></i> RSS / API</summary>
+        {% include 'Account/api.html.twig' with {'tokens': tokens} %}
+    </details>
 {% endblock %}
+
+{% block search_form %}{# Not showing search form #}{% endblock %}

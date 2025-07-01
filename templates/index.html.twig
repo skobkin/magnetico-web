@@ -3,7 +3,7 @@
 {% block content %}
     <div class="well">
         {% if not is_granted('ROLE_USER') %}
-            <a href="{{ path('user_auth_login') }}" class="btn btn-lg btn-primary"><i class="fas fa-sign-in-alt"></i> Login</a>
+            <a href="{{ path('user_auth_login') }}" role="button"><i class="fas fa-sign-in-alt"></i> Login</a>
         {% endif %}
     </div>
 {% endblock %}

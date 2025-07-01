@@ -1,8 +1,8 @@
-<div class="row mb-3 mt-3">
-    <a role="button" class="btn btn-primary" href="{{ path('user_account_token_create') }}">Create token</a>
+<div>
+    <a href="{{ path('user_account_token_create') }}" role="button">Create token</a>
 </div>
 
-<table class="table">
+<table>
     <thead>
     <tr>
         <th scope="col">Token</th>
@@ -19,14 +19,13 @@
             <code>{{ token.key }}</code>
         </th>
         <td>
-            {# We can't use constant() in the hash so it's necessay to hard-code query parameter here #}
-            <input class="form-control" type="text" value="{{ url('api_v1_rss_last') }}?{{ {'api-token': token.key} | url_encode }}" readonly onclick="this.select();">
+            <input type="text" value="{{ url('api_v1_rss_last') }}?{{ {'api-token': token.key} | url_encode }}" readonly onclick="this.select();">
         </td>
         <td>
             {{ token.createdAt | date('Y-m-d H:i:s') }}
         </td>
         <td>
-            <a role="button" class="btn btn-danger" href="{{ path('user_account_token_revoke', {'key': token.key}) }}" onclick="return confirm('Are you sure?')">Revoke</a>
+            <a href="{{ path('user_account_token_revoke', {'key': token.key}) }}" role="button" onclick="return confirm('Are you sure?')">Revoke</a>
         </td>
     </tr>
     {% endfor %}

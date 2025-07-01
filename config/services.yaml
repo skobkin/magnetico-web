@@ -54,7 +54,7 @@ services:
         tags: { name: monolog.processor, handler: sentry }
 
     # Pagerfanta overrides
-    pagerfanta.view.bootstrap4_pageless:
-        class: App\Pager\View\TwitterBootstrap4PagelessView
+    pagerfanta.view.picocss_pageless:
+        class: App\Pager\View\PicoCSSPagelessView
         public: false
-        tags: [{ name: pagerfanta.view, alias: twitter_bootstrap4_pageless }]
+        tags: [{ name: pagerfanta.view, alias: picocss_pageless }]

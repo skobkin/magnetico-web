@@ -11,13 +11,7 @@ class FileSizeHumanizer
     private const DIVIDER_BINARY = 1024;
     private const DIVIDER_COMMON = 1000;
 
-    /** @var bool Whether or not to use binary prefixes/suffixes */
-    private $binaryPrefix = false;
-
-    public function __construct(bool $useBinaryPrefix = false)
-    {
-        $this->binaryPrefix = $useBinaryPrefix;
-    }
+    public function __construct(private readonly bool $binaryPrefix = false) {}
 
     public function humanize(int $bytes, int $decimals = 2, bool $forceBinary = false): string
     {

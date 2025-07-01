@@ -11,66 +11,62 @@
     <title>{% block title %}Magnetico Web{% endblock %}</title>
 
     {% block css %}
-    <!-- Bootstrap core CSS -->
-    <link href="{{ asset('assets/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
-    <!-- Font Awesome -->
+    <!-- PicoCSS core -->
+    <link rel="stylesheet" href="{{ asset('assets/picocss/css/pico.green.min.css') }}">
     <link href="{{ asset('assets/fontawesome/css/all.css') }}" rel="stylesheet">
-    <!-- SIte style -->
+    <!-- Site style -->
     <link href="{{ asset('assets/magnetico-web/css/style.css') }}" rel="stylesheet">
     {% endblock %}
 </head>
 
 <body>
 
-<nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
-    <a class="navbar-brand" href="{{ path('index') }}"><i class="fas fa-magnet"></i> Magnetico Search</a>
-    <button class="navbar-toggler" type="button" data-toggle="collapse" data-target="#navbarsExampleDefault" aria-controls="navbarsExampleDefault" aria-expanded="false" aria-label="Toggle navigation">
-        <span class="navbar-toggler-icon"></span>
-    </button>
-
-    <div class="collapse navbar-collapse" id="navbarsExampleDefault">
+<!-- Floating header with proper spacing -->
+<header class="floating-header container">
+    <nav class="header-nav">
+        <ul class="nav-left">
+            <li><a href="{{ path('index') }}"><i class="fas fa-magnet"></i> Magnetico Search</a></li>
+            {% if is_granted('IS_AUTHENTICATED_REMEMBERED') %}
+                <li><a href="{{ path('user_account') }}"><i class="fas fa-user"></i> {{ app.user.userIdentifier }}</a></li>
+            {% endif %}
+        </ul>
         {% if is_granted('IS_AUTHENTICATED_REMEMBERED') %}
-            <ul class="navbar-nav mr-auto">
-                <li class="nav-item"><a class="nav-link" href="{{ path('user_account') }}"><i class="fas fa-user"></i> {{ app.user.username }}</a></li>
-            </ul>
-
-            <ul class="navbar-nav ml-auto">
-                <li class="nav-item"><a class="nav-link" href="{{ logout_path('main') }}"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
-            </ul>
+        <ul class="nav-right">
+            <li><a href="{{ logout_path('main') }}"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
+        </ul>
         {% endif %}
-    </div>
-</nav>
+    </nav>
+</header>
 
 <main id="content" role="main" class="container">
+    {% block search_form %}
     {% if is_granted('ROLE_USER') %}
-    <div class id="form-search">
-        <form class="" action="{{ path('torrents_search') }}" method="get">
-            <div class="input-group mb-3">
-                <input name="query" class="form-control" type="text" placeholder="Torrent" aria-label="Search"
+    <section id="form-search">
+        <form action="{{ path('torrents_search') }}" method="get" role="search">
+            <fieldset role="group">
+                <input name="query" type="search" placeholder="Torrent title" aria-label="Search"
                        value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}"
-                       {# @var app \Symfony\Bridge\Twig\AppVariable #}
                        {% if 'index' == app.request.get('_route') %}autofocus{% endif %} />
-                <div class="input-group-append">
-                    <button class="btn btn-outline-primary my-2 my-sm-0" type="submit"><i class="fas fa-search"></i> Search</button>
-                    <button class="btn btn-outline-info" type="button" data-toggle="collapse" data-target="#search-rules" aria-expanded="false" aria-controls="search-rules">
-                        <i class="fa fa-question-circle"></i>
-                    </button>
-                </div>
-            </div>
+                <button type="submit"><i class="fas fa-search"></i></button>
+            </fieldset>
         </form>
-
-        <div class="alert alert-info collapse" role="alert" id="search-rules">
-            {{ include('search_rules_help.html.twig') }}
-        </div>
-    </div>
+        <details>
+            <summary><i class="fa fa-question-circle"></i> Search rules</summary>
+            <div>
+                {{ include('search_rules_help.html.twig') }}
+            </div>
+        </details>
+    </section>
     {% endif %}
+    {% endblock %}
 
     <div id="alerts">
         {% for type, messages in app.flashes %}
             {% for message in messages %}
-                <div class="alert alert-{{ type }}" role="alert">
+                <!-- PicoCSS alert: use semantic <aside> and class for type if needed -->
+                <aside class="alert-{{ type }}">
                     {{ message }}
-                </div>
+                </aside>
             {% endfor %}
         {% endfor %}
     </div>
@@ -80,10 +76,6 @@
     </div>
 </main><!-- /.container -->
 
-{% block javascript %}
-<script src="{{ asset('assets/jquery/js/jquery-3.5.1.slim.min.js') }}"></script>
-<script src="{{ asset('assets/popper/js/popper.min.js') }}"></script>
-<script src="{{ asset('assets/bootstrap/js/bootstrap.min.js') }}"></script>
-{% endblock %}
+{% block javascript %}{% endblock %}
 </body>
 </html>
