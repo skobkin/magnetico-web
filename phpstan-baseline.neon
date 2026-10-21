@@ -1,0 +1,397 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Method App\\Api\\V1\\Controller\\AbstractApiController\:\:createJsonResponse\(\) has parameter \$data with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: src/Api/V1/Controller/AbstractApiController.php
+
+		-
+			message: '#^Method App\\Api\\V1\\Controller\\AbstractApiController\:\:createJsonResponse\(\) has parameter \$groups with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Api/V1/Controller/AbstractApiController.php
+
+		-
+			message: '#^Variable \$user in PHPDoc tag @var does not exist\.$#'
+			identifier: varTag.variableNotFound
+			count: 1
+			path: src/Api/V1/Controller/SecurityController.php
+
+		-
+			message: '#^Constructor of class App\\Api\\V1\\DTO\\ApiResponse has an unused parameter \$status\.$#'
+			identifier: constructor.unusedParameter
+			count: 1
+			path: src/Api/V1/DTO/ApiResponse.php
+
+		-
+			message: '#^Method App\\Api\\V1\\DTO\\ApiResponse\:\:__construct\(\) has parameter \$data with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: src/Api/V1/DTO/ApiResponse.php
+
+		-
+			message: '#^Method App\\Api\\V1\\DTO\\ApiResponse\:\:getData\(\) return type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Api/V1/DTO/ApiResponse.php
+
+		-
+			message: '#^Property App\\Api\\V1\\DTO\\ApiResponse\:\:\$data type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Api/V1/DTO/ApiResponse.php
+
+		-
+			message: '#^Method App\\Api\\V1\\DTO\\ListPage\:\:__construct\(\) has parameter \$items with no value type specified in iterable type Traversable\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Api/V1/DTO/ListPage.php
+
+		-
+			message: '#^Method App\\Api\\V1\\DTO\\ListPage\:\:createFromPager\(\) has parameter \$pager with generic class Pagerfanta\\Pagerfanta but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Api/V1/DTO/ListPage.php
+
+		-
+			message: '#^Method App\\Api\\V1\\DTO\\ListPage\:\:getItems\(\) return type has no value type specified in iterable type Traversable\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Api/V1/DTO/ListPage.php
+
+		-
+			message: '#^Property App\\Api\\V1\\DTO\\ListPage\:\:\$items type has no value type specified in iterable type Traversable\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Api/V1/DTO/ListPage.php
+
+		-
+			message: '#^Unsafe usage of new static\(\)\.$#'
+			identifier: new.static
+			count: 1
+			path: src/Api/V1/DTO/ListPage.php
+
+		-
+			message: '#^Variable \$user in PHPDoc tag @var does not exist\.$#'
+			identifier: varTag.variableNotFound
+			count: 2
+			path: src/Controller/AccountController.php
+
+		-
+			message: '#^Left side of && is always true\.$#'
+			identifier: booleanAnd.leftAlwaysTrue
+			count: 1
+			path: src/Controller/UserController.php
+
+		-
+			message: '#^Property App\\Entity\\Invite\:\:\$id is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Entity/Invite.php
+
+		-
+			message: '#^Property App\\Entity\\Invite\:\:\$usedBy \(App\\Entity\\User\|null\) is never assigned null so it can be removed from the property type\.$#'
+			identifier: property.unusedType
+			count: 1
+			path: src/Entity/Invite.php
+
+		-
+			message: '#^Method App\\Entity\\User\:\:__construct\(\) has parameter \$roles with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Entity/User.php
+
+		-
+			message: '#^Method App\\Entity\\User\:\:getInvites\(\) return type with generic class Doctrine\\Common\\Collections\\ArrayCollection does not specify its types\: TKey, T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Entity/User.php
+
+		-
+			message: '#^Method App\\Entity\\User\:\:unserialize\(\) has parameter \$serialized with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: src/Entity/User.php
+
+		-
+			message: '#^Property App\\Entity\\User\:\:\$invites is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Entity/User.php
+
+		-
+			message: '#^Property App\\Entity\\User\:\:\$invites with generic class Doctrine\\Common\\Collections\\ArrayCollection does not specify its types\: TKey, T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Entity/User.php
+
+		-
+			message: '#^Property App\\Entity\\User\:\:\$roles type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Entity/User.php
+
+		-
+			message: '#^Method App\\Feed\\RssGenerator\:\:generateUrl\(\) has parameter \$parameters with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Feed/RssGenerator.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\File\:\:\$id is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/File.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\File\:\:\$path is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/File.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\File\:\:\$size is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/File.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\File\:\:\$torrent is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/File.php
+
+		-
+			message: '#^Method App\\Magnetico\\Entity\\Torrent\:\:getFiles\(\) return type with generic class Doctrine\\Common\\Collections\\ArrayCollection does not specify its types\: TKey, T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$discoveredOn has no type specified\.$#'
+			identifier: missingType.property
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$discoveredOn is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$files is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$files with generic class Doctrine\\Common\\Collections\\ArrayCollection does not specify its types\: TKey, T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$id is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$infoHash is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$name is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Property App\\Magnetico\\Entity\\Torrent\:\:\$totalSize is never written, only read\.$#'
+			identifier: property.onlyRead
+			count: 1
+			path: src/Magnetico/Entity/Torrent.php
+
+		-
+			message: '#^Class App\\Magnetico\\Repository\\TorrentRepository extends generic class Doctrine\\Bundle\\DoctrineBundle\\Repository\\ServiceEntityRepository but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Magnetico/Repository/TorrentRepository.php
+
+		-
+			message: '#^Class App\\Pager\\PagelessDoctrineORMAdapter extends generic class Pagerfanta\\Doctrine\\ORM\\QueryAdapter but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Pager/PagelessDoctrineORMAdapter.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:configureTemplate\(\) has parameter \$options with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:configureTemplate\(\) has parameter \$routeGenerator with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:createDefaultTemplate\(\) has no return type specified\.$#'
+			identifier: missingType.return
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:generate\(\) return type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:generateContainer\(\) has parameter \$pages with no type specified\.$#'
+			identifier: missingType.parameter
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:generateContainer\(\) never returns array so it can be removed from the return type\.$#'
+			identifier: return.unusedType
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:generateContainer\(\) return type has no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:initializePagerfanta\(\) has parameter \$pagerfanta with generic interface Pagerfanta\\PagerfantaInterface but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Property App\\Pager\\View\\PicoCSSPagelessView\:\:\$pagerfanta \(Pagerfanta\\Pagerfanta\) does not accept Pagerfanta\\PagerfantaInterface\.$#'
+			identifier: assign.propertyType
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Property App\\Pager\\View\\PicoCSSPagelessView\:\:\$pagerfanta with generic class Pagerfanta\\Pagerfanta does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Property Pagerfanta\\View\\Template\\TemplateInterface@anonymous/Pager/View/PicoCSSPagelessView\.php\:47\:\:\$options has no type specified\.$#'
+			identifier: missingType.property
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Property Pagerfanta\\View\\Template\\TemplateInterface@anonymous/Pager/View/PicoCSSPagelessView\.php\:47\:\:\$options is never read, only written\.$#'
+			identifier: property.onlyWritten
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Property Pagerfanta\\View\\Template\\TemplateInterface@anonymous/Pager/View/PicoCSSPagelessView\.php\:47\:\:\$routeGenerator has no type specified\.$#'
+			identifier: missingType.property
+			count: 1
+			path: src/Pager/View/PicoCSSPagelessView.php
+
+		-
+			message: '#^Class App\\Repository\\ApiTokenRepository extends generic class Doctrine\\Bundle\\DoctrineBundle\\Repository\\ServiceEntityRepository but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Repository/ApiTokenRepository.php
+
+		-
+			message: '#^Class App\\Repository\\InviteRepository extends generic class Doctrine\\Bundle\\DoctrineBundle\\Repository\\ServiceEntityRepository but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Repository/InviteRepository.php
+
+		-
+			message: '#^Class App\\Repository\\PasswordResetTokenRepository extends generic class Doctrine\\Bundle\\DoctrineBundle\\Repository\\ServiceEntityRepository but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Repository/PasswordResetTokenRepository.php
+
+		-
+			message: '#^Class App\\Repository\\UserRepository extends generic class Doctrine\\Bundle\\DoctrineBundle\\Repository\\ServiceEntityRepository but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Repository/UserRepository.php
+
+		-
+			message: '#^Method App\\Search\\TorrentSearcher\:\:__construct\(\) has parameter \$classMetadata with generic class Doctrine\\ORM\\Mapping\\ClassMetadata but does not specify its types\: T$#'
+			identifier: missingType.generics
+			count: 1
+			path: src/Search/TorrentSearcher.php
+
+		-
+			message: '#^Using nullsafe method call on non\-nullable type Symfony\\Component\\HttpFoundation\\HeaderBag\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 1
+			path: src/Security/ApiTokenAuthenticator.php
+
+		-
+			message: '#^Using nullsafe method call on non\-nullable type Symfony\\Component\\HttpFoundation\\InputBag\<string\>\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 2
+			path: src/Security/ApiTokenAuthenticator.php
+
+		-
+			message: '#^Using nullsafe property access on non\-nullable type Symfony\\Component\\HttpFoundation\\Request\. Use \-\> instead\.$#'
+			identifier: nullsafe.neverNull
+			count: 3
+			path: src/Security/ApiTokenAuthenticator.php
+
+		-
+			message: '#^Variable \$user in PHPDoc tag @var does not exist\.$#'
+			identifier: varTag.variableNotFound
+			count: 1
+			path: src/User/PasswordResetManager.php
+
+		-
+			message: '#^Method App\\User\\UserManager\:\:createUser\(\) has parameter \$roles with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/User/UserManager.php
+
+		-
+			message: '#^Method App\\User\\UserManager\:\:createUserByInvite\(\) has parameter \$roles with no value type specified in iterable type array\.$#'
+			identifier: missingType.iterableValue
+			count: 1
+			path: src/User/UserManager.php
+
+		-
+			message: '#^Property App\\Validator\\Constraints\\ValidInvite\:\:\$notFoundMessage has no type specified\.$#'
+			identifier: missingType.property
+			count: 1
+			path: src/Validator/Constraints/ValidInvite.php
+
+		-
+			message: '#^Property App\\Validator\\Constraints\\ValidInvite\:\:\$usedMessage has no type specified\.$#'
+			identifier: missingType.property
+			count: 1
+			path: src/Validator/Constraints/ValidInvite.php
+
+		-
+			message: '#^Variable \$invite in PHPDoc tag @var does not exist\.$#'
+			identifier: varTag.variableNotFound
+			count: 1
+			path: src/Validator/Constraints/ValidInviteValidator.php
+
+		-
+			message: '#^Unsafe usage of new static\(\)\.$#'
+			identifier: new.static
+			count: 3
+			path: src/View/Torrent/FileTreeNode.php
