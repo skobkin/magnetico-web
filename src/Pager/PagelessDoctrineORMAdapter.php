@@ -35,7 +35,7 @@ class PagelessDoctrineORMAdapter extends QueryAdapter
         return 1;
     }
 
-    public function getSlice(int $offset, int $length): iterable
+    public function getSlice(int $offset, int $length): \Traversable
     {
         if (0 === $length) {
             return new \EmptyIterator();
@@ -46,8 +46,10 @@ class PagelessDoctrineORMAdapter extends QueryAdapter
             ->setFirstResult($offset)
             ->setMaxResults($length)
             ->execute();
-        \assert(is_iterable($result));
+        assert(is_iterable($result));
 
-        return $result;
+        // Object hydration yields a plain array, but consumers like ListPage
+        // require a Traversable — the same contract QueryAdapter documents.
+        return $result instanceof \Traversable ? $result : new \ArrayIterator($result);
     }
 }
