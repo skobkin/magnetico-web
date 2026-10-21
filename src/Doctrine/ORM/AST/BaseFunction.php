@@ -3,10 +3,8 @@ declare(strict_types=1);
 
 namespace App\Doctrine\ORM\AST;
 
-use App\Doctrine\ORM\DoctrineOrm;
 use Doctrine\ORM\Query\AST\Functions\FunctionNode;
 use Doctrine\ORM\Query\AST\Node;
-use Doctrine\ORM\Query\Lexer;
 use Doctrine\ORM\Query\Parser;
 use Doctrine\ORM\Query\SqlWalker;
 use Doctrine\ORM\Query\TokenType;
@@ -37,21 +35,12 @@ abstract class BaseFunction extends FunctionNode
      *
      * @internal
      *
-     * @see customiseFunction()
+     * @see customizeFunction()
      */
     /* abstract */
     protected function customizeFunction(): void
     {
         // Void
-    }
-
-    /**
-     * @deprecated
-     */
-    protected function customiseFunction(): void
-    {
-        \trigger_error('The internal-use method of `customiseFunction()` is deprecated and is now renamed to `customizeFunction()`. `customiseFunction()` will be removed from version 3.0 onwards.', E_USER_DEPRECATED);
-        $this->customizeFunction();
     }
 
     protected function setFunctionPrototype(string $functionPrototype): void
@@ -66,14 +55,12 @@ abstract class BaseFunction extends FunctionNode
 
     public function parse(Parser $parser): void
     {
-        $shouldUseLexer = DoctrineOrm::isPre219();
-
         $this->customizeFunction();
 
-        $parser->match($shouldUseLexer ? Lexer::T_IDENTIFIER : TokenType::T_IDENTIFIER);
-        $parser->match($shouldUseLexer ? Lexer::T_OPEN_PARENTHESIS : TokenType::T_OPEN_PARENTHESIS);
+        $parser->match(TokenType::T_IDENTIFIER);
+        $parser->match(TokenType::T_OPEN_PARENTHESIS);
         $this->feedParserWithNodes($parser);
-        $parser->match($shouldUseLexer ? Lexer::T_CLOSE_PARENTHESIS : TokenType::T_CLOSE_PARENTHESIS);
+        $parser->match(TokenType::T_CLOSE_PARENTHESIS);
     }
 
     /**
@@ -88,7 +75,7 @@ abstract class BaseFunction extends FunctionNode
             // @phpstan-ignore-next-line
             $this->nodes[$i] = $parser->{$parserMethod}();
             if ($i < $lastNode) {
-                $parser->match(\class_exists(TokenType::class) ? TokenType::T_COMMA : Lexer::T_COMMA);
+                $parser->match(TokenType::T_COMMA);
             }
         }
     }

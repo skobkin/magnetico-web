@@ -27,7 +27,7 @@ services:
     # this creates a service per class whose id is the fully-qualified class name
     App\:
         resource: '../src/'
-        exclude: '../src/{Api/V1/{DTO},Magnetico/{Entity,Migrations},Entity,FormRequest,Migrations,Tests,View,Kernel.php}'
+        exclude: '../src/{Api/V1/{DTO},Magnetico/{Entity,Migrations},Entity,Migrations,Tests,View,Kernel.php}'
 
     App\Controller\:
         resource: '../src/Controller'

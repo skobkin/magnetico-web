@@ -6,14 +6,11 @@ index:
 torrents_search:
     path: /torrents
     controller: App\Controller\TorrentController::searchTorrent
-    requirements:
-        method: GET
 
 torrents_show:
     path: /torrents/{id}
     controller: App\Controller\TorrentController::showTorrent
     requirements:
-        method: GET
         id: '\d+'
 
 # Mainly for Telegram bot
@@ -21,7 +18,6 @@ magnet_redirect:
     path: /magnet/{infoHash}
     controller: App\Controller\MagnetRedirectController::redirect
     requirements:
-        method: GET
         # SHA-1 hash
         infoHash: '[0-9a-fA-F]{40}'
 
@@ -29,7 +25,6 @@ user_register:
     path: /register/{code}
     controller: App\Controller\UserController::register
     requirements:
-        method: GET
         inviteCode: \w{32}
 
 user_reset_request:
@@ -50,26 +45,18 @@ user_auth_logout:
 user_account:
     path: /account
     controller: App\Controller\AccountController::account
-    requirements:
-        method: GET
 
 user_account_password_change:
     path: /account/password
     controller: App\Controller\AccountController::changePassword
-    requirements:
-        method: POST
 
 user_account_token_create:
     path: /profile/api/token/create
     controller: App\Controller\AccountController::addApiToken
-    requirements:
-        method: GET
 
 user_account_token_revoke:
     path: /profile/api/token/revoke/{key}
     controller: App\Controller\AccountController::revokeApiToken
-    requirements:
-        method: GET
 
 # API
 api_v1_login:
@@ -78,7 +65,6 @@ api_v1_login:
     defaults:
         _format: json
     requirements:
-        method: POST
         _format: json
 
 api_v1_logout:
@@ -87,7 +73,6 @@ api_v1_logout:
     defaults:
         _format: json
     requirements:
-        method: GET
         _format: json
 
 api_v1_torrents:
@@ -96,7 +81,6 @@ api_v1_torrents:
     defaults:
         _format: json
     requirements:
-        method: GET
         _format:  json
 
 api_v1_torrents_show:
@@ -105,7 +89,6 @@ api_v1_torrents_show:
     defaults:
         _format: json
     requirements:
-        method: GET
         _format:  json
         id: '\d+'
 
@@ -115,5 +98,4 @@ api_v1_rss_last:
     defaults:
         _format: xml
     requirements:
-        method: GET
         _format: xml
