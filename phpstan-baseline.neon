@@ -109,8 +109,8 @@ parameters:
 			path: src/Entity/User.php
 
 		-
-			message: '#^Method App\\Entity\\User\:\:unserialize\(\) has parameter \$serialized with no type specified\.$#'
-			identifier: missingType.parameter
+			message: '#^Property App\\Entity\\User\:\:\$id is never written, only read\.$#'
+			identifier: property.onlyRead
 			count: 1
 			path: src/Entity/User.php
 

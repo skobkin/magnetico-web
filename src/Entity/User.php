@@ -68,7 +68,6 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         $this->password = $hasher->hash($rawPassword);
     }
 
-    /** @deprecated since Symfony 5.3 */
     public function getEmail(): string
     {
         return $this->email;
@@ -93,25 +92,5 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     public function getInvites(): \Traversable
     {
         return $this->invites;
-    }
-
-    /** @see \Serializable::serialize() */
-    public function serialize(): string
-    {
-        return serialize([
-            $this->id,
-            $this->username,
-            $this->password,
-        ]);
-    }
-
-    /** @see \Serializable::unserialize() */
-    public function unserialize($serialized): void
-    {
-        [
-            $this->id,
-            $this->username,
-            $this->password,
-        ] = unserialize($serialized, ['allowed_classes' => false]);
     }
 }
