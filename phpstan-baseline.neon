@@ -223,12 +223,6 @@ parameters:
 			path: src/Magnetico/Repository/TorrentRepository.php
 
 		-
-			message: '#^Class App\\Pager\\PagelessDoctrineORMAdapter extends generic class Pagerfanta\\Doctrine\\ORM\\QueryAdapter but does not specify its types\: T$#'
-			identifier: missingType.generics
-			count: 1
-			path: src/Pager/PagelessDoctrineORMAdapter.php
-
-		-
 			message: '#^Method App\\Pager\\View\\PicoCSSPagelessView\:\:configureTemplate\(\) has parameter \$options with no type specified\.$#'
 			identifier: missingType.parameter
 			count: 1
