@@ -46,7 +46,7 @@
             <fieldset role="group">
                 <input name="query" type="search" placeholder="Torrent title" aria-label="Search"
                        value="{% if searchQuery is defined %}{{ searchQuery }}{% endif %}"
-                       {% if 'index' == app.request.get('_route') %}autofocus{% endif %} />
+                       {% if 'index' == app.current_route %}autofocus{% endif %} />
                 <button type="submit"><i class="fas fa-search"></i></button>
             </fieldset>
         </form>
