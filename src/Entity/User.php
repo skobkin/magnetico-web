@@ -56,12 +56,6 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         return $this->username;
     }
 
-    /** @deprecated since Symfony 5.3, use getUserIdentifier() instead */
-    public function getUsername(): string
-    {
-        return $this->username;
-    }
-
     public function getPassword(): string
     {
         return $this->password;
@@ -73,13 +67,6 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     }
 
     /** @deprecated since Symfony 5.3 */
-    public function getSalt(): ?string
-    {
-        // Salt is not needed when using Argon2i
-        // @see https://symfony.com/doc/current/reference/configuration/security.html#using-the-argon2i-password-encoder
-        return null;
-    }
-
     public function getEmail(): string
     {
         return $this->email;
@@ -98,11 +85,6 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
     public function getCreatedAt(): \DateTime
     {
         return $this->createdAt;
-    }
-
-    public function eraseCredentials()
-    {
-
     }
 
     /** @return Invite[]|ArrayCollection */

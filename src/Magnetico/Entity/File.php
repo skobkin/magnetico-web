@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\Magnetico\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
-use Symfony\Component\Serializer\Annotation as Serializer;
+use Symfony\Component\Serializer\Attribute as Serializer;
 
 #[ORM\Entity(readOnly: true)]
 #[ORM\Table(schema: 'magneticod', name: 'files')]

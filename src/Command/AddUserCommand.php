@@ -6,12 +6,14 @@ namespace App\Command;
 use App\Repository\UserRepository;
 use App\User\{InviteManager, UserManager};
 use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Helper\QuestionHelper;
 use Symfony\Component\Console\Input\{InputArgument, InputInterface, InputOption};
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\Question;
 
+#[AsCommand(name: 'user:add', description: 'Register a new user, optionally with a given number of invites')]
 class AddUserCommand extends Command
 {
     public function __construct(
@@ -23,10 +25,9 @@ class AddUserCommand extends Command
         parent::__construct();
     }
 
-    protected function configure()
+    protected function configure(): void
     {
         $this
-            ->setName('user:add')
             ->addArgument('username', InputArgument::REQUIRED, 'Username')
             ->addArgument('email', InputArgument::REQUIRED, 'Email')
             ->addArgument('password', InputArgument::OPTIONAL, 'Password', null)

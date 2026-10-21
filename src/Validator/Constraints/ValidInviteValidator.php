@@ -18,7 +18,7 @@ class ValidInviteValidator extends ConstraintValidator
     /**
      * @param ValidInvite $constraint
      */
-    public function validate(mixed $value, Constraint $constraint)
+    public function validate(mixed $value, Constraint $constraint): void
     {
         /** @var Invite $invite */
         if (null === $invite = $this->inviteRepo->findOneBy(['code' => $value])) {

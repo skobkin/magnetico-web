@@ -6,10 +6,12 @@ namespace App\Command;
 use App\Repository\UserRepository;
 use App\User\InviteManager;
 use Doctrine\ORM\EntityManagerInterface;
+use Symfony\Component\Console\Attribute\AsCommand;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\{InputArgument, InputInterface};
 use Symfony\Component\Console\Output\OutputInterface;
 
+#[AsCommand(name: 'invite:add', description: 'Add a given number of invites to an existing user')]
 class AddInvitesCommand extends Command
 {
     public function __construct(
@@ -20,10 +22,9 @@ class AddInvitesCommand extends Command
         parent::__construct();
     }
 
-    protected function configure()
+    protected function configure(): void
     {
         $this
-            ->setName('invite:add')
             ->addArgument('username', InputArgument::REQUIRED, 'Username')
             ->addArgument('number', InputArgument::REQUIRED, 'Number of invites')
         ;

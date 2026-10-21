@@ -5,7 +5,7 @@ namespace App\Entity;
 
 use App\Repository\ApiTokenRepository;
 use Doctrine\ORM\Mapping as ORM;
-use Symfony\Component\Serializer\Annotation as Serializer;
+use Symfony\Component\Serializer\Attribute as Serializer;
 
 #[ORM\Table(name: 'api_tokens', schema: 'users')]
 #[ORM\Entity(repositoryClass: ApiTokenRepository::class, readOnly: true)]

@@ -4,7 +4,7 @@ declare(strict_types=1);
 namespace App\Api\V1\DTO;
 
 use Pagerfanta\Pagerfanta;
-use Symfony\Component\Serializer\Annotation\Groups;
+use Symfony\Component\Serializer\Attribute\Groups;
 
 class ListPage
 {

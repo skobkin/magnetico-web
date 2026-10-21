@@ -5,7 +5,7 @@ namespace App\Api\V1\DTO;
 
 use App\Api\V1\Enum\StatusEnum;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\Serializer\Annotation\Groups;
+use Symfony\Component\Serializer\Attribute\Groups;
 
 class ApiResponse
 {

@@ -4,7 +4,8 @@ FROM dunglas/frankenphp:1-php8.5-alpine
 
 ENV PHP_TIMEZONE Europe/Moscow
 ENV APP_ENV=prod
-ENV APP_RUNTIME=Runtime\\FrankenPhpSymfony\\Runtime
+# FrankenPHP worker mode is detected natively by symfony/runtime (>= 7.4),
+# no APP_RUNTIME override needed.
 ENV FRANKENPHP_CONFIG="worker ./public/index.php"
 # Disable HTTPS
 # https://frankenphp.dev/docs/production/#preparing-your-app
