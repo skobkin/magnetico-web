@@ -2,9 +2,6 @@
     "babdev/pagerfanta-bundle": {
         "version": "v2.4.3"
     },
-    "composer/package-versions-deprecated": {
-        "version": "1.11.99.1"
-    },
     "doctrine/annotations": {
         "version": "1.14",
         "recipe": {

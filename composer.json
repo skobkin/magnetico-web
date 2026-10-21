@@ -18,7 +18,6 @@
         "ext-iconv": "*",
         "ext-json": "*",
         "babdev/pagerfanta-bundle": "^4.5",
-        "composer/package-versions-deprecated": "1.11.99.5",
         "doctrine/annotations": "^2",
         "doctrine/doctrine-bundle": "^2",
         "doctrine/doctrine-migrations-bundle": "^3",
