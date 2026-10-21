@@ -119,7 +119,7 @@ class RssGenerator
         $qb = $this->repo->createQueryBuilder('t');
         $qb
             ->select('t')
-            ->orderBy('t.id', 'DESC')
+            ->orderBy('t.id', \SortDirection::Descending)
             ->setMaxResults($limit)
             ->setFirstResult($offset)
         ;

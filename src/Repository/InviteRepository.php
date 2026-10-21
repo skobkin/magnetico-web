@@ -29,7 +29,7 @@ class InviteRepository extends ServiceEntityRepository
             ->select(['i', 'uu'])
             ->leftJoin('i.usedBy', 'uu')
             ->where('i.user = :user')
-            ->orderBy('i.id', 'asc')
+            ->orderBy('i.id', \SortDirection::Ascending)
             ->setParameter('user', $user->getId())
         ;
 

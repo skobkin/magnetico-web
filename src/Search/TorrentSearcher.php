@@ -61,7 +61,10 @@ class TorrentSearcher
         }
 
         if ($this->canOrderBy($orderBy)) {
-            $qb->orderBy('t.'.$orderBy, $order);
+            $qb->orderBy(
+                't.'.$orderBy,
+                'desc' === strtolower($order) ? \SortDirection::Descending : \SortDirection::Ascending
+            );
         }
     }
 
