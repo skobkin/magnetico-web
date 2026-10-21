@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Helper;
@@ -6,12 +7,14 @@ namespace App\Helper;
 class FileSizeHumanizer
 {
     // Can't really exceed 'EB' on 64-bit platform but let it go
-    private const SIZE_SUFFIXES = ['B','kB','MB','GB','TB','PB','EB','ZB','YB'];
+    private const SIZE_SUFFIXES = ['B', 'kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
 
     private const DIVIDER_BINARY = 1024;
     private const DIVIDER_COMMON = 1000;
 
-    public function __construct(private readonly bool $binaryPrefix = false) {}
+    public function __construct(private readonly bool $binaryPrefix = false)
+    {
+    }
 
     public function humanize(int $bytes, int $decimals = 2, bool $forceBinary = false): string
     {

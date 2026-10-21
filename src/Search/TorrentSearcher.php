@@ -1,10 +1,12 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Search;
 
 use App\Magnetico\Repository\TorrentRepository;
-use Doctrine\ORM\{Mapping\ClassMetadata, QueryBuilder};
+use Doctrine\ORM\Mapping\ClassMetadata;
+use Doctrine\ORM\QueryBuilder;
 
 class TorrentSearcher
 {
@@ -15,9 +17,8 @@ class TorrentSearcher
 
     public function __construct(
         private readonly TorrentRepository $torrentRepo,
-        private readonly ClassMetadata $classMetadata
+        private readonly ClassMetadata $classMetadata,
     ) {
-
     }
 
     public function createSearchQueryBuilder(string $query, ?string $orderBy = null, string $order = 'asc'): QueryBuilder
@@ -66,10 +67,10 @@ class TorrentSearcher
 
     private function canOrderBy(string $orderBy): bool
     {
-        return (
+        return
             !\in_array($orderBy, self::ORDER_DISABLED_FIELDS, true)
             && $this->classMetadata->hasField($orderBy)
-        );
+        ;
     }
 
     /** @return string[] */

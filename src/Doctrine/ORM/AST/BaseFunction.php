@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Doctrine\ORM\AST;
@@ -13,6 +14,7 @@ use Doctrine\ORM\Query\TokenType;
  * @since 0.1
  *
  * @author Martin Georgiev <martin.georgiev@gmail.com>
+ *
  * @see https://github.com/martin-georgiev/postgresql-for-doctrine
  */
 abstract class BaseFunction extends FunctionNode
@@ -70,7 +72,7 @@ abstract class BaseFunction extends FunctionNode
     {
         $nodesMappingCount = \count($this->nodesMapping);
         $lastNode = $nodesMappingCount - 1;
-        for ($i = 0; $i < $nodesMappingCount; $i++) {
+        for ($i = 0; $i < $nodesMappingCount; ++$i) {
             $parserMethod = $this->nodesMapping[$i];
             // @phpstan-ignore-next-line
             $this->nodes[$i] = $parser->{$parserMethod}();

@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Doctrine\ORM\AST;
@@ -11,6 +12,7 @@ namespace App\Doctrine\ORM\AST;
  * @see https://www.postgresql.org/docs/9.3/functions-matching.html
  *
  * @author llaakkkk <lenakirichokv@gmail.com>
+ *
  * @see https://github.com/martin-georgiev/postgresql-for-doctrine
  */
 class Ilike extends BaseFunction

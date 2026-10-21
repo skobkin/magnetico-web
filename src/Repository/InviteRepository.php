@@ -1,11 +1,13 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Repository;
 
-use Doctrine\Persistence\ManagerRegistry;
-use App\Entity\{Invite, User};
+use App\Entity\Invite;
+use App\Entity\User;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\Persistence\ManagerRegistry;
 
 class InviteRepository extends ServiceEntityRepository
 {

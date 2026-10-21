@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Pager\View;
@@ -46,22 +47,73 @@ class PicoCSSPagelessView implements ViewInterface
         return new class implements TemplateInterface {
             private $routeGenerator;
             private $options;
-            public function setRouteGenerator(callable $routeGenerator): void { $this->routeGenerator = $routeGenerator; }
-            public function setOptions(array $options): void { $this->options = $options; }
-            public function container(): string { return '<nav class="pagination-nav"><ul class="pagination">%pages%</ul></nav>'; }
-            public function page(int $page): string { return '<li><a href="' . call_user_func($this->routeGenerator, $page) . '" class="page-btn">' . $page . '</a></li>'; }
-            public function pageWithText(int $page, string $text, ?string $rel = null): string {
-                $relAttr = $rel ? ' rel="' . htmlspecialchars($rel) . '"' : '';
-                return '<li><a href="' . call_user_func($this->routeGenerator, $page) . '" class="page-btn"' . $relAttr . '>' . htmlspecialchars($text) . '</a></li>';
+
+            public function setRouteGenerator(callable $routeGenerator): void
+            {
+                $this->routeGenerator = $routeGenerator;
             }
-            public function previousDisabled(): string { return '<li class="disabled"><span class="page-btn">&laquo; Prev</span></li>'; }
-            public function previousEnabled(int $page): string { return '<li><a href="' . call_user_func($this->routeGenerator, $page) . '" rel="prev" class="page-btn">&laquo; Prev</a></li>'; }
-            public function nextDisabled(): string { return '<li class="disabled"><span class="page-btn">Next &raquo;</span></li>'; }
-            public function nextEnabled(int $page): string { return '<li><a href="' . call_user_func($this->routeGenerator, $page) . '" rel="next" class="page-btn">Next &raquo;</a></li>'; }
-            public function first(): string { return '<li><a href="' . call_user_func($this->routeGenerator, 1) . '" class="page-btn">&laquo; First</a></li>'; }
-            public function last(int $page): string { return '<li><a href="' . call_user_func($this->routeGenerator, $page) . '" class="page-btn">Last &raquo;</a></li>'; }
-            public function current(int $page): string { return '<li class="active"><span class="page-btn">' . $page . '</span></li>'; }
-            public function separator(): string { return '<li class="disabled"><span class="page-btn">&hellip;</span></li>'; }
+
+            public function setOptions(array $options): void
+            {
+                $this->options = $options;
+            }
+
+            public function container(): string
+            {
+                return '<nav class="pagination-nav"><ul class="pagination">%pages%</ul></nav>';
+            }
+
+            public function page(int $page): string
+            {
+                return '<li><a href="'.call_user_func($this->routeGenerator, $page).'" class="page-btn">'.$page.'</a></li>';
+            }
+
+            public function pageWithText(int $page, string $text, ?string $rel = null): string
+            {
+                $relAttr = $rel ? ' rel="'.htmlspecialchars($rel).'"' : '';
+
+                return '<li><a href="'.call_user_func($this->routeGenerator, $page).'" class="page-btn"'.$relAttr.'>'.htmlspecialchars($text).'</a></li>';
+            }
+
+            public function previousDisabled(): string
+            {
+                return '<li class="disabled"><span class="page-btn">&laquo; Prev</span></li>';
+            }
+
+            public function previousEnabled(int $page): string
+            {
+                return '<li><a href="'.call_user_func($this->routeGenerator, $page).'" rel="prev" class="page-btn">&laquo; Prev</a></li>';
+            }
+
+            public function nextDisabled(): string
+            {
+                return '<li class="disabled"><span class="page-btn">Next &raquo;</span></li>';
+            }
+
+            public function nextEnabled(int $page): string
+            {
+                return '<li><a href="'.call_user_func($this->routeGenerator, $page).'" rel="next" class="page-btn">Next &raquo;</a></li>';
+            }
+
+            public function first(): string
+            {
+                return '<li><a href="'.call_user_func($this->routeGenerator, 1).'" class="page-btn">&laquo; First</a></li>';
+            }
+
+            public function last(int $page): string
+            {
+                return '<li><a href="'.call_user_func($this->routeGenerator, $page).'" class="page-btn">Last &raquo;</a></li>';
+            }
+
+            public function current(int $page): string
+            {
+                return '<li class="active"><span class="page-btn">'.$page.'</span></li>';
+            }
+
+            public function separator(): string
+            {
+                return '<li class="disabled"><span class="page-btn">&hellip;</span></li>';
+            }
         };
     }
 

@@ -1,9 +1,11 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\User;
 
-use App\Entity\{Invite, User};
+use App\Entity\Invite;
+use App\Entity\User;
 use App\Repository\UserRepository;
 use App\User\Exception\InvalidInviteException;
 use Symfony\Component\PasswordHasher\Hasher\PasswordHasherFactoryInterface;
@@ -14,9 +16,8 @@ class UserManager
 
     public function __construct(
         private readonly PasswordHasherFactoryInterface $hasherFactory,
-        private readonly UserRepository                 $userRepo,
+        private readonly UserRepository $userRepo,
     ) {
-
     }
 
     public function createUser(string $username, string $password, string $email, array $roles = self::DEFAULT_ROLES): User

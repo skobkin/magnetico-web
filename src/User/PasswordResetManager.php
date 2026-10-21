@@ -1,16 +1,19 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\User;
 
+use App\Entity\PasswordResetToken;
+use App\Entity\User;
 use App\Repository\PasswordResetTokenRepository;
-use Doctrine\ORM\EntityManagerInterface;
-use App\Entity\{PasswordResetToken, User};
 use App\Repository\UserRepository;
 use App\User\Exception\UserNotFoundException;
+use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Component\Mailer\MailerInterface;
 use Symfony\Component\Mime\Email;
-use Symfony\Component\Routing\{Generator\UrlGeneratorInterface, RouterInterface};
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Symfony\Component\Routing\RouterInterface;
 
 class PasswordResetManager
 {
@@ -20,9 +23,8 @@ class PasswordResetManager
         private readonly EntityManagerInterface $em,
         private readonly MailerInterface $mailer,
         private readonly RouterInterface $router,
-        private readonly string $fromAddress
+        private readonly string $fromAddress,
     ) {
-
     }
 
     public function sendResetLink(string $address): void
@@ -39,7 +41,7 @@ class PasswordResetManager
 
         $link = $this->router->generate('user_reset', ['code' => $token->getCode()], UrlGeneratorInterface::ABSOLUTE_URL);
 
-        $mail =  (new Email())
+        $mail = (new Email())
             ->from($this->fromAddress)
             ->to($user->getEmail())
             ->subject('Password reset')

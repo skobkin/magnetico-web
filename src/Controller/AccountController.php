@@ -1,24 +1,28 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\{ApiToken, User};
-use App\Repository\{ApiTokenRepository, InviteRepository};
+use App\Entity\ApiToken;
+use App\Entity\User;
 use App\Form\Data\PasswordChangeData;
 use App\Form\PasswordChangeType;
+use App\Repository\ApiTokenRepository;
+use App\Repository\InviteRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\Form\Extension\Core\Type\SubmitType;
 use Symfony\Component\Form\FormInterface;
-use Symfony\Component\HttpFoundation\{Request, Response};
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\PasswordHasher\Hasher\PasswordHasherFactoryInterface;
 
 class AccountController extends AbstractController
 {
     public function account(
         InviteRepository $inviteRepo,
-        ApiTokenRepository $apiTokenRepo
+        ApiTokenRepository $apiTokenRepo,
     ): Response {
         /** @var User $user */
         if (null === $user = $this->getUser()) {
@@ -27,10 +31,10 @@ class AccountController extends AbstractController
 
         return $this->render(
             'Account/account.html.twig', [
-            'invites' => $inviteRepo->findInvitesByUser($user),
-            'tokens' => $apiTokenRepo->findBy(['user' => $user->getId()]),
-            'user' => $user,
-        ]);
+                'invites' => $inviteRepo->findInvitesByUser($user),
+                'tokens' => $apiTokenRepo->findBy(['user' => $user->getId()]),
+                'user' => $user,
+            ]);
     }
 
     public function changePassword(

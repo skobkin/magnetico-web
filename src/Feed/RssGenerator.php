@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Feed;
@@ -7,8 +8,10 @@ use App\Magnet\MagnetGenerator;
 use App\Magnetico\Entity\Torrent;
 use App\Magnetico\Repository\TorrentRepository;
 use Doctrine\ORM\QueryBuilder;
-use Laminas\Feed\Writer\{Entry, Feed};
-use Symfony\Component\Routing\{Generator\UrlGeneratorInterface, RouterInterface};
+use Laminas\Feed\Writer\Entry;
+use Laminas\Feed\Writer\Feed;
+use Symfony\Component\Routing\Generator\UrlGeneratorInterface;
+use Symfony\Component\Routing\RouterInterface;
 
 /**
  * Generates RSS feed.
@@ -23,9 +26,8 @@ class RssGenerator
     public function __construct(
         private readonly TorrentRepository $repo,
         private readonly RouterInterface $router,
-        private readonly MagnetGenerator $magnetGenerator
+        private readonly MagnetGenerator $magnetGenerator,
     ) {
-
     }
 
     public function generateLast(int $page): string

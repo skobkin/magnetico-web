@@ -1,9 +1,11 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\View\Torrent;
 
-use App\Magnetico\Entity\{File, Torrent};
+use App\Magnetico\Entity\File;
+use App\Magnetico\Entity\Torrent;
 
 class FileTreeNode
 {
@@ -14,8 +16,9 @@ class FileTreeNode
         public readonly ?string $name,
         public readonly bool $isDir = true,
         public readonly ?int $size = null,
-        public readonly ?FileTreeNode $parent = null
-    ) {}
+        public readonly ?FileTreeNode $parent = null,
+    ) {
+    }
 
     public static function createFromTorrent(Torrent $torrent): FileTreeNode
     {
@@ -63,10 +66,7 @@ class FileTreeNode
     public function addChild(string $name, FileTreeNode $element, bool $overwriteDuplicates = false): void
     {
         if (!$overwriteDuplicates && array_key_exists($name, $this->children)) {
-            throw new \RuntimeException(sprintf(
-                'Child \'%s\' already exist.',
-                $name
-            ));
+            throw new \RuntimeException(sprintf('Child \'%s\' already exist.', $name));
         }
 
         $this->children[$name] = $element;
@@ -80,10 +80,7 @@ class FileTreeNode
     public function getChild(string $name): File|FileTreeNode
     {
         if (!array_key_exists($name, $this->children)) {
-            throw new \InvalidArgumentException(sprintf(
-                'Node has no \'%s\' child.',
-                $name
-            ));
+            throw new \InvalidArgumentException(sprintf('Node has no \'%s\' child.', $name));
         }
 
         return $this->children[$name];

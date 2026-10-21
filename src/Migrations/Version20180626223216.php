@@ -1,4 +1,6 @@
-<?php declare(strict_types=1);
+<?php
+
+declare(strict_types=1);
 
 namespace DoctrineMigrations;
 
@@ -11,7 +13,7 @@ use Doctrine\Migrations\AbstractMigration;
  */
 final class Version20180626223216 extends AbstractMigration
 {
-    public function up(Schema $schema) : void
+    public function up(Schema $schema): void
     {
         // this up() migration is auto-generated, please modify it to your needs
         $this->abortIf(!$this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform, 'Migration can only be executed safely on postgresql.');
@@ -33,7 +35,7 @@ final class Version20180626223216 extends AbstractMigration
         $this->addSql('ALTER TABLE users.api_tokens ADD CONSTRAINT FK_C46A74A9A76ED395 FOREIGN KEY (user_id) REFERENCES users.users (id) NOT DEFERRABLE INITIALLY IMMEDIATE');
     }
 
-    public function down(Schema $schema) : void
+    public function down(Schema $schema): void
     {
         // this down() migration is auto-generated, please modify it to your needs
         $this->abortIf(!$this->connection->getDatabasePlatform() instanceof PostgreSQLPlatform, 'Migration can only be executed safely on postgresql.');

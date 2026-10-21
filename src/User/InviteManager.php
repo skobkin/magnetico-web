@@ -1,18 +1,19 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\User;
 
-use App\Entity\{Invite, User};
+use App\Entity\Invite;
+use App\Entity\User;
 use App\Repository\InviteRepository;
 
 class InviteManager
 {
     public function __construct(
         private readonly InviteRepository $inviteRepo,
-        private readonly int $newUserInvites = 0
+        private readonly int $newUserInvites = 0,
     ) {
-
     }
 
     /**
@@ -28,7 +29,7 @@ class InviteManager
 
         $invites = [];
 
-        for ($i = 0; $i < $amount; $i++) {
+        for ($i = 0; $i < $amount; ++$i) {
             $invite = new Invite($user);
             $this->inviteRepo->add($invite);
             $invites[] = $invite;

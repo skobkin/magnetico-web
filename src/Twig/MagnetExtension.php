@@ -1,18 +1,19 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Twig;
 
 use App\Magnet\MagnetGenerator;
 use Twig\Extension\AbstractExtension;
-use Twig\{TwigFilter, TwigFunction};
+use Twig\TwigFilter;
+use Twig\TwigFunction;
 
 class MagnetExtension extends AbstractExtension
 {
     public function __construct(
-        private readonly MagnetGenerator $magnetGenerator
+        private readonly MagnetGenerator $magnetGenerator,
     ) {
-
     }
 
     public function getFunctions(): array

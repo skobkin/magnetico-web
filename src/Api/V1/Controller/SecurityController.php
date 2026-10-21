@@ -1,13 +1,17 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Api\V1\Controller;
 
-use App\Entity\{ApiToken, User};
-use App\Repository\{ApiTokenRepository, UserRepository};
+use App\Entity\ApiToken;
+use App\Entity\User;
+use App\Repository\ApiTokenRepository;
+use App\Repository\UserRepository;
 use App\Security\ApiTokenAuthenticator;
 use Doctrine\ORM\EntityManagerInterface;
-use Symfony\Component\HttpFoundation\{JsonResponse, Request};
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 
 class SecurityController extends AbstractApiController
@@ -43,13 +47,14 @@ class SecurityController extends AbstractApiController
         return $this->createJsonResponse($apiToken->getKey());
     }
 
-    public function logout(Request $request, ApiTokenRepository $apiTokenRepo, EntityManagerInterface $em): JsonResponse {
+    public function logout(Request $request, ApiTokenRepository $apiTokenRepo, EntityManagerInterface $em): JsonResponse
+    {
         if (null === $tokenKey = ApiTokenAuthenticator::getTokenKeyFromRequest($request)) {
-            return $this->createJsonResponse(null, code:JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message:  'No API token provided.');
+            return $this->createJsonResponse(null, code: JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message: 'No API token provided.');
         }
 
         if (null === $apiToken = $apiTokenRepo->findOneBy(['key' => $tokenKey])) {
-            return $this->createJsonResponse(null, code:JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message: 'API token with such key not found in the database.');
+            return $this->createJsonResponse(null, code: JsonResponse::HTTP_INTERNAL_SERVER_ERROR, message: 'API token with such key not found in the database.');
         }
 
         $em->remove($apiToken);
@@ -57,9 +62,9 @@ class SecurityController extends AbstractApiController
         try {
             $em->flush();
         } catch (\Exception $ex) {
-            return $this->createJsonResponse(null,[],JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'API token deauthentication failure.');
+            return $this->createJsonResponse(null, [], JsonResponse::HTTP_INTERNAL_SERVER_ERROR, 'API token deauthentication failure.');
         }
 
-        return $this->createJsonResponse(null,[],JsonResponse::HTTP_OK, 'Successfully logged out.');
+        return $this->createJsonResponse(null, [], JsonResponse::HTTP_OK, 'Successfully logged out.');
     }
 }

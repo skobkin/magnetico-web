@@ -1,18 +1,19 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Validator\Constraints;
 
 use App\Entity\Invite;
 use App\Repository\InviteRepository;
-use Symfony\Component\Validator\{Constraint, ConstraintValidator};
+use Symfony\Component\Validator\Constraint;
+use Symfony\Component\Validator\ConstraintValidator;
 
 class ValidInviteValidator extends ConstraintValidator
 {
     public function __construct(
-        private readonly InviteRepository $inviteRepo
+        private readonly InviteRepository $inviteRepo,
     ) {
-
     }
 
     /**

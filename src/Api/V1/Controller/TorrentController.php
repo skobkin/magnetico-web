@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Api\V1\Controller;
@@ -8,7 +9,8 @@ use App\Magnetico\Entity\Torrent;
 use App\Pager\PagelessDoctrineORMAdapter;
 use App\Search\TorrentSearcher;
 use Pagerfanta\Pagerfanta;
-use Symfony\Component\HttpFoundation\{JsonResponse, Request};
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
 
 class TorrentController extends AbstractApiController
 {

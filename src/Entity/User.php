@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Entity;
@@ -7,7 +8,8 @@ use App\Repository\UserRepository;
 use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\PasswordHasher\PasswordHasherInterface;
-use Symfony\Component\Security\Core\User\{PasswordAuthenticatedUserInterface, UserInterface};
+use Symfony\Component\Security\Core\User\PasswordAuthenticatedUserInterface;
+use Symfony\Component\Security\Core\User\UserInterface;
 
 #[ORM\Table(name: 'users', schema: 'users')]
 #[ORM\Entity(repositoryClass: UserRepository::class)]
@@ -109,7 +111,7 @@ class User implements UserInterface, PasswordAuthenticatedUserInterface
         [
             $this->id,
             $this->username,
-            $this->password
+            $this->password,
         ] = unserialize($serialized, ['allowed_classes' => false]);
     }
 }

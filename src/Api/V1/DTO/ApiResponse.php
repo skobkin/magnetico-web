@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Api\V1\DTO;
@@ -56,7 +57,7 @@ class ApiResponse
         return $this->message;
     }
 
-    /** @return array|\object|string|null */
+    /** @return array|object|string|null */
     public function getData()
     {
         return $this->data;

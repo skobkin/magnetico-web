@@ -1,10 +1,11 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Form\Data;
 
-use Symfony\Component\Validator\Constraints as Assert;
 use App\Validator\Constraints as AppAssert;
+use Symfony\Component\Validator\Constraints as Assert;
 
 /**
  * @todo implement UniqueEntity constraint for DTO and use it here

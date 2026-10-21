@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Entity;
@@ -55,12 +56,7 @@ class Invite
     public function use(User $user): void
     {
         if ($this->usedBy) {
-            throw new \RuntimeException(sprintf(
-                'Invite #%d is already used by User#%d and can\'t be used by User#%d',
-                $this->id,
-                $this->usedBy->getId(),
-                $user->getId()
-            ));
+            throw new \RuntimeException(sprintf('Invite #%d is already used by User#%d and can\'t be used by User#%d', $this->id, $this->usedBy->getId(), $user->getId()));
         }
 
         $this->usedBy = $user;

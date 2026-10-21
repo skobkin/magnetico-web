@@ -1,15 +1,17 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Controller;
 
 use App\Magnetico\Entity\Torrent;
-use App\Search\TorrentSearcher;
 use App\Pager\PagelessDoctrineORMAdapter;
+use App\Search\TorrentSearcher;
 use App\View\Torrent\FileTreeNode;
 use Pagerfanta\Pagerfanta;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\HttpFoundation\{Request, Response};
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 
 class TorrentController extends AbstractController
 {

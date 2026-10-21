@@ -1,18 +1,30 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Controller;
 
-use App\Entity\{Invite, PasswordResetToken};
-use App\Repository\PasswordResetTokenRepository;
-use App\Form\Data\{PasswordResetRequestData, PasswordResetData, RegisterData};
-use App\Form\{PasswordResetRequestType, PasswordResetType, RegisterType};
+use App\Entity\Invite;
+use App\Entity\PasswordResetToken;
+use App\Form\Data\PasswordResetData;
+use App\Form\Data\PasswordResetRequestData;
+use App\Form\Data\RegisterData;
+use App\Form\PasswordResetRequestType;
+use App\Form\PasswordResetType;
+use App\Form\RegisterType;
 use App\Repository\InviteRepository;
-use App\User\{Exception\UserNotFoundException, InviteManager, PasswordResetManager, UserManager};
+use App\Repository\PasswordResetTokenRepository;
+use App\User\Exception\UserNotFoundException;
+use App\User\InviteManager;
+use App\User\PasswordResetManager;
+use App\User\UserManager;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
-use Symfony\Component\Form\{Extension\Core\Type\SubmitType, FormError, FormInterface};
-use Symfony\Component\HttpFoundation\{Request, Response};
+use Symfony\Component\Form\Extension\Core\Type\SubmitType;
+use Symfony\Component\Form\FormError;
+use Symfony\Component\Form\FormInterface;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\PasswordHasher\Hasher\PasswordHasherFactoryInterface;
 
 class UserController extends AbstractController
@@ -23,7 +35,7 @@ class UserController extends AbstractController
         EntityManagerInterface $em,
         UserManager $userManager,
         InviteManager $inviteManager,
-        InviteRepository $inviteRepo
+        InviteRepository $inviteRepo,
     ): Response {
         $data = new RegisterData($code);
         $form = $this->createRegisterForm($data, $code);
@@ -88,8 +100,7 @@ class UserController extends AbstractController
         EntityManagerInterface $em,
         PasswordHasherFactoryInterface $hasherFactory,
         PasswordResetTokenRepository $tokenRepository,
-    ): Response
-    {
+    ): Response {
         $data = new PasswordResetData();
         $form = $this->createPasswordResetForm($data, $code);
 

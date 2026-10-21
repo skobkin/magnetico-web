@@ -1,15 +1,21 @@
 <?php
+
 declare(strict_types=1);
 
 namespace App\Security;
 
 use App\Api\V1\DTO\ApiResponse;
 use App\Repository\ApiTokenRepository;
-use Symfony\Component\HttpFoundation\{JsonResponse, Request, Response};
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\HttpFoundation\Request;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Security\Core\Authentication\Token\TokenInterface;
-use Symfony\Component\Security\Core\Exception\{AuthenticationException, CustomUserMessageAuthenticationException};
+use Symfony\Component\Security\Core\Exception\AuthenticationException;
+use Symfony\Component\Security\Core\Exception\CustomUserMessageAuthenticationException;
 use Symfony\Component\Security\Http\Authenticator\AbstractAuthenticator;
-use Symfony\Component\Security\Http\Authenticator\Passport\{Badge\UserBadge, Passport, SelfValidatingPassport};
+use Symfony\Component\Security\Http\Authenticator\Passport\Badge\UserBadge;
+use Symfony\Component\Security\Http\Authenticator\Passport\Passport;
+use Symfony\Component\Security\Http\Authenticator\Passport\SelfValidatingPassport;
 use Symfony\Component\Serializer\SerializerInterface;
 
 class ApiTokenAuthenticator extends AbstractAuthenticator
@@ -20,7 +26,6 @@ class ApiTokenAuthenticator extends AbstractAuthenticator
         private readonly SerializerInterface $serializer,
         private readonly ApiTokenRepository $tokenRepo,
     ) {
-
     }
 
     /**
@@ -78,8 +83,8 @@ class ApiTokenAuthenticator extends AbstractAuthenticator
     public static function requestHasToken(Request $request): bool
     {
         // Let's also support cookies and query params for some cases like torrent clients.
-        return $request->headers->has(self::TOKEN_HEADER) ||
-            $request->cookies->has(self::TOKEN_HEADER) ||
-            $request->query->has(self::TOKEN_HEADER);
+        return $request->headers->has(self::TOKEN_HEADER)
+            || $request->cookies->has(self::TOKEN_HEADER)
+            || $request->query->has(self::TOKEN_HEADER);
     }
 }

@@ -17,13 +17,13 @@ final class Version20250701161732 extends AbstractMigration
     public function up(Schema $schema): void
     {
         $this->addSql("DO \$do\$ DECLARE max_id integer; BEGIN SELECT COALESCE(MAX(id), 0) + 1 INTO max_id FROM users.users; EXECUTE format('ALTER TABLE users.users ALTER COLUMN id RESTART WITH %s', max_id); END \$do\$;");
-        
+
         $this->addSql("DO \$do\$ DECLARE max_id integer; BEGIN SELECT COALESCE(MAX(id), 0) + 1 INTO max_id FROM users.invites; EXECUTE format('ALTER TABLE users.invites ALTER COLUMN id RESTART WITH %s', max_id); END \$do\$;");
     }
 
     public function down(Schema $schema): void
     {
-        $this->addSql("ALTER TABLE users.users ALTER COLUMN id RESTART WITH 1");
-        $this->addSql("ALTER TABLE users.invites ALTER COLUMN id RESTART WITH 1");
+        $this->addSql('ALTER TABLE users.users ALTER COLUMN id RESTART WITH 1');
+        $this->addSql('ALTER TABLE users.invites ALTER COLUMN id RESTART WITH 1');
     }
 }
