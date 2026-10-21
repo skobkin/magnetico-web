@@ -11,10 +11,9 @@ Twig, API Platform, Messenger, or Lock are installed unless one of those says so
 
 - **Two entity managers** (`config/packages/doctrine.yaml`): `default`
   (application schema, entities in `src/Entity`, migrations in
-  `src/Migrations`) and `magneticod` (read-mostly torrent index, entities in
-  `src/Magnetico/Entity`, no migrations of its own — magneticod owns that
-  schema). Never point application writes at `magneticod`, and never change
-  its schema from this codebase.
+  `src/Migrations`) and `magneticod` (read-only torrent index, entities in
+  `src/Magnetico/Entity`, no migrations of its own — that schema belongs to
+  the external magneticod indexer service; see Data safety rules).
 - The `ILIKE` DQL function (`App\Doctrine\ORM\AST\Ilike`, based on
   martin-georgiev/postgresql-for-doctrine) is registered on the `magneticod`
   entity manager and used by `App\Search\TorrentSearcher`.
@@ -27,10 +26,11 @@ Twig, API Platform, Messenger, or Lock are installed unless one of those says so
 - CI: Woodpecker (`.woodpecker/ci.yaml`) — composer install, Symfony lints,
   php-cs-fixer, phpstan, phpunit, Docker publish on tags.
 
-## No PHP on the host: use Docker for everything
+## PHP tooling: local when available, Docker otherwise
 
-The development host has no PHP/Composer installed. Run all PHP tooling in
-containers:
+This project is usually developed on a host without PHP/Composer installed —
+if your host has a proper PHP 8.5 environment, using it directly is fine.
+Otherwise run the PHP tooling in containers:
 
 ```bash
 docker run --rm -v "$PWD:/app" -w /app php:8.5-cli-alpine sh -c '
@@ -50,8 +50,12 @@ Composer scripts available (run inside the container): `composer lint`
 
 ## Data safety rules
 
-- The `magneticod` database is user data. Schema changes to `src/Entity` /
-  `src/Magnetico/Entity` must always go through generated migrations
+- The `magneticod` database belongs to the external
+  [magneticod](https://github.com/boramalper/magnetico) indexer service and is
+  accessed strictly read-only (the `magneticod` entity manager). Never persist
+  entities through it and never change its schema from this codebase.
+- Schema changes to the application entities (`src/Entity`) must always go
+  through generated migrations
   (`make:migration --em=default`), reviewed for destructive operations before
   commit.
 - Never ship `doctrine:schema:update`, hand-written DDL in controllers, or
