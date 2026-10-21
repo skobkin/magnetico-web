@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Tests\Unit\Magnet;
 
 use App\Magnet\MagnetGenerator;
-use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 class MagnetGeneratorTest extends TestCase

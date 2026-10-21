@@ -1,0 +1,65 @@
+when:
+  - event: [push, tag]
+
+steps:
+  install:
+    name: composer install
+    image: php:8.5-cli-alpine
+    environment:
+      COMPOSER_ALLOW_SUPERUSER: '1'
+      COMPOSER_CACHE_DIR: /woodpecker/cache/composer
+    commands:
+      - apk add --no-cache unzip
+      - curl -sS https://getcomposer.org/download/latest-stable/composer.phar -o /usr/local/bin/composer
+      - chmod +x /usr/local/bin/composer
+      - composer install --no-progress --no-interaction --optimize-autoloader
+
+  lint:
+    name: symfony lints (container/twig/yaml)
+    image: php:8.5-cli-alpine
+    environment:
+      APP_ENV: test
+    commands:
+      - php bin/console lint:container
+      - php bin/console lint:twig templates
+      - php bin/console lint:yaml config --parse-tags
+    depends_on: [install]
+
+  style:
+    name: php-cs-fixer
+    image: php:8.5-cli-alpine
+    commands:
+      - php vendor/bin/php-cs-fixer fix --dry-run --diff
+    depends_on: [install]
+
+  static-analysis:
+    name: phpstan
+    image: php:8.5-cli-alpine
+    commands:
+      - php vendor/bin/phpstan analyse --memory-limit=512M --no-progress
+    depends_on: [install]
+
+  test:
+    name: phpunit
+    image: php:8.5-cli-alpine
+    commands:
+      - php vendor/bin/phpunit --no-progress
+    depends_on: [install]
+
+  docker-publish:
+    name: build & publish docker image
+    image: woodpeckerci/plugin-docker-buildx:6
+    settings:
+      username:
+        from_secret: DOCKER_LOGIN
+      password:
+        from_secret: DOCKER_TOKEN
+      repo:
+        from_secret: DOCKER_REPO
+      dockerfile: Dockerfile
+      tags:
+        - ${CI_COMMIT_TAG}
+        - latest
+    when:
+      - event: tag
+    depends_on: [lint, style, static-analysis, test]

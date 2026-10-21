@@ -38,13 +38,27 @@
 
 # DotEnv
 .env.local
+.env.test
+.env.*.local
+
+# Woodpecker CI config
+/.woodpecker/
+
+# QA tooling
+/.php-cs-fixer.cache
+/phpstan.neon.dist
+/phpstan-baseline.neon
+/phpunit.dist.xml
+/tests/
 
 # Git files
 /.git
 /.gitignore
 
-# Drone config
-/.drone.yml
+# Local docs and legacy configs
+/README.md
+/UPGRADE.md
+/AGENTS.md
 
 # Docker Ignore
 /.dockerignore
