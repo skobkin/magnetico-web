@@ -25,7 +25,7 @@ Application setup is quite simple:
 
 ### Using Git
 ```bash
-git clone ssh://git@git.skobk.in/skobkin/magnetico-web.git
+git clone https://git.skobk.in/skobkin/magnetico-web.git
 cd magnetico-web
 ```
 
