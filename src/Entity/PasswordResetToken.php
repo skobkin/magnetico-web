@@ -20,7 +20,7 @@ class PasswordResetToken
     #[ORM\Column(name: 'valid_until', type: 'datetime', nullable: false)]
     private \DateTime $validUntil;
 
-    public function __construct(User $user, \DateInterval $validFor = null)
+    public function __construct(User $user, ?\DateInterval $validFor = null)
     {
         $this->user = $user;
         $this->code = hash('sha3-384', uniqid('reset', true));

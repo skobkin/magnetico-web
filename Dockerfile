@@ -1,6 +1,6 @@
 # https://hub.docker.com/r/dunglas/frankenphp
 # https://frankenphp.dev/docs/docker/
-FROM dunglas/frankenphp:1-php8.4-alpine
+FROM dunglas/frankenphp:1-php8.5-alpine
 
 ENV PHP_TIMEZONE Europe/Moscow
 ENV APP_ENV=prod
@@ -23,7 +23,7 @@ RUN apk update && \
     docker-php-ext-install -j$(nproc) intl && \
     docker-php-ext-install -j$(nproc) pdo_pgsql && \
     docker-php-ext-install -j$(nproc) sockets && \
-    pecl install igbinary-3.2.16 && \
+    pecl install igbinary && \
     docker-php-ext-enable igbinary && \
     docker-php-ext-enable intl && \
     docker-php-ext-enable pdo_pgsql && \
