@@ -47,6 +47,8 @@ RUN apk update && \
 EXPOSE 80/tcp
 
 VOLUME /var/log
-VOLUME /app/var
+# Deliberately no VOLUME for /app/var: the compiled prod cache lives there and
+# must not outlive the image — an anonymous volume survives container recreation
+# (docker compose default) and would keep a cache compiled by an older Symfony.
 
 HEALTHCHECK --retries=3 --timeout=10s CMD curl http://localhost || exit 1

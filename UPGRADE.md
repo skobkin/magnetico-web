@@ -52,6 +52,25 @@ The upgrade to Symfony 8 changes the remember-me cookie format. All logged-in
 users (including "remember me" sessions) will be logged out once after the deploy
 and must log in again. No stored data is affected.
 
+### Docker: clear the stale prod cache once when upgrading
+
+The image used to declare `VOLUME /app/var`, so the compiled prod cache lived in
+an anonymous volume. Docker Compose reuses anonymous volumes when recreating a
+container, so the first start of this release can boot with a cache compiled by
+the previous (Symfony 6.4-based) image and fail every request with `TypeError`s
+like `RememberMeAuthenticator::__construct(): Argument #2 ($tokenStorage) must be
+of type TokenStorageInterface, string given`. The image no longer declares that
+volume.
+
+If you deploy with Docker Compose, recreate the container with fresh anonymous
+volumes once:
+
+    docker compose up -d --renew-anon-volumes
+
+The old dangling volume can be removed afterwards with `docker volume prune`.
+Without Compose: remove the volume attached at `/app/var` (or wipe `/app/var/cache`
+inside the container) and recreate the container.
+
 ### Before you deploy
 
 1. **Back up both PostgreSQL databases** — the application database
