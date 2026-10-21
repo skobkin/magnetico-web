@@ -24,7 +24,9 @@ RUN apk update && \
     docker-php-ext-install -j$(nproc) intl && \
     docker-php-ext-install -j$(nproc) pdo_pgsql && \
     docker-php-ext-install -j$(nproc) sockets && \
-    pecl install igbinary && \
+    # Pinned to the release PECL currently serves for PHP 8.5 (an RC marked
+    # stable upstream); bump deliberately after checking PHP 8.5 compatibility.
+    pecl install igbinary-3.2.17RC1 && \
     docker-php-ext-enable igbinary && \
     docker-php-ext-enable intl && \
     docker-php-ext-enable pdo_pgsql && \
