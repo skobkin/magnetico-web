@@ -3,7 +3,6 @@ when:
 
 steps:
   install:
-    name: composer install
     image: php:8.5-cli-alpine
     environment:
       COMPOSER_ALLOW_SUPERUSER: '1'
@@ -14,7 +13,6 @@ steps:
       - composer install --no-progress --no-interaction --optimize-autoloader
 
   lint:
-    name: symfony lints (container/twig/yaml)
     image: php:8.5-cli-alpine
     environment:
       APP_ENV: test
@@ -25,7 +23,6 @@ steps:
     depends_on: [install]
 
   lint-prod:
-    name: symfony container lint (prod env)
     image: php:8.5-cli-alpine
     environment:
       APP_ENV: prod
@@ -34,28 +31,24 @@ steps:
     depends_on: [install]
 
   style:
-    name: php-cs-fixer
     image: php:8.5-cli-alpine
     commands:
       - php vendor/bin/php-cs-fixer fix --dry-run --diff
     depends_on: [install]
 
   static-analysis:
-    name: phpstan
     image: php:8.5-cli-alpine
     commands:
       - php vendor/bin/phpstan analyse --memory-limit=512M --no-progress
     depends_on: [install]
 
   test:
-    name: phpunit
     image: php:8.5-cli-alpine
     commands:
       - php vendor/bin/phpunit --no-progress
     depends_on: [install]
 
   docker-publish:
-    name: build & publish docker image
     image: woodpeckerci/plugin-docker-buildx:6
     settings:
       # Release builds must resolve the base image from the registry, never from
