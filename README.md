@@ -4,6 +4,19 @@
 
 Magnetico Web is a simple web search interface for [magneticod](https://github.com/boramalper/magnetico) database.
 
+## Requirements
+
+- PHP **8.5+** with `intl`, `pdo_pgsql`, `sockets` extensions (igbinary recommended for cache)
+- Composer 2
+- PostgreSQL (two databases: the application database and the magneticod database)
+- Redis (cache)
+- [FrankenPHP](https://frankenphp.dev) or any PHP-capable web server for serving
+
+The application runs on Symfony 8.1. When deployed in Docker, it uses the
+official [FrankenPHP image](https://hub.docker.com/r/dunglas/frankenphp) in
+[worker mode](https://frankenphp.dev/docs/worker/), which is detected natively
+by `symfony/runtime` — no special runtime package or `APP_RUNTIME` variable needed.
+
 # Installation
 
 Application setup is quite simple:
@@ -12,7 +25,7 @@ Application setup is quite simple:
 
 ### Using Git
 ```bash
-git clone https://skobkin@bitbucket.org/skobkin/magnetico-web.git
+git clone ssh://git@git.skobk.in/skobkin/magnetico-web.git
 cd magnetico-web
 ```
 
@@ -23,7 +36,7 @@ cd magnetico-web
 ```
 
 ## Setting file access privileges
-Set up appropriate [write permissions](https://symfony.com/doc/current/setup/file_permissions.html) for `var/cache` and `var/logs`.
+Set up appropriate [write permissions](https://symfony.com/doc/current/setup/file_permissions.html) for `var/cache` and `var/log`.
 
 ## Installing dependencies (not needed after installation via Composer)
 
@@ -42,10 +55,7 @@ After dependencies installation you may need to create `.env.local` file (see `.
 or set appropriate [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
 for production usage.
 
-Check [Symfony documentation](https://symfony.com/doc/5.1/configuration.html#overriding-environment-values-via-env-local) for more details about `.env` files.
-
-You can also check [this post](https://symfony.com/doc/5.1/configuration/dot-env-changes.html) about `.env` changes in Symfony if you're updating from an 
-old version of the project.
+Check [Symfony documentation](https://symfony.com/doc/current/configuration.html#overriding-environment-values-via-env-local) for more details about `.env` files.
 
 ## Database configuration
 
@@ -60,13 +70,13 @@ Make sure that `magnetico-web` and `magneticod` are using the same schema for st
 Check `magneticod` docs [here](https://github.com/boramalper/magnetico/tree/master/pkg#postgresql-database-engine-only-magneticod-part-implemented)
 and make sure that `schema` parameter either not set or set to `magneticod` (default value).
 
-`magnetico-web` uses `magneticod` schema to search for torrents so if you set `magenticod` to use another schema search **will not work**.
+`magnetico-web` uses `magneticod` schema to search for torrents so if you set `magneticod` to use another schema search **will not work**.
 
 ## Database schema migration
 
 ```bash
 # Only for 'default' EntityManager (Application entities)
-php bin/console doc:mig:mig --em=default
+php bin/console doctrine:migrations:migrate --em=default
 ```
 
 ## Web assets installation
@@ -90,68 +100,46 @@ php bin/console user:add <your_username> <your_email> [your_password] [--invites
 php bin/console invite:add <username> <number-of-invites>
 ```
 
+## Running locally
+
+### Using the PHP built-in web server (development)
+
+```bash
+symfony server:start -d
+# or without the Symfony CLI:
+php -S 127.0.0.1:8080 -t public/
+```
+
+### Using FrankenPHP (worker mode)
+
+```bash
+# Requires a FrankenPHP binary and a Caddyfile with `php_server` + worker directive,
+# see https://frankenphp.dev/docs/symfony/
+FRANKENPHP_CONFIG="worker ./public/index.php" frankenphp run
+```
+
 ## Enabling dev mode
 
 ```shell
-echo 'APP_ENV=dev > .env.local'
+echo 'APP_ENV=dev' > .env.local
 ```
-
-## Running using [RoadRunner](https://roadrunner.dev) instead of [PHP-FPM](https://www.php.net/manual/en/install.fpm.php)
-
-```shell
-# First time only:
-./vendor/bin/rr get --location bin/
-
-# Running the server:
-./bin/rr serve
-
-# Running the server in dev mode (watching enabled)
-bin/rr serve -c .rr.dev.yaml
-```
-
-Read more [here](https://github.com/baldinof/roadrunner-bundle) and [here](https://github.com/roadrunner-server/roadrunner).
-
-### Trusted proxies
-
-If you're running the app in RoadRunner and experiencing problems with proper URL generation (HTTP instead of HTTPS),
-check beginning of the section about running in Docker below.
 
 ## Running in Docker
 
-### Docker Compose example:
+A ready-to-use Docker Compose stack (with `.env` reference) lives in the
+[docker-stacks](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web)
+repository.
 
-When running in Docker **DO NOT FORGET** to use Nginx or other reverse-proxy server and properly set `TRUSTED_PROXIES`
-environment variable. You can read more about it [here](https://symfony.com/doc/current/deployment/proxies.html#but-what-if-the-ip-of-my-reverse-proxy-changes-constantly).
+The Docker image is based on `dunglas/frankenphp` running the application in
+worker mode. When running in Docker **DO NOT FORGET** to use Nginx, Caddy or
+another reverse-proxy in front (FrankenPHP can also serve TLS itself) and
+properly set the `TRUSTED_PROXIES` environment variable. You can read more
+about it [here](https://symfony.com/doc/current/deployment/proxies.html#but-what-if-the-ip-of-my-reverse-proxy-changes-constantly).
 
-```yaml
-version: '3.7'
-
-services:
-    magnetico-web:
-        image: skobkin/magnetico-web
-        container_name: magnetico-web
-        hostname: magnetico-web
-        extra_hosts:
-            - 'host.docker.internal:host-gateway'
-        ports:
-            - "127.0.0.1:${EXT_HTTP_PORT:-8080}:8080/tcp"
-        restart: unless-stopped
-        user: "$UID"
-        volumes:
-            - "${LOG_PATH:-./var/log}:/app/var/log"
-        env_file: .env
-        logging:
-            driver: "json-file"
-            options:
-                max-size: "${LOG_MAX_SIZE:-5m}"
-                max-file: "${LOG_MAX_FILE:-5}"
-```
-
-Use dotenv file to configure this stack:
+### Environment variables
 
 ```dotenv
-# Example with some useful parameters
-APP_SECRET=qwerty
+APP_SECRET=change-me
 
 APP_DATABASE_URL=postgres://magnetico-web:password@host.docker.internal:5432/magnetico-web?application_name=magnetico_web
 MAGNETICOD_DATABASE_URL=postgres://magneticod:password@host.docker.internal:5432/magneticod?application_name=magnetico_web
@@ -170,8 +158,14 @@ MAILER_DSN=smtp://mail@domain.tld:password@smtp.domain.tld:587
 MAILER_FROM=no-reply@domain.tld
 ###< symfony/mailer ###
 
-###> excelwebzone/recaptcha-bundle ###
-EWZ_RECAPTCHA_SITE_KEY=key
-EWZ_RECAPTCHA_SECRET=secret
-###< excelwebzone/recaptcha-bundle ###
+###> karser/karser-recaptcha3-bundle ###
+# reCAPTCHA v3 keys, see https://www.google.com/recaptcha/admin/create
+RECAPTCHA3_KEY=key
+RECAPTCHA3_SECRET=secret
+###< karser/karser-recaptcha3-bundle ###
 ```
+
+## Upgrading
+
+Check [UPGRADE.md](UPGRADE.md) for user-facing and breaking changes before
+deploying a new version.
