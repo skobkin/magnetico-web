@@ -6,7 +6,8 @@ Magnetico Web is a simple web search interface for [magneticod](https://github.c
 
 ## Requirements
 
-- PHP **8.5+** with `intl`, `pdo_pgsql`, `sockets` extensions (igbinary recommended for cache)
+- PHP **8.5.12+** with `intl`, `pdo_pgsql`, `sockets` extensions (igbinary recommended for cache)
+  — 8.5.12 is the security floor for [CVE-2026-109618/109619](https://www.php.net/archive/2026.php#2026-10-21-5)
 - Composer 2
 - PostgreSQL (two databases: the application database and the magneticod database)
 - Redis (cache)

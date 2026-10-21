@@ -12,6 +12,17 @@ The application now requires PHP >= 8.5 (previously 8.2). The Docker image is ba
 on `dunglas/frankenphp:1-php8.5-alpine`. If you run the app outside Docker, upgrade
 your PHP runtime first.
 
+### PHP security floor: 8.5.12 (critical RCE fixes, CVE-2026-109618 / CVE-2026-109619)
+
+PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (released 2026-10-21) fix two critical
+unauthenticated remote code execution vulnerabilities affecting all web-serving
+SAPIs, including FrankenPHP (see the
+[PHP announcement](https://www.php.net/archive/2026.php#2026-10-21-5)). The Docker
+image in this release is built on PHP 8.5.12 and **refuses to build** on an older
+base image. If you run the app outside Docker, make sure your runtime is 8.5.12+
+(or 8.4.27+/8.3.36+/8.2.35+ on older branches) and update immediately — per the
+advisory there are no complete mitigations, updating is the only fix.
+
 ### reCAPTCHA bundle replaced (env vars renamed)
 
 `excelwebzone/recaptcha-bundle` was replaced with `karser/karser-recaptcha3-bundle`

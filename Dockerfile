@@ -2,6 +2,10 @@
 # https://frankenphp.dev/docs/docker/
 FROM dunglas/frankenphp:1-php8.5-alpine
 
+# CVE-2026-109618 / CVE-2026-109619: refuse to build on unpatched PHP.
+# Raise/remove deliberately when superseded by a newer security floor.
+RUN php -r 'if (version_compare(PHP_VERSION, "8.5.12", "<")) { fwrite(STDERR, "base image ships vulnerable PHP ".PHP_VERSION." (< 8.5.12, CVE-2026-109618/109619)\n"); exit(1); }'
+
 ENV PHP_TIMEZONE Europe/Moscow
 ENV APP_ENV=prod
 # FrankenPHP worker mode is detected natively by symfony/runtime (>= 7.4),

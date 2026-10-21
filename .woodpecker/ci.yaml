@@ -58,6 +58,9 @@ steps:
     name: build & publish docker image
     image: woodpeckerci/plugin-docker-buildx:6
     settings:
+      # Release builds must resolve the base image from the registry, never from
+      # a cached (possibly unpatched) tag — see the security floor in the Dockerfile
+      pull_image: true
       username:
         from_secret: DOCKER_LOGIN
       password:
