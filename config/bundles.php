@@ -10,5 +10,5 @@ return [
     Symfony\Bundle\MonologBundle\MonologBundle::class => ['all' => true],
     Symfony\Bundle\SecurityBundle\SecurityBundle::class => ['all' => true],
     Sentry\SentryBundle\SentryBundle::class => ['prod' => true],
-    EWZ\Bundle\RecaptchaBundle\EWZRecaptchaBundle::class => ['all' => true],
+    Karser\Recaptcha3Bundle\KarserRecaptcha3Bundle::class => ['all' => true],
 ];

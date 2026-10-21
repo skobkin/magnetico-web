@@ -4,8 +4,9 @@ declare(strict_types=1);
 namespace App\Form;
 
 use App\Form\Data\PasswordResetRequestData;
+use Karser\Recaptcha3Bundle\Form\Recaptcha3Type;
+use Karser\Recaptcha3Bundle\Validator\Constraints\Recaptcha3;
 use Symfony\Component\Form\{AbstractType, Extension\Core\Type\EmailType, FormBuilderInterface};
-use EWZ\Bundle\RecaptchaBundle\Form\Type\EWZRecaptchaV3Type;
 use Symfony\Component\OptionsResolver\OptionsResolver;
 
 class PasswordResetRequestType extends AbstractType
@@ -14,7 +15,10 @@ class PasswordResetRequestType extends AbstractType
     {
         $builder
             ->add('email', EmailType::class, ['required' => true])
-            ->add('recaptcha', EWZRecaptchaV3Type::class)
+            ->add('recaptcha', Recaptcha3Type::class, [
+                'action_name' => 'password_reset',
+                'constraints' => new Recaptcha3(),
+            ])
         ;
     }
 

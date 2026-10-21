@@ -1,0 +1,3 @@
+# Disable captcha in development environment
+karser_recaptcha3:
+    enabled: false
