@@ -16,25 +16,19 @@ doctrine:
                 url: '%env(resolve:APP_DATABASE_URL)%'
                 server_version: '%env(resolve:POSTGRES_VERSION)%'
                 profiling_collect_backtrace: '%kernel.debug%'
-                use_savepoints: true
             magneticod:
                 driver: 'pdo_pgsql'
                 url: '%env(resolve:MAGNETICOD_DATABASE_URL)%'
                 server_version: '%env(resolve:POSTGRES_VERSION)%'
                 profiling_collect_backtrace: '%kernel.debug%'
-                use_savepoints: true
 
     orm:
-        auto_generate_proxy_classes: true
-        enable_lazy_ghost_objects: true
         default_entity_manager: default
         entity_managers:
             default:
                 connection: default
                 naming_strategy: doctrine.orm.naming_strategy.underscore
                 auto_mapping: true
-                # Opt-in to new mapping driver mode as of Doctrine ORM 2.16, https://github.com/doctrine/orm/pull/10455
-                report_fields_where_declared: true
                 mappings:
                     App:
                         is_bundle: false
@@ -44,8 +38,6 @@ doctrine:
                         alias: App
             magneticod:
                 connection: magneticod
-                # Opt-in to new mapping driver mode as of Doctrine ORM 2.16, https://github.com/doctrine/orm/pull/10455
-                report_fields_where_declared: true
                 mappings:
                     Magnetico:
                         is_bundle: false
@@ -66,8 +58,6 @@ doctrine:
 when@prod:
     doctrine:
         orm:
-            auto_generate_proxy_classes: false
-            proxy_dir: '%kernel.build_dir%/doctrine/orm/Proxies'
             query_cache_driver:
                 type: pool
                 pool: doctrine.system_cache_pool
