@@ -7,7 +7,6 @@ steps:
     image: php:8.5-cli-alpine
     environment:
       COMPOSER_ALLOW_SUPERUSER: '1'
-      COMPOSER_CACHE_DIR: /woodpecker/cache/composer
     commands:
       - apk add --no-cache unzip
       - curl -sS https://getcomposer.org/download/latest-stable/composer.phar -o /usr/local/bin/composer
@@ -23,6 +22,15 @@ steps:
       - php bin/console lint:container
       - php bin/console lint:twig templates
       - php bin/console lint:yaml config --parse-tags
+    depends_on: [install]
+
+  lint-prod:
+    name: symfony container lint (prod env)
+    image: php:8.5-cli-alpine
+    environment:
+      APP_ENV: prod
+    commands:
+      - php bin/console lint:container
     depends_on: [install]
 
   style:
@@ -62,4 +70,4 @@ steps:
         - latest
     when:
       - event: tag
-    depends_on: [lint, style, static-analysis, test]
+    depends_on: [lint, lint-prod, style, static-analysis, test]
