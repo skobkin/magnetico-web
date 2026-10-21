@@ -29,7 +29,7 @@
         "phpstan/phpdoc-parser": "^1.6",
         "predis/predis": "^2.4",
         "runtime/frankenphp-symfony": "^0.2.0",
-        "sentry/sentry-symfony": "^5.2",
+        "sentry/sentry-symfony": "^5.14",
         "symfony/asset": "^6.4",
         "symfony/console": "^6.4",
         "symfony/dotenv": "^6.4",

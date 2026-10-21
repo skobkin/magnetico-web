@@ -131,9 +131,6 @@
     "psr/log": {
         "version": "1.0.2"
     },
-    "ralouphie/getallheaders": {
-        "version": "3.0.3"
-    },
     "sentry/sentry": {
         "version": "2.3.0"
     },
