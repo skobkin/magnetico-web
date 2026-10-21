@@ -7,34 +7,21 @@ when@prod:
             # send_default_pii: true
             ignore_exceptions:
                 - 'Symfony\Component\ErrorHandler\Error\FatalError'
-                - 'Symfony\Component\Debug\Exception\FatalErrorException'
-<<<<<<< ours
                 - 'Symfony\Component\HttpKernel\Exception\NotFoundHttpException'
                 - 'Symfony\Component\HttpKernel\Exception\BadRequestHttpException'
                 - 'Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException'
-#        TODO:
-    #        If you are using Monolog, you also need this additional configuration to log the errors correctly:
-    #        https://docs.sentry.io/platforms/php/guides/symfony/#monolog-integration
-    #        register_error_listener: false
-    #        register_error_handler: false
-
+        # If you are using Monolog, you also need the Monolog handler service
+        # configured below to log the errors correctly:
+        # https://docs.sentry.io/platforms/php/guides/symfony/integrations/monolog/
+        # register_error_listener: false
+        # register_error_handler: false
 
     services:
-        # TODO: update:
-        # https://docs.sentry.io/platforms/php/guides/symfony/#monolog-integration
         Sentry\Monolog\Handler:
             arguments:
                 $hub: '@Sentry\State\HubInterface'
                 $level: !php/const Monolog\Logger::ERROR
-#    TODO:
-=======
-#
-#        # If you are using Monolog, you also need this additional configuration to log the errors correctly:
-#        # https://docs.sentry.io/platforms/php/guides/symfony/integrations/monolog/
-#        register_error_listener: false
-#        register_error_handler: false
-#
->>>>>>> theirs
+
 #    monolog:
 #        handlers:
 #            # Use this only if you don't want to use structured logging and instead receive
