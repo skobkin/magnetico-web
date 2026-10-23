@@ -38,7 +38,10 @@ type CrawlOptions struct {
 
 	BootstrappingNodes []string `long:"bootstrap-node" description:"Host(s) to be used for bootstrapping." default:"dht.tgragnato.it:80" default:"dht.tgragnato.it:443" default:"dht.tgragnato.it:1337" default:"dht.tgragnato.it:6969" default:"dht.tgragnato.it:6881" default:"dht.tgragnato.it:25401" yaml:"bootstrappingNodes"`
 	FilterNodesCIDRs   []string `long:"filter-nodes-cidrs" description:"List of CIDRs on which Magnetico can operate. Empty is open mode." default:"" yaml:"filterNodesCIDRs"`
-	FilterNodesIpNets  []net.IPNet
+	// FilterNodesIpNets is derived by check() from FilterNodesCIDRs and is not
+	// configurable; yaml:"-" keeps strict decoding from silently accepting a
+	// filterNodesIpNets key that would then be ignored.
+	FilterNodesIpNets []net.IPNet `yaml:"-"`
 }
 
 // check validates the crawl options and derives FilterNodesIpNets. It is the

@@ -113,6 +113,79 @@ func TestApplyYamlConfig_UnknownKeyRejected(t *testing.T) {
 	}
 }
 
+func TestApplyYamlConfig_DerivedFieldRejected(t *testing.T) {
+	t.Parallel()
+
+	// The payloads are the shapes that strict decoding silently accepted
+	// before the field was excluded: an empty list and null decode into the
+	// []net.IPNet field without error and were then ignored by the merge
+	// layer. (Scalar, non-empty-list and mapping payloads already failed with
+	// type errors, and camelCase was rejected only by accident of verbatim
+	// key matching.) yaml:"-" makes any shape a loud unknown-field error.
+	tests := []struct {
+		name string
+		data string
+		key  string
+	}{
+		{
+			name: "lowercase render name with empty list",
+			data: "databaseURL: postgres://x@localhost/db\nfilternodesipnets: []\n",
+			key:  "filternodesipnets",
+		},
+		{
+			name: "lowercase render name with null",
+			data: "databaseURL: postgres://x@localhost/db\nfilternodesipnets: null\n",
+			key:  "filternodesipnets",
+		},
+		{
+			name: "camelCase",
+			data: "databaseURL: postgres://x@localhost/db\nfilterNodesIpNets:\n  - ip: [10, 0, 0, 0]\n    mask: [255, 255, 0, 0]\n",
+			key:  "filterNodesIpNets",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			o := &OpFlags{Crawl: defaults()}
+			err := o.applyYamlConfig([]byte(tt.data), map[string]bool{})
+			if err == nil || !strings.Contains(err.Error(), `unknown field "`+tt.key+`"`) {
+				t.Errorf("expected unknown-field error naming %s, got: %v", tt.key, err)
+			}
+		})
+	}
+}
+
+func TestApplyYamlConfig_CidrsApplyAndIpNetsStayDerived(t *testing.T) {
+	t.Parallel()
+
+	data := []byte("filterNodesCIDRs:\n  - 192.168.1.0/24\n")
+
+	o := &OpFlags{Crawl: defaults()}
+	if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
+		t.Fatalf("applyYamlConfig() error = %v", err)
+	}
+
+	if len(o.Crawl.FilterNodesCIDRs) != 1 || o.Crawl.FilterNodesCIDRs[0] != "192.168.1.0/24" {
+		t.Errorf("FilterNodesCIDRs = %v, want [192.168.1.0/24]", o.Crawl.FilterNodesCIDRs)
+	}
+	if o.Crawl.FilterNodesIpNets != nil {
+		t.Errorf("FilterNodesIpNets = %v, want nil before check() derives it", o.Crawl.FilterNodesIpNets)
+	}
+
+	// check() derives it. The bootstrapping nodes are replaced because the
+	// upstream defaults are rejected in filter mode.
+	crawl := o.Crawl
+	crawl.BootstrappingNodes = []string{"internal:6881"}
+	if err := crawl.check(); err != nil {
+		t.Fatalf("check() error = %v", err)
+	}
+	if len(crawl.FilterNodesIpNets) != 1 || crawl.FilterNodesIpNets[0].String() != "192.168.1.0/24" {
+		t.Errorf("FilterNodesIpNets = %v, want the derived 192.168.1.0/24", crawl.FilterNodesIpNets)
+	}
+}
+
 func TestApplyEnvConfig_Precedence(t *testing.T) {
 	// t.Setenv forbids parallel execution.
 	data := []byte("databaseURL: postgres://file@localhost/db\nmaxRPS: 123\n")
@@ -182,6 +255,16 @@ func TestApplyEnvConfig_Precedence(t *testing.T) {
 		o := &OpFlags{Crawl: defaults()}
 		err := o.applyEnvConfig(map[string]bool{})
 		if err == nil || !strings.Contains(err.Error(), "MAGNETICO_CRAWL_BOGUS") {
+			t.Errorf("expected unknown-variable error, got: %v", err)
+		}
+	})
+
+	t.Run("DerivedFieldEnvRejected", func(t *testing.T) {
+		t.Setenv("MAGNETICO_CRAWL_FILTER_NODES_IP_NETS", "10.0.0.0/8")
+
+		o := &OpFlags{Crawl: defaults()}
+		err := o.applyEnvConfig(map[string]bool{})
+		if err == nil || !strings.Contains(err.Error(), "MAGNETICO_CRAWL_FILTER_NODES_IP_NETS") {
 			t.Errorf("expected unknown-variable error, got: %v", err)
 		}
 	})
