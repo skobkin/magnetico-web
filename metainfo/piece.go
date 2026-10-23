@@ -3,7 +3,7 @@ package metainfo
 import (
 	"iter"
 
-	"tgragnato.it/magnetico/v2/types/infohash"
+	"github.com/skobkin/magnetico-web/types/infohash"
 )
 
 type Piece struct {

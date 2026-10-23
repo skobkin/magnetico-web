@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"strings"
 
-	"tgragnato.it/magnetico/v2/types/infohash"
+	"github.com/skobkin/magnetico-web/types/infohash"
 )
 
 // Magnet link components.

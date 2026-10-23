@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"tgragnato.it/magnetico/v2/bencode"
+	"github.com/skobkin/magnetico-web/bencode"
 )
 
 func testFile(t *testing.T, filename string) {

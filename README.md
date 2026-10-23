@@ -71,5 +71,5 @@ MIT licensed; no relicensing of third-party work is claimed or performed.
 ## Repository
 
 - Canonical source: [git.skobk.in/skobkin/magnetico-web](https://git.skobk.in/skobkin/magnetico-web) (Forgejo).
-- A GitHub mirror may be published later.
+- Go module path: `github.com/skobkin/magnetico-web` (the public GitHub mirror; importable once a version is tagged).
 - No production container image has been published for the unified version.

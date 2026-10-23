@@ -344,7 +344,7 @@ func TestDecodeMaxStrLen(t *testing.T) {
 	}), 69)
 }
 
-// This is for the "tgragnato.it/magnetico/metainfo".Info.Private field.
+// This is for the metainfo.Info.Private field.
 func TestDecodeStringIntoBoolPtr(t *testing.T) {
 	t.Parallel()
 

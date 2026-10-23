@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/multiformats/go-multihash"
-	"tgragnato.it/magnetico/v2/types/infohash"
+	"github.com/skobkin/magnetico-web/types/infohash"
 )
 
 const Size = sha256.Size

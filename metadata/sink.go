@@ -4,8 +4,8 @@ import (
 	"net"
 	"time"
 
-	"tgragnato.it/magnetico/v2/dht"
-	"tgragnato.it/magnetico/v2/persistence"
+	"github.com/skobkin/magnetico-web/dht"
+	"github.com/skobkin/magnetico-web/persistence"
 )
 
 const (

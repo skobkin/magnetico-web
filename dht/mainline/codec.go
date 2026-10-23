@@ -7,7 +7,7 @@ import (
 	"net"
 	"regexp"
 
-	"tgragnato.it/magnetico/v2/bencode"
+	"github.com/skobkin/magnetico-web/bencode"
 )
 
 type Message struct {

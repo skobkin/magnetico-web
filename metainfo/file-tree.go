@@ -6,8 +6,8 @@ import (
 	"maps"
 	"slices"
 
-	"tgragnato.it/magnetico/v2/bencode"
-	infohash_v2 "tgragnato.it/magnetico/v2/types/infohash-v2"
+	"github.com/skobkin/magnetico-web/bencode"
+	infohash_v2 "github.com/skobkin/magnetico-web/types/infohash-v2"
 )
 
 const FileTreePropertiesKey = ""

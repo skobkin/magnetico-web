@@ -1,4 +1,4 @@
-module tgragnato.it/magnetico/v2
+module github.com/skobkin/magnetico-web
 
 go 1.26.0
 

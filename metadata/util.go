@@ -9,9 +9,9 @@ import (
 	mrand "math/rand/v2"
 	"time"
 
-	"tgragnato.it/magnetico/v2/bencode"
-	"tgragnato.it/magnetico/v2/metainfo"
-	"tgragnato.it/magnetico/v2/persistence"
+	"github.com/skobkin/magnetico-web/bencode"
+	"github.com/skobkin/magnetico-web/metainfo"
+	"github.com/skobkin/magnetico-web/persistence"
 )
 
 func totalSize(files []persistence.File) (uint64, error) {

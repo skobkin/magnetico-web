@@ -4,7 +4,7 @@ import (
 	"net"
 	"sync"
 
-	"tgragnato.it/magnetico/v2/dht/mainline"
+	"github.com/skobkin/magnetico-web/dht/mainline"
 )
 
 type Service interface {

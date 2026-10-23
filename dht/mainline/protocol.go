@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"tgragnato.it/magnetico/v2/stats"
+	"github.com/skobkin/magnetico-web/stats"
 )
 
 type Protocol struct {

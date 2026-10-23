@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"tgragnato.it/magnetico/v2/bencode"
-	"tgragnato.it/magnetico/v2/stats"
+	"github.com/skobkin/magnetico-web/bencode"
+	"github.com/skobkin/magnetico-web/stats"
 )
 
 var (

@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"tgragnato.it/magnetico/v2/bencode"
+	"github.com/skobkin/magnetico-web/bencode"
 )
 
 var codecTest_validInstances = []struct {

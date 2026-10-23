@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"tgragnato.it/magnetico/v2/bencode"
+	"github.com/skobkin/magnetico-web/bencode"
 )
 
 func testFileNodesMatch(t *testing.T, file string, nodes []Node) {

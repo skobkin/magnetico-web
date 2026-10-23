@@ -7,12 +7,12 @@ import (
 	"os/signal"
 	"time"
 
-	"tgragnato.it/magnetico/v2/dht"
-	"tgragnato.it/magnetico/v2/dht/mainline"
-	"tgragnato.it/magnetico/v2/metadata"
-	"tgragnato.it/magnetico/v2/opflags"
-	"tgragnato.it/magnetico/v2/persistence"
-	"tgragnato.it/magnetico/v2/stats"
+	"github.com/skobkin/magnetico-web/dht"
+	"github.com/skobkin/magnetico-web/dht/mainline"
+	"github.com/skobkin/magnetico-web/metadata"
+	"github.com/skobkin/magnetico-web/opflags"
+	"github.com/skobkin/magnetico-web/persistence"
+	"github.com/skobkin/magnetico-web/stats"
 )
 
 func main() {

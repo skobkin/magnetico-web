@@ -5,7 +5,7 @@ import (
 	"net"
 	"strconv"
 
-	"tgragnato.it/magnetico/v2/bencode"
+	"github.com/skobkin/magnetico-web/bencode"
 )
 
 type Node string

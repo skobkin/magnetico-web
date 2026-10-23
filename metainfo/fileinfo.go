@@ -3,7 +3,7 @@ package metainfo
 import (
 	"strings"
 
-	infohash_v2 "tgragnato.it/magnetico/v2/types/infohash-v2"
+	infohash_v2 "github.com/skobkin/magnetico-web/types/infohash-v2"
 )
 
 // Information specific to a single file inside the MetaInfo structure.
