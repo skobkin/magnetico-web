@@ -1,5 +1,0 @@
-# Disable captcha in test environment; see dev/karser_recaptcha3.yaml for why
-# the dummy secret is still required.
-karser_recaptcha3:
-    enabled: false
-    secret_key: 'disabled-in-test'

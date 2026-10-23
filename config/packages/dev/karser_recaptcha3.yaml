@@ -1,7 +1,0 @@
-# Disable captcha in development environment. A non-empty dummy secret is
-# still required: the verifier is constructor-injected into the constraint
-# validator, so an empty secret would throw "No secret provided" before the
-# `enabled` flag is ever consulted.
-karser_recaptcha3:
-    enabled: false
-    secret_key: 'disabled-in-dev'
