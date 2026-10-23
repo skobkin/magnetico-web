@@ -1,0 +1,60 @@
+version: "2"
+
+run:
+  concurrency: 4
+  tests: true
+  allow-parallel-runners: true
+  go: '1.27'
+
+linters:
+  enable:
+    - gosec
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+
+    rules:
+
+      - linters:
+          - gosec
+        text: weak random number generator
+
+      - linters:
+          - gosec
+        text: weak cryptographic primitive
+
+      - linters:
+          - gosec
+        text: 'G115: integer overflow conversion'
+
+      - linters:
+          - staticcheck
+        text: 'ST1001: should not use dot imports'
+
+      - linters:
+          - gosec
+        text: 'G703: Path traversal via taint analysis'
+
+      - linters:
+          - gosec
+          - staticcheck
+        path: _test\.go$
+
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+
+formatters:
+  enable:
+    - gci
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

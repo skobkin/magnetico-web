@@ -1,0 +1,176 @@
+name: Create release
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  generate-matrix:
+
+    name: Generate Target Matrix
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: read
+      pull-requests: read
+
+    outputs:
+      targets: ${{ steps.set-targets.outputs.targets }}
+
+    steps:
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.27
+
+      - name: Generate Target Matrix
+        id: set-targets
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { execSync } = require('node:child_process');
+            const output = execSync('go tool dist list', { encoding: 'utf8' });
+            const targets = output
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter((line) => /^(linux|freebsd|openbsd|darwin)\//.test(line))
+              .map((target) => {
+                const [goos, goarch] = target.split('/');
+                return { target, goos, goarch };
+              });
+            core.setOutput('targets', JSON.stringify(targets));
+
+  build:
+
+    name: Build Executables
+    runs-on: ubuntu-latest
+    needs: generate-matrix
+
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      security-events: read
+      pull-requests: read
+
+    strategy:
+      matrix:
+        target: ${{ fromJson(needs.generate-matrix.outputs.targets) }}
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go 1.27
+        uses: actions/setup-go@v7
+        with:
+          go-version: 1.27
+
+      - name: Build binary
+        run: go build -o magnetico-${{ matrix.target.goos }}-${{ matrix.target.goarch }} .
+        env:
+          CGO_ENABLED: 0
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: magnetico-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+          path: magnetico-${{ matrix.target.goos }}-${{ matrix.target.goarch }}
+
+  release:
+
+    name: Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 1440
+
+    permissions:
+        actions: read
+        contents: write
+        packages: write
+        security-events: read
+
+    steps:
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Conventional Changelog Action
+        id: changelog
+        uses: TriPSs/conventional-changelog-action@v6
+        with:
+          preset: conventionalcommits
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          git-user-name: ${{ github.actor }}
+          git-user-email: ${{ github.actor }}@users.noreply.github.com
+          input-file: '.github/CHANGELOG.md'
+          output-file: '.github/CHANGELOG.md'
+          release-count: 10000
+          skip-on-empty: false
+          skip-version-file: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and export to Docker
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: ghcr.io/${{ github.repository }}:test
+
+      - name: Test Docker Image
+        run: |
+          docker run --rm ghcr.io/${{ github.repository }}:test --help
+
+      - name: Build and push Docker Image
+        uses: docker/build-push-action@v7
+        with:
+          platforms: linux/amd64,linux/arm64
+          context: .
+          provenance: mode=max
+          sbom: true
+          tags: ghcr.io/${{ github.repository }}:${{ steps.changelog.outputs.tag }}, ghcr.io/${{ github.repository }}:latest
+          push: true
+
+      - name: Extract CGo binaries from Docker Image
+        run: |
+          docker create --name extract-amd64 --platform linux/amd64 ghcr.io/${{ github.repository }}:${{ steps.changelog.outputs.tag }}
+          docker cp extract-amd64:/usr/bin/magnetico magnetico-linux-amd64-cgo
+          docker rm extract-amd64
+          docker create --name extract-arm64 --platform linux/arm64 ghcr.io/${{ github.repository }}:${{ steps.changelog.outputs.tag }}
+          docker cp extract-arm64:/usr/bin/magnetico magnetico-linux-arm64-cgo
+          docker rm extract-arm64
+
+      - name: Download workflow artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: magnetico-*-*
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v3
+        if: ${{ steps.changelog.outputs.skipped == 'false' }}
+        with:
+          tag_name: ${{ steps.changelog.outputs.tag }}
+          body: ${{ steps.changelog.outputs.clean_changelog }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            magnetico-*-*/magnetico-*-*
+            magnetico-linux-amd64-cgo
+            magnetico-linux-arm64-cgo
