@@ -8,9 +8,6 @@ steps:
   build-and-test:
     image: golang:1.27-alpine
     commands:
-      # cgo (go-sqlite3) + libzmq (zmq4); when this pipeline is rewritten,
-      # drop the cgo deps (build-base) if the SQLite storage driver is gone by then
-      - apk add --no-cache build-base pkgconf zeromq-dev
       - go build ./...
       - go test ./...
 

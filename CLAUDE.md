@@ -1,7 +1,18 @@
-# Magnetico — Claude Instructions
+# CLAUDE.md
 
-Read the following files before suggesting or generating any code:
+Guidance for Claude Code when working in this repository.
 
-1. [`README.md`](README.md) — Project overview, execution and compilation options, supported database backends, performance and authentication setup, and how this fork deviates from upstream by actively contributing to the DHT network.
-2. [`doc/config.example.yml`](doc/config.example.yml) — Example configuration file demonstrating the available settings and their default values for the Magnetico project.
-3. [`doc/engineering-standards.md`](doc/engineering-standards.md) — The authoritative engineering rules for Magnetico, including code quality, reliability, DHT and persistence boundaries, and long-lived process expectations.
+## Read first, in this order
+
+1. [`AGENTS.md`](AGENTS.md) — authoritative agent guidance: safety rules, task order, scope restrictions. If anything disagrees with this file, `AGENTS.md` wins.
+2. [`docs/engineering-standards.md`](docs/engineering-standards.md) — engineering practices for this repository.
+3. [`docs/specs/`](docs/specs/) — normative contracts (`wire-format-v1.md`, `postgresql-persistence-v2.md`). Do not change spec content without owner approval.
+4. [`README.md`](README.md) — project status, provenance and build commands.
+
+Task documents and phase reports live in [`docs/wip/`](docs/wip/).
+
+## Commands
+
+- Build: `go build ./...`
+- Test: `go test ./...`
+- Vet: `go vet ./...`

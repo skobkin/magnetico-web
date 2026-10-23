@@ -10,6 +10,43 @@ and a private, authenticated web UI to be implemented later.
 > **Status: under active development — not deployable.**
 > Nothing in this branch is production-ready yet, and no production migration
 > or cutover has happened or been approved.
+>
+> **Released versions are the PHP/Symfony 0.7.x application** on the `master`
+> branch (see `UPGRADE.md` for their upgrade history). Everything on this
+> development branch is unreleased Go work; no 0.8.0 release exists yet, and
+> its breaking changes will be documented in `UPGRADE.md` when it is ready.
+
+## Current state (phase 2 of the 0.8.0 roadmap)
+
+The tree is a scoped crawler foundation:
+
+- A single binary `magnetico` with subcommands:
+  - `crawl` — the DHT crawler. **Storage backends are not implemented yet**:
+    `crawl` refuses every database URL and exits before any network activity.
+    The new PostgreSQL storage arrives in phase 3
+    ([docs/wip/03-storage-persistence.md](docs/wip/03-storage-persistence.md)).
+  - `web`, `migrate` — explicit not-implemented placeholders that exit
+    non-zero.
+- Removed compared to upstream (recoverable from Git history): the upstream Go
+  web UI and Basic Auth, the JSONL export/import modes, and the SQLite,
+  legacy-PostgreSQL (including its automatic schema migration and 100-partition
+  file index), RabbitMQ, ZeroMQ and Bitmagnet backends.
+- Crawler flags are unchanged from upstream; `--config-file-path` is now a
+  global option that must precede the subcommand.
+
+## Build and test
+
+    go build ./...
+    go test ./...
+
+## Example
+
+    magnetico --config-file-path config.yaml crawl --indexer-addr 0.0.0.0:6881
+
+Optional `config.yaml` keys (all crawl settings, same names as upstream):
+`databaseURL`, `pyroscopeURL`, `indexerAddrs`, `indexerMaxNeighbors`,
+`leechDeadline`, `leechMaxN`, `maxRPS`, `bootstrappingNodes`,
+`filterNodesCIDRs`.
 
 ## Provenance
 
