@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
+	"math"
 	"net"
 	"reflect"
 	"sync"
@@ -404,4 +405,196 @@ func TestDoExHandshake(t *testing.T) {
 			wg.Wait()
 		})
 	}
+}
+
+func TestApplyMetadataPiece(t *testing.T) {
+	t.Parallel()
+
+	const pieceSize = 16 * 1024
+
+	newLeech := func(metadataSize uint) *Leech {
+		return &Leech{
+			metadataSize: metadataSize,
+			metadata:     make([]byte, metadataSize),
+		}
+	}
+
+	fill := func(n int, seed byte) []byte {
+		data := make([]byte, n)
+		for i := range data {
+			data[i] = seed + byte(i%251)
+		}
+		return data
+	}
+
+	t.Run("OutOfRangePieceIndices", func(t *testing.T) {
+		t.Parallel()
+
+		// 2*pieceSize+100 bytes -> 3 pieces.
+		tests := []struct {
+			name  string
+			piece int
+		}{
+			{name: "negative", piece: -1},
+			{name: "equal to the piece count", piece: 3},
+			{name: "max int", piece: math.MaxInt},
+			{name: "multiplication would wrap to zero", piece: 1 << 50},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				leech := newLeech(2*pieceSize + 100)
+				err := leech.applyMetadataPiece(tt.piece, fill(pieceSize, 1))
+				if err == nil {
+					t.Fatalf("piece index %d accepted", tt.piece)
+				}
+				if leech.metadataReceived != 0 {
+					t.Errorf("metadataReceived = %d, want 0", leech.metadataReceived)
+				}
+				for i, b := range leech.metadata {
+					if b != 0 {
+						t.Fatalf("metadata corrupted at byte %d: %d", i, b)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("PieceLengths", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name          string
+			metadataSize  uint
+			piece         int
+			dataLen       int
+			expectedError bool
+		}{
+			{
+				name:         "Full non-final piece accepted",
+				metadataSize: 3 * pieceSize, piece: 0, dataLen: pieceSize,
+			},
+			{
+				name:         "Full piece accepted where remaining exceeds piece size (clamp)",
+				metadataSize: 3 * pieceSize, piece: 1, dataLen: pieceSize,
+			},
+			{
+				name:         "Short final piece accepted",
+				metadataSize: 2*pieceSize + 100, piece: 2, dataLen: 100,
+			},
+			{
+				name:         "Short non-final piece rejected",
+				metadataSize: 2*pieceSize + 100, piece: 0, dataLen: 100,
+				expectedError: true,
+			},
+			{
+				name:         "Over-long piece rejected",
+				metadataSize: 3 * pieceSize, piece: 1, dataLen: pieceSize + 1,
+				expectedError: true,
+			},
+			{
+				name:         "Zero-length piece rejected",
+				metadataSize: 3 * pieceSize, piece: 0, dataLen: 0,
+				expectedError: true,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				leech := newLeech(tt.metadataSize)
+				err := leech.applyMetadataPiece(tt.piece, fill(tt.dataLen, 7))
+				if (err != nil) != tt.expectedError {
+					t.Fatalf("applyMetadataPiece(piece %d, len %d) error = %v, expectedError %v",
+						tt.piece, tt.dataLen, err, tt.expectedError)
+				}
+				if tt.expectedError {
+					return
+				}
+				if leech.metadataReceived != uint(tt.dataLen) {
+					t.Errorf("metadataReceived = %d, want %d", leech.metadataReceived, tt.dataLen)
+				}
+				offset := tt.piece * pieceSize
+				if !bytes.Equal(leech.metadata[offset:offset+tt.dataLen], fill(tt.dataLen, 7)) {
+					t.Errorf("metadata not copied at offset %d", offset)
+				}
+			})
+		}
+	})
+
+	t.Run("CompletesWithShortFinalPieceInAnyOrder", func(t *testing.T) {
+		t.Parallel()
+
+		const size = 2*pieceSize + 100
+		pieces := map[int][]byte{
+			0: fill(pieceSize, 1),
+			1: fill(pieceSize, 2),
+			2: fill(100, 3),
+		}
+
+		for _, order := range [][]int{{0, 1, 2}, {0, 2, 1}, {2, 1, 0}} {
+			leech := newLeech(size)
+			for _, piece := range order {
+				if err := leech.applyMetadataPiece(piece, pieces[piece]); err != nil {
+					t.Fatalf("order %v: piece %d rejected: %v", order, piece, err)
+				}
+			}
+			if leech.metadataReceived != size {
+				t.Errorf("order %v: metadataReceived = %d, want %d", order, leech.metadataReceived, size)
+			}
+			for piece, data := range pieces {
+				offset := piece * pieceSize
+				if !bytes.Equal(leech.metadata[offset:offset+len(data)], data) {
+					t.Errorf("order %v: piece %d content wrong at offset %d", order, piece, offset)
+				}
+			}
+		}
+	})
+
+	t.Run("DuplicatePiecesAreIgnored", func(t *testing.T) {
+		t.Parallel()
+
+		leech := newLeech(2 * pieceSize)
+		first := fill(pieceSize, 1)
+
+		if err := leech.applyMetadataPiece(0, first); err != nil {
+			t.Fatalf("first piece rejected: %v", err)
+		}
+		// Replay with different content: first wins, no accounting, no copy.
+		if err := leech.applyMetadataPiece(0, fill(pieceSize, 9)); err != nil {
+			t.Fatalf("duplicate rejected (it must be ignored): %v", err)
+		}
+		if leech.metadataReceived != pieceSize {
+			t.Errorf("metadataReceived = %d, want %d", leech.metadataReceived, pieceSize)
+		}
+		if !bytes.Equal(leech.metadata[0:pieceSize], first) {
+			t.Error("duplicate overwrote the first copy")
+		}
+
+		// A replay-only peer can never complete the transfer.
+		for i := 0; i < 20; i++ {
+			if err := leech.applyMetadataPiece(0, first); err != nil {
+				t.Fatalf("replay %d rejected: %v", i, err)
+			}
+		}
+		if leech.metadataReceived != pieceSize {
+			t.Errorf("metadataReceived = %d, want %d (replays must not inflate it)",
+				leech.metadataReceived, pieceSize)
+		}
+	})
+
+	t.Run("LazyInitializationForDirectCallers", func(t *testing.T) {
+		t.Parallel()
+
+		leech := &Leech{metadataSize: pieceSize}
+		if err := leech.applyMetadataPiece(0, fill(pieceSize, 5)); err != nil {
+			t.Fatalf("piece rejected: %v", err)
+		}
+		if leech.metadataReceived != pieceSize {
+			t.Errorf("metadataReceived = %d, want %d", leech.metadataReceived, pieceSize)
+		}
+	})
 }

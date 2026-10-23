@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"time"
 
@@ -16,6 +15,16 @@ import (
 )
 
 const MAX_METADATA_SIZE = 10 * 1024 * 1024
+
+// metadataPieceSize is the fixed size of a metadata piece, 16 KiB, as
+// mandated by BEP 9 (only the last piece may be shorter).
+const metadataPieceSize = 1 << 14
+
+// nMetadataPieces returns the number of pieces in a metadata blob of the
+// given size (integer ceiling division; no floating point).
+func nMetadataPieces(size uint) int {
+	return int((size + metadataPieceSize - 1) / metadataPieceSize)
+}
 
 type rootDict struct {
 	M            mDict `bencode:"m"`
@@ -42,6 +51,7 @@ type Leech struct {
 	ut_metadata                    uint8
 	metadataReceived, metadataSize uint
 	metadata                       []byte
+	piecesReceived                 []bool
 
 	connClosed bool
 }
@@ -127,13 +137,14 @@ func (l *Leech) doExHandshake() error {
 	l.ut_metadata = uint8(rRootDict.M.UTMetadata) // Save the ut_metadata code the remote peer uses
 	l.metadataSize = uint(rRootDict.MetadataSize)
 	l.metadata = make([]byte, l.metadataSize)
+	l.piecesReceived = make([]bool, nMetadataPieces(l.metadataSize))
 
 	return nil
 }
 
 func (l *Leech) requestAllPieces() error {
 	// Request all the pieces of metadata
-	nPieces := int(math.Ceil(float64(l.metadataSize) / math.Pow(2, 14)))
+	nPieces := nMetadataPieces(l.metadataSize)
 	if nPieces == 0 {
 		return errors.New("metadataSize is zero")
 	}
@@ -159,6 +170,54 @@ func (l *Leech) requestAllPieces() error {
 			return errors.New("writeAll piece request " + err.Error())
 		}
 	}
+
+	return nil
+}
+
+// applyMetadataPiece validates one ut_metadata data message and, if it is
+// well-formed and new, copies it into the assembled metadata.
+//
+// Validation happens strictly before any index arithmetic: an out-of-range
+// piece index must never reach a slice expression, where it could panic or —
+// by wrapping — silently corrupt the buffer.
+//
+// The expected piece length is derived from the piece index (remaining bytes,
+// clamped to 16 KiB), so only the final piece may be shorter than 16 KiB,
+// regardless of its arrival order.
+//
+// Duplicate pieces are ignored (first wins): BEP 9 does not forbid
+// retransmission, and the SHA-1 verification in extractMetadata remains the
+// final arbiter of correctness. Accounting stays exact because duplicates
+// never contribute to metadataReceived.
+func (l *Leech) applyMetadataPiece(piece int, data []byte) error {
+	// Defensive fallback for direct callers (tests) that did not go through
+	// doExHandshake; the production path always allocates both there.
+	if l.metadata == nil {
+		l.metadata = make([]byte, l.metadataSize)
+	}
+	if l.piecesReceived == nil {
+		l.piecesReceived = make([]bool, nMetadataPieces(l.metadataSize))
+	}
+
+	nPieces := nMetadataPieces(l.metadataSize)
+	if piece < 0 || piece >= nPieces {
+		return fmt.Errorf("piece index %d out of range [0, %d)", piece, nPieces)
+	}
+
+	remaining := int(l.metadataSize) - piece*metadataPieceSize
+	expected := min(remaining, metadataPieceSize)
+	if len(data) != expected {
+		return fmt.Errorf("piece %d has length %d, expected %d", piece, len(data), expected)
+	}
+
+	if l.piecesReceived[piece] {
+		return nil
+	}
+
+	offset := piece * metadataPieceSize
+	copy(l.metadata[offset:offset+len(data)], data)
+	l.piecesReceived[piece] = true
+	l.metadataReceived += uint(len(data))
 
 	return nil
 }
@@ -278,34 +337,8 @@ func (l *Leech) Do(deadline time.Time) {
 		}
 
 		if rExtDict.MsgType == 1 { // data
-			// Get the unread bytes!
-			metadataPiece := rMessageBuf.Bytes()
-
-			// BEP 9 explicitly states:
-			//   > If the piece is the last piece of the metadata, it may be less than 16kiB. If
-			//   > it is not the last piece of the metadata, it MUST be 16kiB.
-			//
-			// Hence...
-			//   ... if the length of @metadataPiece is more than 16kiB, we err.
-			if len(metadataPiece) > 16*1024 {
-				l.OnError(fmt.Errorf("metadataPiece > 16kiB"))
-				return
-			}
-
-			piece := rExtDict.Piece
-			// metadata[piece * 2**14: piece * 2**14 + len(metadataPiece)] = metadataPiece is how it'd be done in Python
-			copy(l.metadata[piece*int(math.Pow(2, 14)):piece*int(math.Pow(2, 14))+len(metadataPiece)], metadataPiece)
-			l.metadataReceived += uint(len(metadataPiece))
-
-			// ... if the length of @metadataPiece is less than 16kiB AND metadata is NOT
-			// complete then we err.
-			if len(metadataPiece) < 16*1024 && l.metadataReceived != l.metadataSize {
-				l.OnError(fmt.Errorf("metadataPiece < 16 kiB but incomplete"))
-				return
-			}
-
-			if l.metadataReceived > l.metadataSize {
-				l.OnError(fmt.Errorf("metadataReceived > metadataSize"))
+			if err := l.applyMetadataPiece(rExtDict.Piece, rMessageBuf.Bytes()); err != nil {
+				l.OnError(fmt.Errorf("invalid metadata piece: %w", err))
 				return
 			}
 		}
