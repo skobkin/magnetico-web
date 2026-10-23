@@ -1,10 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"tgragnato.it/magnetico/v2/dht"
@@ -13,20 +13,43 @@ import (
 	"tgragnato.it/magnetico/v2/opflags"
 	"tgragnato.it/magnetico/v2/persistence"
 	"tgragnato.it/magnetico/v2/stats"
-	"tgragnato.it/magnetico/v2/web"
 )
 
 func main() {
 	// opFlags is the "operational flags"
 	opFlags := opflags.OpFlags{}
-	if err := opFlags.Parse(); err != nil {
+	command, err := opFlags.Parse()
+	if err != nil {
 		log.Fatalln(err.Error())
 	}
 
+	switch command {
+	case "crawl":
+		runCrawl(&opFlags.Crawl)
+	case "web":
+		notImplemented("web",
+			"the authenticated web UI will be designed from the historical PHP application in a later phase")
+	case "migrate":
+		notImplemented("migrate",
+			"the offline legacy database migrator follows phase 3, see docs/specs/postgresql-persistence-v2.md")
+	}
+}
+
+// notImplemented reports a reserved subcommand and exits non-zero.
+func notImplemented(command, detail string) {
+	fmt.Fprintf(os.Stderr, "magnetico %s: not implemented yet (%s)\n", command, detail)
+	os.Exit(1)
+}
+
+func runCrawl(opFlags *opflags.CrawlOptions) {
 	// Handle Ctrl-C gracefully.
 	interruptChan := make(chan os.Signal, 1)
 	signal.Notify(interruptChan, os.Interrupt)
 
+	// Fail closed: until phase 3 implements the new storage, MakeDatabase
+	// refuses every database URL, so the crawler exits here, before any DHT
+	// or profiling network activity starts. It must never open, create or
+	// migrate a legacy database.
 	database, err := persistence.MakeDatabase(opFlags.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Could not open the database %s. %s\n", opFlags.DatabaseURL, err.Error())
@@ -34,41 +57,6 @@ func main() {
 	defer func() {
 		if err = database.Close(); err != nil {
 			log.Printf("Could not close database! %s\n", err.Error())
-		}
-	}()
-
-	// Export the database to file if requested.
-	if opFlags.Export != "" {
-		err := persistence.MakeExport(database, opFlags.Export, interruptChan)
-		if err != nil {
-			log.Fatalf("Could not export the database %s\n", err.Error())
-		}
-		return
-	}
-
-	// Import the database from file if requested.
-	if opFlags.Import != "" {
-		err := persistence.MakeImport(database, opFlags.Import, interruptChan)
-		if err != nil {
-			log.Fatalf("Could not import the database %s\n", err.Error())
-		}
-		return
-	}
-
-	// Reload credentials when you receive SIGHUP
-	sighupChan := make(chan os.Signal, 1)
-	signal.Notify(sighupChan, syscall.SIGHUP)
-	go func() {
-		for range sighupChan {
-			if opFlags.Credentials == nil {
-				// Ignoring SIGHUP since no credential file was supplied
-				continue
-			}
-
-			opFlags.Credentials = make(map[string][]byte)
-			if err := opFlags.LoadCred(); err != nil {
-				log.Fatalf("couldn't load credentials %s\n", err.Error())
-			}
 		}
 	}()
 
@@ -82,15 +70,6 @@ func main() {
 				log.Printf("Could not stop pyroscope! %s\n", err.Error())
 			}
 		}()
-	}
-
-	if opFlags.RunWeb {
-		go web.StartWeb(opFlags.Addr, opFlags.Timeout, opFlags.Credentials, database)
-	}
-
-	if !opFlags.RunDaemon {
-		<-interruptChan
-		return
 	}
 
 	mainline.DefaultThrottleRate = int(opFlags.MaxRPS)
