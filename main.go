@@ -1,8 +1,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"time"
@@ -41,6 +43,45 @@ func notImplemented(command, detail string) {
 	os.Exit(1)
 }
 
+// unparsableDatabaseURL is printed instead of any database URL that cannot be
+// safely reduced to scheme://host/path. Raw URLs are never echoed: they
+// routinely carry credentials in the userinfo or the query.
+const unparsableDatabaseURL = "<unparsable database URL>"
+
+// redactDatabaseURL renders a database URL without any credential material:
+// only the scheme, host and path survive. Userinfo, query, fragment and opaque
+// parts are dropped by construction (never url.URL.String, which re-emits
+// them). Input that cannot be parsed into a scheme and a host maps to a fixed
+// placeholder string.
+func redactDatabaseURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return unparsableDatabaseURL
+	}
+	return fmt.Sprintf("%s://%s%s", parsed.Scheme, parsed.Host, parsed.Path)
+}
+
+// controlledErrorDetail is the only error text allowed in database log lines.
+// It never returns err.Error(), not even for a recognized sentinel: driver
+// errors and wrapped sentinels can carry credentials anywhere in their text.
+// A recognized sentinel contributes its own fixed message; anything else
+// contributes only the error's Go type, which carries no runtime content.
+func controlledErrorDetail(err error) string {
+	if errors.Is(err, persistence.ErrStorageNotImplemented) {
+		return persistence.ErrStorageNotImplemented.Error()
+	}
+	return fmt.Sprintf("unexpected error (%T)", err)
+}
+
+// databaseOpenFailureMessage composes the database-open failure log line from
+// controlled content only: the redacted URL and the controlled error detail.
+func databaseOpenFailureMessage(rawURL string, err error) string {
+	return fmt.Sprintf(
+		"Could not open the database %s. %s",
+		redactDatabaseURL(rawURL), controlledErrorDetail(err),
+	)
+}
+
 func runCrawl(opFlags *opflags.CrawlOptions) {
 	// Handle Ctrl-C gracefully.
 	interruptChan := make(chan os.Signal, 1)
@@ -52,11 +93,13 @@ func runCrawl(opFlags *opflags.CrawlOptions) {
 	// migrate a legacy database.
 	database, err := persistence.MakeDatabase(opFlags.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Could not open the database %s. %s\n", opFlags.DatabaseURL, err.Error())
+		// The raw URL and the error text may both carry credentials; log the
+		// redacted URL and a controlled error detail instead.
+		log.Fatalln(databaseOpenFailureMessage(opFlags.DatabaseURL, err))
 	}
 	defer func() {
 		if err = database.Close(); err != nil {
-			log.Printf("Could not close database! %s\n", err.Error())
+			log.Printf("Could not close database! %s\n", controlledErrorDetail(err))
 		}
 	}()
 
