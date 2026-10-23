@@ -4,13 +4,13 @@ import (
 	"errors"
 	"os"
 
-	"github.com/goccy/go-yaml"
 	"github.com/jessevdk/go-flags"
 )
 
-// Parse parses the global options and the subcommand, applies the YAML
-// configuration to the crawl options when a config file is given, validates
-// them, and returns the name of the selected subcommand.
+// Parse parses the global options and the subcommand, applies the
+// configuration layers (config file and environment) with the precedence
+// CLI > ENV > config file > defaults, validates the crawl options, and
+// returns the name of the selected subcommand.
 func (o *OpFlags) Parse() (string, error) {
 	parser := flags.NewParser(o, flags.Default)
 	_, err := parser.Parse()
@@ -28,11 +28,7 @@ func (o *OpFlags) Parse() (string, error) {
 	command := active.Name
 
 	if command == "crawl" {
-		// Note: upstream behavior preserved at this step - the config file is
-		// applied after flag parsing and its values override CLI values. A
-		// later commit replaces this with the CLI > ENV > file > defaults
-		// hierarchy.
-		if err := o.parseYaml(); err != nil {
+		if err := o.applyConfig(explicitOptions(parser.Command)); err != nil {
 			return "", err
 		}
 		if err := o.Crawl.check(); err != nil {
@@ -41,17 +37,4 @@ func (o *OpFlags) Parse() (string, error) {
 	}
 
 	return command, nil
-}
-
-func (o *OpFlags) parseYaml() error {
-	if o.ConfigFilePath == "" {
-		return nil
-	}
-
-	data, err := os.ReadFile(o.ConfigFilePath)
-	if err != nil {
-		return err
-	}
-
-	return yaml.Unmarshal(data, &o.Crawl)
 }

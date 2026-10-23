@@ -2,38 +2,32 @@ package opflags
 
 import (
 	"testing"
+
+	"github.com/jessevdk/go-flags"
 )
 
-func TestParseYaml(t *testing.T) {
+func TestExplicitOptions(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name           string
-		ConfigFilePath string
-		expectError    bool
-	}{{
-		name:           "ValidConfigFilePath",
-		ConfigFilePath: "../doc/config.example.yml",
-		expectError:    false,
-	}, {
-		name:           "EmptyConfigFilePath",
-		ConfigFilePath: "",
-		expectError:    false,
-	}, {
-		name:           "InvalidConfigFilePath",
-		ConfigFilePath: "invalid-path",
-		expectError:    true,
-	},
+	o := OpFlags{}
+	parser := flags.NewParser(&o, flags.None)
+	if _, err := parser.ParseArgs([]string{
+		"crawl", "--max-rps", "42", "--database", "postgres://cli@localhost/db",
+	}); err != nil {
+		t.Fatalf("ParseArgs() error = %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			o := &OpFlags{
-				ConfigFilePath: tt.ConfigFilePath,
-			}
-			if err := o.parseYaml(); (err != nil) != tt.expectError {
-				t.Errorf("OpFlags.parseYaml() error = %v, expectError %v", err, tt.expectError)
-			}
-		})
+	set := explicitOptions(parser.Command)
+	if !set["max-rps"] {
+		t.Errorf("--max-rps not detected as explicit: %v", set)
+	}
+	if !set["database"] {
+		t.Errorf("--database not detected as explicit: %v", set)
+	}
+	if set["config-file-path"] {
+		t.Errorf("--config-file-path wrongly detected as explicit: %v", set)
+	}
+	if set["indexer-addr"] {
+		t.Errorf("defaulted --indexer-addr wrongly detected as explicit: %v", set)
 	}
 }
