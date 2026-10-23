@@ -112,32 +112,25 @@ func (tm *TorrentMetadata) MarshalJSON() ([]byte, error) {
 }
 
 func MakeDatabase(rawURL string) (Database, error) {
-	url_, err := url.Parse(rawURL)
-	if err != nil {
-		return nil, errors.New("url.Parse " + err.Error())
+	// Fail closed: until phase 3 implements the new PostgreSQL storage
+	// (docs/specs/postgresql-persistence-v2.md), no storage backend may be
+	// opened. In particular, the legacy automatic v0->v1 migration and the
+	// partitioned `files` schema of the imported upstream code must never run
+	// against an existing database. The scheme is parsed only for diagnostics.
+	scheme := ""
+	if parsed, err := url.Parse(rawURL); err == nil {
+		scheme = parsed.Scheme
 	}
-
-	switch url_.Scheme {
-
-	case "sqlite", "sqlite3":
-		return makeSqlite3Database(url_)
-
-	case "postgres", "cockroach":
-		return makePostgresDatabase(url_)
-
-	case "zeromq", "zmq":
-		return makeZeroMQ(url_)
-
-	case "amqp", "amqps":
-		return makeRabbitMQ(url_)
-
-	case "bitmagnet", "bitmagnets":
-		return makeBitmagnet(url_)
-
-	default:
-		return nil, fmt.Errorf("unknown URI scheme: `%s`", url_.Scheme)
-	}
+	return nil, fmt.Errorf("%w (requested scheme %q)", ErrStorageNotImplemented, scheme)
 }
+
+// ErrStorageNotImplemented is returned by MakeDatabase until phase 3 implements
+// the new PostgreSQL storage. It is fail-closed by design: no legacy schema is
+// read, created or migrated.
+var ErrStorageNotImplemented = errors.New(
+	"storage backends are not implemented yet " +
+		"(phase 3, docs/wip/03-storage-persistence.md); refusing to touch any existing database",
+)
 
 func NewStatistics() (s *Statistics) {
 	s = new(Statistics)
