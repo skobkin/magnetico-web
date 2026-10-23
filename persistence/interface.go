@@ -1,127 +1,36 @@
+// Package persistence defines the narrow storage interface required by the
+// crawler.
+//
+// PostgreSQL is the only backend of release 0.8.0. It will be implemented in
+// phase 3 on top of docs/specs/postgresql-persistence-v2.md (context-aware
+// Store, torrent file lists stored as encoded blobs). Until then no backend
+// exists and MakeDatabase fails closed for every URL scheme.
+//
+// Derived from tgragnato/magnetico persistence/interface.go (AGPL-3.0, see
+// COPYING). The removed backends (SQLite3, legacy PostgreSQL with its
+// automatic v0->v1 files migration, RabbitMQ, ZeroMQ, Bitmagnet) and the
+// JSONL export/import machinery remain recoverable from Git history.
 package persistence
 
 import (
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
-	"os"
-	"strings"
-
-	"github.com/klauspost/compress/zstd"
 )
 
-type Database interface {
-	Engine() databaseEngine
-	DoesTorrentExist(infoHash []byte) (bool, error)
-	AddNewTorrent(infoHash []byte, name string, files []File) error
-	Close() error
-
-	// GetNumberOfTorrents returns the number of torrents saved in the database. Might be an
-	// approximation.
-	GetNumberOfTorrents() (uint, error)
-	// GetNumberOfQueryTorrents returns the total number of data records in a fuzzy query.
-	GetNumberOfQueryTorrents(query string, epoch int64) (uint64, error)
-	// QueryTorrents returns @pageSize amount of torrents,
-	// * that are discovered before @discoveredOnBefore
-	// * that match the @query if it's not empty, else all torrents
-	// * ordered by the @orderBy in ascending order if @ascending is true, else in descending order
-	// after skipping (@page * @pageSize) torrents that also fits the criteria above.
-	//
-	// On error, returns (nil, error), otherwise a non-nil slice of TorrentMetadata and nil.
-	QueryTorrents(
-		query string,
-		epoch int64,
-		orderBy OrderingCriteria,
-		ascending bool,
-		limit uint64,
-		lastOrderedValue *float64,
-		lastID *uint64,
-	) ([]TorrentMetadata, error)
-	// GetTorrents returns the TorrentExtMetadata for the torrent of the given InfoHash. Will return
-	// nil, nil if the torrent does not exist in the database.
-	GetTorrent(infoHash []byte) (*TorrentMetadata, error)
-	GetFiles(infoHash []byte) ([]File, error)
-	GetStatistics(from string, n uint) (*Statistics, error)
-	// Export returns a channel that will be used to dump all the torrents in the database.
-	Export() (chan SimpleTorrentSummary, error)
-}
-
-type OrderingCriteria uint8
-
-const (
-	ByRelevance OrderingCriteria = iota
-	ByTotalSize
-	ByDiscoveredOn
-	ByNFiles
-	ByNSeeders
-	ByNLeechers
-	ByUpdatedOn
-)
-
-// TODO: search `swtich (orderBy)` and see if all cases are covered all the time
-
-type databaseEngine uint8
-
-const (
-	Sqlite3 databaseEngine = iota + 1
-	Postgres
-	ZeroMQ
-	RabbitMQ
-	Bitmagnet
-)
-
-type Statistics struct {
-	NDiscovered map[string]uint64 `json:"nDiscovered"`
-	NFiles      map[string]uint64 `json:"nFiles"`
-	TotalSize   map[string]uint64 `json:"totalSize"`
-}
-
+// File is a single file entry of a torrent, as extracted from its metainfo.
 type File struct {
 	Size int64  `json:"size"`
 	Path string `json:"path"`
 }
 
-type TorrentMetadata struct {
-	ID           uint64  `json:"id"`
-	InfoHash     []byte  `json:"infoHash"` // marshalled differently
-	Name         string  `json:"name"`
-	Size         uint64  `json:"size"`
-	DiscoveredOn int64   `json:"discoveredOn"`
-	NFiles       uint    `json:"nFiles"`
-	Relevance    float64 `json:"relevance"`
-}
-
-type SimpleTorrentSummary struct {
-	InfoHash string `json:"infoHash"`
-	Name     string `json:"name"`
-	Files    []File `json:"files"`
-}
-
-func (tm *TorrentMetadata) MarshalJSON() ([]byte, error) {
-	type Alias TorrentMetadata
-	return json.Marshal(&struct {
-		InfoHash string `json:"infoHash"`
-		*Alias
-	}{
-		InfoHash: hex.EncodeToString(tm.InfoHash),
-		Alias:    (*Alias)(tm),
-	})
-}
-
-func MakeDatabase(rawURL string) (Database, error) {
-	// Fail closed: until phase 3 implements the new PostgreSQL storage
-	// (docs/specs/postgresql-persistence-v2.md), no storage backend may be
-	// opened. In particular, the legacy automatic v0->v1 migration and the
-	// partitioned `files` schema of the imported upstream code must never run
-	// against an existing database. The scheme is parsed only for diagnostics.
-	scheme := ""
-	if parsed, err := url.Parse(rawURL); err == nil {
-		scheme = parsed.Scheme
-	}
-	return nil, fmt.Errorf("%w (requested scheme %q)", ErrStorageNotImplemented, scheme)
+// Database is the write surface required by the crawler. The read surface for
+// the future web process will be added in phase 3 alongside the PostgreSQL
+// implementation; see docs/specs/postgresql-persistence-v2.md, section 3.
+type Database interface {
+	DoesTorrentExist(infoHash []byte) (bool, error)
+	AddNewTorrent(infoHash []byte, name string, files []File) error
+	Close() error
 }
 
 // ErrStorageNotImplemented is returned by MakeDatabase until phase 3 implements
@@ -132,126 +41,13 @@ var ErrStorageNotImplemented = errors.New(
 		"(phase 3, docs/wip/03-storage-persistence.md); refusing to touch any existing database",
 )
 
-func NewStatistics() (s *Statistics) {
-	s = new(Statistics)
-	s.NDiscovered = make(map[string]uint64)
-	s.NFiles = make(map[string]uint64)
-	s.TotalSize = make(map[string]uint64)
-	return
-}
-
-func MakeExport(db Database, path string, interruptChan chan os.Signal) error {
-	torrentsChan, err := db.Export()
-	if err != nil {
-		return err
+// MakeDatabase refuses every database URL until the phase-3 storage
+// implementation exists. It never opens a connection and never performs any
+// schema operation. The scheme is parsed only for diagnostics.
+func MakeDatabase(rawURL string) (Database, error) {
+	scheme := ""
+	if parsed, err := url.Parse(rawURL); err == nil {
+		scheme = parsed.Scheme
 	}
-
-	file, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err = file.Close(); err != nil {
-			log.Printf("Could not close file! %s\n", err.Error())
-		}
-	}()
-
-	writer := file.Write
-	if strings.HasSuffix(path, ".zstd") {
-		zw, err := zstd.NewWriter(file, zstd.WithEncoderLevel(zstd.SpeedBestCompression))
-		if err != nil {
-			return err
-		}
-		defer func() {
-			if err = zw.Close(); err != nil {
-				log.Printf("Could not close zstd writer! %s\n", err.Error())
-			}
-		}()
-		writer = zw.Write
-	}
-
-	for {
-		select {
-		case result, ok := <-torrentsChan:
-			if !ok {
-				log.Println("Database export completed. Shutting down.")
-				return nil
-			}
-
-			jsonResult, err := json.Marshal(result)
-			if err != nil {
-				return err
-			}
-			jsonResult = append(jsonResult, '\n')
-
-			if _, err = writer(jsonResult); err != nil {
-				return err
-			}
-
-		case <-interruptChan:
-			return nil
-		}
-	}
-}
-
-func MakeImport(db Database, path string, interruptChan chan os.Signal) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err = file.Close(); err != nil {
-			log.Printf("Could not close file! %s\n", err.Error())
-		}
-	}()
-
-	reader := file.Read
-	if strings.HasSuffix(path, ".zstd") {
-		zr, err := zstd.NewReader(file)
-		if err != nil {
-			return err
-		}
-		defer zr.Close()
-		reader = zr.Read
-	}
-
-	for {
-		select {
-
-		case <-interruptChan:
-			return nil
-
-		default:
-			var line []byte
-			// Read one byte at a time until newline or EOF
-			for {
-				buf := make([]byte, 1)
-				n, err := reader(buf)
-				if n == 0 || err != nil {
-					if len(line) == 0 {
-						return nil // EOF with no data
-					}
-					break
-				}
-				if buf[0] == '\n' {
-					break
-				}
-				line = append(line, buf[0])
-			}
-
-			var torrent SimpleTorrentSummary
-			if err := json.Unmarshal(line, &torrent); err != nil {
-				return fmt.Errorf("failed to unmarshal JSON: %v", err)
-			}
-
-			infoHash, err := hex.DecodeString(torrent.InfoHash)
-			if err != nil {
-				return fmt.Errorf("failed to decode infohash: %v", err)
-			}
-
-			if err := db.AddNewTorrent(infoHash, torrent.Name, torrent.Files); err != nil {
-				log.Printf("failed to add torrent: %v\n", err.Error())
-			}
-		}
-	}
+	return nil, fmt.Errorf("%w (requested scheme %q)", ErrStorageNotImplemented, scheme)
 }
