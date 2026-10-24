@@ -5,6 +5,8 @@ package persistence
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/url"
@@ -614,11 +616,22 @@ func TestBlobSizeCapClassifiedAsInvalidMetadata(t *testing.T) {
 	limits.MaxStoredBytes = 1024
 	store := newPostgresStore(pool, codec.ProfileCompact, limits)
 
-	longPath := strings.Repeat("f", 600)
+	// Three files with distinct 2048-byte names of uncorrelated content:
+	// even the best-compressed candidate of the compact profile exceeds the
+	// tiny budget. (Names sharing a long prefix, or with internal
+	// repetition, would keep some candidate under the cap and legitimately
+	// succeed.)
+	names := make([]string, 3)
+	for i := range names {
+		for k := 0; k < 32; k++ {
+			h := sha256.Sum256([]byte(fmt.Sprintf("cap-%d-%d", i, k)))
+			names[i] += hex.EncodeToString(h[:])
+		}
+	}
 	files := []File{
-		{Path: longPath + "a", Size: 1},
-		{Path: longPath + "b", Size: 1},
-		{Path: longPath + "c", Size: 1},
+		{Path: names[0], Size: 1},
+		{Path: names[1], Size: 1},
+		{Path: names[2], Size: 1},
 	}
 	_, _, err = store.AddTorrent(ctx,
 		Torrent{InfoHash: infoHash("cap-exceeded-000000"), Name: "cap", TotalSize: 3, DiscoveredOn: 1},
