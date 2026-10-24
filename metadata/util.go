@@ -6,6 +6,8 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math"
 	mrand "math/rand/v2"
 	"time"
 
@@ -13,6 +15,16 @@ import (
 	"github.com/skobkin/magnetico-web/metainfo"
 	"github.com/skobkin/magnetico-web/persistence"
 )
+
+// ErrV2OnlyUnsupported reports BEP 52 metadata that has a v2 file tree but
+// no v1 representation. The v1-only pipeline cannot extract a correct file
+// list from it; without the explicit guard such metadata used to slip
+// through validation and persist as a zero-size single file.
+var ErrV2OnlyUnsupported = errors.New("bep 52 v2-only metadata is not supported")
+
+// ErrTotalSizeOverflow reports that the accumulated file sizes do not fit an
+// uint64.
+var ErrTotalSizeOverflow = errors.New("total file size overflows uint64")
 
 func totalSize(files []persistence.File) (uint64, error) {
 	var totalSize uint64
@@ -25,6 +37,9 @@ func totalSize(files []persistence.File) (uint64, error) {
 			return 0, errors.New("file size less than zero")
 		}
 
+		if totalSize > math.MaxUint64-uint64(file.Size) {
+			return 0, fmt.Errorf("%w", ErrTotalSizeOverflow)
+		}
 		totalSize += uint64(file.Size)
 	}
 	return totalSize, nil
@@ -48,6 +63,13 @@ func unmarshalMetainfo(metadata []byte) (info *metainfo.Info, err error) {
 
 // Check the info dictionary
 func validateInfo(info *metainfo.Info) error {
+	// First check: without a v1 representation the pipeline below (which
+	// reads info.Length/info.Files) would extract a wrong, zero-size file
+	// list from v2-only metadata. See the v2/hybrid audit in the task 03
+	// implementation report.
+	if info.HasV2() && !info.HasV1() {
+		return ErrV2OnlyUnsupported
+	}
 	if len(info.Pieces)%20 != 0 {
 		return errors.New("pieces has invalid length")
 	}
