@@ -95,8 +95,17 @@ func decodePrefix(payload []byte, limits Limits) ([]File, error) {
 			return nil, fmt.Errorf("file %d size: %w", i, ErrOverflow)
 		}
 
+		// Complete reconstructed path bound (spec §5): shared and suffix
+		// are bounded relative to the previous path and the payload, but
+		// their concatenation is what the per-path limit applies to.
+		pathLen := uint64(shared) + uint64(len(suffix))
+		if pathLen > uint64(limits.MaxPathBytes) {
+			return nil, &LimitError{
+				Limit: LimitPathBytes, Actual: pathLen, Allowed: uint64(limits.MaxPathBytes),
+			}
+		}
 		path := prev[:shared] + suffix
-		aggregate += uint64(len(path))
+		aggregate += pathLen
 		if aggregate > uint64(limits.MaxAggregatePathBytes) {
 			return nil, &LimitError{
 				Limit: LimitAggregatePathBytes, Actual: aggregate, Allowed: uint64(limits.MaxAggregatePathBytes),

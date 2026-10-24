@@ -165,15 +165,18 @@ func (d *trieDecoder) node(dirPath string, depth int) ([]File, error) {
 		}
 		prevDir = name
 
-		// Every path in this subtree carries the child prefix, so charge the
-		// aggregate budget once per directory.
-		childPath := dirPath + name + "/"
-		d.aggregate += uint64(len(childPath))
-		if d.aggregate > uint64(d.limits.MaxAggregatePathBytes) {
+		// Complete directory-path bound: every file below this node
+		// reconstructs dirPath + name + "/" + basename — strictly longer —
+		// so an over-limit directory prefix cannot carry valid files (spec
+		// §5 bounds full paths, not components). Directory prefixes are
+		// structural and carry no aggregate budget of their own.
+		childLen := uint64(len(dirPath)) + nameLen + 1
+		if childLen > uint64(d.limits.MaxPathBytes) {
 			return nil, &LimitError{
-				Limit: LimitAggregatePathBytes, Actual: d.aggregate, Allowed: uint64(d.limits.MaxAggregatePathBytes),
+				Limit: LimitPathBytes, Actual: childLen, Allowed: uint64(d.limits.MaxPathBytes),
 			}
 		}
+		childPath := dirPath + name + "/"
 		childFiles, err := d.node(childPath, depth+1)
 		if err != nil {
 			return nil, err
@@ -221,8 +224,18 @@ func (d *trieDecoder) node(dirPath string, depth int) ([]File, error) {
 			return nil, fmt.Errorf("file %d size: %w", i, ErrOverflow)
 		}
 
+		// Complete reconstructed path bound (spec §5): components are
+		// bounded individually, but their concatenation is what the
+		// per-path limit applies to. The aggregate budget charges each
+		// reconstructed full file path exactly once.
+		pathLen := uint64(len(dirPath)) + baseLen
+		if pathLen > uint64(d.limits.MaxPathBytes) {
+			return nil, &LimitError{
+				Limit: LimitPathBytes, Actual: pathLen, Allowed: uint64(d.limits.MaxPathBytes),
+			}
+		}
 		path := dirPath + base
-		d.aggregate += uint64(len(path))
+		d.aggregate += pathLen
 		if d.aggregate > uint64(d.limits.MaxAggregatePathBytes) {
 			return nil, &LimitError{
 				Limit: LimitAggregatePathBytes, Actual: d.aggregate, Allowed: uint64(d.limits.MaxAggregatePathBytes),
