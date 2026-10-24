@@ -140,9 +140,11 @@ func TestAuditHybridLayouts(t *testing.T) {
 			PieceLength: 16384, Pieces: make([]byte, 40), Name: "hybridpad", MetaVersion: 2,
 			Files: []metainfo.FileInfo{
 				{Length: 1000, Path: []string{"a"}},
-				{Length: 15362, Path: []string{".padding"},
+				// Fills the piece remainder after "a" exactly (BEP 47).
+				{Length: 15384, Path: []string{".padding"},
 					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}},
 				{Length: 2000, Path: []string{"b"}},
+				// Trailing filler for the remainder left by "b".
 				{Length: 14384, Path: []string{".padding"},
 					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}},
 			},
@@ -163,22 +165,53 @@ func TestAuditHybridLayouts(t *testing.T) {
 		}
 	})
 
+	// The final real file may end unaligned without a trailing filler: BEP 47
+	// does not require padding the last piece.
+	t.Run("unaligned last file without trailing filler is accepted", func(t *testing.T) {
+		t.Parallel()
+
+		raw := auditInfo(t, &metainfo.Info{
+			PieceLength: 16384, Pieces: make([]byte, 40), Name: "hybridtail", MetaVersion: 2,
+			Files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				{Length: 15384, Path: []string{".padding"},
+					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}},
+				{Length: 2000, Path: []string{"b"}},
+			},
+			FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
+				"a": {File: metainfo.FileTreeFile{Length: 1000}},
+				"b": {File: metainfo.FileTreeFile{Length: 2000}},
+			}},
+		})
+
+		md, err := auditExtract(t, raw)
+		if err != nil {
+			t.Fatalf("extractMetadata() error = %v", err)
+		}
+		if md.TotalSize != 3000 || !reflect.DeepEqual(md.Files, []persistence.File{
+			{Size: 1000, Path: "a"}, {Size: 2000, Path: "b"},
+		}) {
+			t.Errorf("extractMetadata() = total %d files %#v", md.TotalSize, md.Files)
+		}
+	})
+
 	// Padding is identified by the attr, never the name: a real file named
 	// ".padding" persists, and an attr-p file under an ordinary name is
-	// excluded.
+	// excluded. The attr-p entry sits where BEP 47 requires a filler: after
+	// the unaligned-ending ".padding" file.
 	t.Run("padding identified by attr not name", func(t *testing.T) {
 		t.Parallel()
 
 		raw := auditInfo(t, &metainfo.Info{
-			PieceLength: 16384, Pieces: make([]byte, 60), Name: "attrpadding", MetaVersion: 2,
+			PieceLength: 16384, Pieces: make([]byte, 40), Name: "attrpadding", MetaVersion: 2,
 			Files: []metainfo.FileInfo{
-				{Length: 16384, Path: []string{".padding"}}, // real file, no attr
-				{Length: 16384, Path: []string{"hide.bin"},
+				{Length: 1000, Path: []string{".padding"}}, // real file, no attr
+				{Length: 15384, Path: []string{"hide.bin"},
 					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}}, // padding by attr
 				{Length: 16384, Path: []string{"b"}},
 			},
 			FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
-				".padding": {File: metainfo.FileTreeFile{Length: 16384}},
+				".padding": {File: metainfo.FileTreeFile{Length: 1000}},
 				"b":        {File: metainfo.FileTreeFile{Length: 16384}},
 			}},
 		})
@@ -187,8 +220,8 @@ func TestAuditHybridLayouts(t *testing.T) {
 		if err != nil {
 			t.Fatalf("extractMetadata() error = %v", err)
 		}
-		if md.TotalSize != 32768 || !reflect.DeepEqual(md.Files, []persistence.File{
-			{Size: 16384, Path: ".padding"}, {Size: 16384, Path: "b"},
+		if md.TotalSize != 17384 || !reflect.DeepEqual(md.Files, []persistence.File{
+			{Size: 1000, Path: ".padding"}, {Size: 16384, Path: "b"},
 		}) {
 			t.Errorf("extractMetadata() = total %d files %#v", md.TotalSize, md.Files)
 		}
@@ -298,6 +331,59 @@ func TestAuditHybridRejections(t *testing.T) {
 			tree: tree(map[string]int64{
 				"a": 1000, "b": 2000, "c": 16384,
 			}),
+		},
+		{
+			// The review's fixture: a second unaligned real file with the
+			// required filler missing — the last real file is not exempt
+			// from start alignment.
+			name:   "second real file misaligned without padding",
+			pieces: 1,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				{Length: 2000, Path: []string{"b"}}, // starts at 1000: misaligned
+			},
+			tree: tree(map[string]int64{"a": 1000, "b": 2000}),
+		},
+		{
+			name:   "padding entry at an aligned position",
+			pieces: 3,
+			files: []metainfo.FileInfo{
+				{Length: 16384, Path: []string{"a"}}, // ends aligned: no filler needed
+				padding(16384),
+				{Length: 16384, Path: []string{"b"}},
+			},
+			tree: tree(map[string]int64{"a": 16384, "b": 16384}),
+		},
+		{
+			name:   "consecutive padding entries",
+			pieces: 3,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				padding(15384), // exact filler
+				padding(16384), // at an aligned position: misplaced
+				{Length: 16384, Path: []string{"b"}},
+			},
+			tree: tree(map[string]int64{"a": 1000, "b": 16384}),
+		},
+		{
+			name:   "trailing filler of the wrong size",
+			pieces: 2,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				padding(15384),
+				{Length: 2000, Path: []string{"b"}}, // leaves a 14384-byte remainder
+				padding(100),
+			},
+			tree: tree(map[string]int64{"a": 1000, "b": 2000}),
+		},
+		{
+			name:   "leading padding entry",
+			pieces: 2,
+			files: []metainfo.FileInfo{
+				padding(16384), // nothing precedes it to fill
+				{Length: 16384, Path: []string{"b"}},
+			},
+			tree: tree(map[string]int64{"b": 16384}),
 		},
 	}
 

@@ -39,8 +39,10 @@ func isPaddingFile(fi *metainfo.FileInfo) bool {
 //     v1 layer actually ships;
 //  2. the v1 real files (padding excluded) must be exactly the v2 file
 //     tree's files — same paths, sizes and order;
-//  3. every real file except the last must start at a piece boundary, the
-//     property BEP 52 padding exists to provide.
+//  3. every real file must start at a piece boundary — including the last;
+//     a BEP 47 padding entry is accepted only where a filler is required:
+//     directly after a real file that ended mid-piece, filling the exact
+//     remainder of that piece.
 //
 // The v2 tree walk (NumPieces) is deliberately not used to validate v1
 // piece hashes: it would count per-file piece spans and reject any layout
@@ -105,17 +107,26 @@ func validateHybridTree(info *metainfo.Info) error {
 		}
 	}
 
-	// Alignment: offsets accumulate over all v1 entries (padding included);
-	// each real file except the last must begin on a piece boundary.
-	realRemaining := len(real)
+	// Alignment and padding placement (BEP 52 with BEP 47 padding): every
+	// real file — including the last — must begin on a piece boundary. A
+	// padding entry is valid only as the exact filler directly after a real
+	// file that ended mid-piece; the final entry may end unaligned without
+	// a trailing filler.
+	filled := false // the previous real file ended mid-piece, no filler yet
 	var offset int64
 	for i := range info.Files {
 		f := &info.Files[i]
-		if !isPaddingFile(f) {
-			realRemaining--
-			if realRemaining > 0 && offset%info.PieceLength != 0 {
+		rem := offset % info.PieceLength
+		if isPaddingFile(f) {
+			if !filled || f.Length != info.PieceLength-rem {
 				return errHybridMismatch
 			}
+			filled = false
+		} else {
+			if rem != 0 {
+				return errHybridMismatch
+			}
+			filled = f.Length%info.PieceLength != 0
 		}
 		if math.MaxInt64-offset < f.Length {
 			return fmt.Errorf("hybrid v1 file lengths: %w", ErrTotalSizeOverflow)
