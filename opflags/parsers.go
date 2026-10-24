@@ -26,7 +26,7 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		return "", err
 	}
 
-	active := parser.Command.Active
+	active := parser.Active
 	if active == nil {
 		return "", errors.New("no command given; expected one of: crawl, web, migrate (see --help)")
 	}

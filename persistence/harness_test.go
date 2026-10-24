@@ -46,7 +46,6 @@ type testCluster struct {
 	adminDSN string // URL to the maintenance database ("postgres")
 	external bool   // DSN from the environment: never stop the server
 	stop     func() // nil for external servers
-	mu       sync.Mutex
 }
 
 var (

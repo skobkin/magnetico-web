@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/skobkin/magnetico-web/codec"
 )
 
