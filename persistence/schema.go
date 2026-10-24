@@ -87,13 +87,14 @@ var expectedIndexes = []string{
 // state. Every query is SELECT-only; taking the inventory never writes
 // anything, so a refusal leaves the database byte-identical.
 type catalogInventory struct {
-	schemas      []string // non-system schema names
-	familyTables []string // qualified `schema.table` for torrents/files/torrent_file_blobs/schema_version
-	partitioned  []string // qualified names of partitioned tables among the family
-	indexes      []string // index names inside magneticod
-	torrentCols  []string // columns of magneticod.torrents (nil if absent)
-	versionRows  []int64  // rows of magneticod.schema_version (nil if table absent)
-	trgm         bool     // pg_trgm installed
+	schemas          []string // non-system schema names
+	familyTables     []string // qualified `schema.table` for torrents/files/torrent_file_blobs/schema_version
+	magneticodTables []string // every table name inside magneticod, known or not
+	partitioned      []string // qualified names of partitioned tables among the family
+	indexes          []string // index names inside magneticod
+	torrentCols      []string // columns of magneticod.torrents (nil if absent)
+	versionRows      []int64  // rows of magneticod.schema_version (nil if table absent)
+	trgm             bool     // pg_trgm installed
 }
 
 type inventoryState int
@@ -174,13 +175,13 @@ func (inv *catalogInventory) classify() (inventoryState, []string) {
 	}
 
 	// Unknown objects inside our own schema make the state unverifiable.
+	// magneticodTables lists every table in the schema regardless of name,
+	// so foreign tables are visible even though the family-table tracking
+	// is name-filtered for the legacy markers.
 	known := map[string]bool{"torrents": true, "torrent_file_blobs": true, "schema_version": true}
-	for _, qt := range inv.familyTables {
-		if strings.HasPrefix(qt, "magneticod.") {
-			name := strings.TrimPrefix(qt, "magneticod.")
-			if !known[name] {
-				details = append(details, "unexpected table magneticod."+name)
-			}
+	for _, name := range inv.magneticodTables {
+		if !known[name] {
+			details = append(details, "unexpected table magneticod."+name)
 		}
 	}
 	for _, index := range inv.indexes {
@@ -262,7 +263,8 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE c.relkind IN ('r','p')
           AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
-          AND c.relname IN ('torrents','files','torrent_file_blobs','schema_version')
+          AND (n.nspname = 'magneticod'
+               OR c.relname IN ('torrents','files','torrent_file_blobs','schema_version'))
         ORDER BY 1, 2`)
 	if err != nil {
 		return nil, err
@@ -274,9 +276,15 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
 			return nil, err
 		}
 		qt := schema + "." + name
-		inv.familyTables = append(inv.familyTables, qt)
-		if kind == "p" {
-			inv.partitioned = append(inv.partitioned, qt)
+		if schema == "magneticod" {
+			inv.magneticodTables = append(inv.magneticodTables, name)
+		}
+		switch name {
+		case "torrents", "files", "torrent_file_blobs", "schema_version":
+			inv.familyTables = append(inv.familyTables, qt)
+			if kind == "p" {
+				inv.partitioned = append(inv.partitioned, qt)
+			}
 		}
 	}
 	rows.Close()

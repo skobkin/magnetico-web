@@ -341,6 +341,84 @@ func TestInitSchemaRefusesPartialState(t *testing.T) {
 	}
 }
 
+// An unknown table inside magneticod makes the schema state unverifiable:
+// both InitSchema and the startup verification refuse it, and the refusal
+// leaves the database byte-identical.
+func TestUnknownTableInsideMagneticodRefused(t *testing.T) {
+	t.Parallel()
+
+	dsn := integrationCluster(t).testDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := InitSchema(ctx, dsn); err != nil {
+		t.Fatalf("InitSchema() error = %v", err)
+	}
+
+	conn := openConn(t, dsn)
+	execCtx, execCancel := context.WithTimeout(context.Background(), dbOpTimeout)
+	defer execCancel()
+	if _, err := conn.Exec(execCtx,
+		`CREATE TABLE magneticod.operator_notes (id INTEGER PRIMARY KEY, note TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create foreign table: %v", err)
+	}
+	conn.Close(context.Background())
+
+	before := catalogSnapshot(t, dsn)
+
+	initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer initCancel()
+	err := InitSchema(initCtx, dsn)
+	var stateErr *SchemaStateError
+	if !errors.As(err, &stateErr) || !errors.Is(err, ErrUnsupportedSchema) {
+		t.Fatalf("InitSchema() error = %v, want ErrUnsupportedSchema as SchemaStateError", err)
+	}
+	found := false
+	for _, d := range stateErr.Details {
+		if strings.Contains(d, "unexpected table magneticod.operator_notes") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("refusal details %q do not name the unexpected table", stateErr.Details)
+	}
+
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer dbCancel()
+	if _, dbErr := MakeDatabase(dbCtx, dsn); !errors.Is(dbErr, ErrUnsupportedSchema) {
+		t.Errorf("MakeDatabase() error = %v, want ErrUnsupportedSchema", dbErr)
+	}
+
+	if got := catalogSnapshot(t, dsn); got != before {
+		t.Error("refusal changed the catalog")
+	}
+}
+
+// Unrelated schemas coexist with a fresh magneticod database; only
+// magneticod itself is held to the expected inventory.
+func TestUnrelatedSchemaCoexists(t *testing.T) {
+	t.Parallel()
+
+	dsn := integrationCluster(t).testDatabase(t)
+
+	conn := openConn(t, dsn)
+	ctx, cancel := context.WithTimeout(context.Background(), dbOpTimeout)
+	defer cancel()
+	if _, err := conn.Exec(ctx, `CREATE SCHEMA users`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx,
+		`CREATE TABLE users.preferences (id INTEGER PRIMARY KEY, pref TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close(context.Background())
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel2()
+	if err := InitSchema(ctx2, dsn); err != nil {
+		t.Fatalf("InitSchema() error = %v, want an unrelated schema to be ignored", err)
+	}
+}
+
 func TestMakeDatabaseStartupVerification(t *testing.T) {
 	t.Parallel()
 
