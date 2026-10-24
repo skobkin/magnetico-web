@@ -132,6 +132,58 @@ func TestDecodeTrieFullPathLimit(t *testing.T) {
 			t.Errorf("Decode() error = %v, want LimitError(%s)", err, LimitPathBytes)
 		}
 	})
+
+	t.Run("directory prefix exactly at the cap is accepted", func(t *testing.T) {
+		t.Parallel()
+
+		// The descent bound is inclusive: dirPath "abcdefg/" reconstructs
+		// exactly 8 bytes and the node's own files (none) are never checked
+		// against it.
+		payload := bcat(bu(1),
+			bu(1), bu(7), bs("abcdefg"), bu(0), bu(0),
+			bu(1), bu(1), bs("x"), bu(1))
+		if _, err := Decode(trieBlob(t, payload), limits); err != nil {
+			t.Errorf("Decode() error = %v, want acceptance at the boundary", err)
+		}
+	})
+
+	t.Run("a file under an exact-cap directory is rejected", func(t *testing.T) {
+		t.Parallel()
+
+		// dirPath "abcdefg/" is exactly at the cap, so no basename can
+		// follow beneath it: the file check fires before concatenation.
+		payload := bcat(bu(1),
+			bu(1), bu(7), bs("abcdefg"), bu(0), bu(1),
+			bu(1), bs("x"), bu(1),
+			bu(0))
+		_, err := Decode(trieBlob(t, payload), limits)
+		var lerr *LimitError
+		if !errors.As(err, &lerr) || lerr.Limit != LimitPathBytes {
+			t.Errorf("Decode() error = %v, want LimitError(%s)", err, LimitPathBytes)
+		}
+	})
+}
+
+// A tight per-path cap round-trips through the trie: paths at and under the
+// boundary survive encode and decode unchanged.
+func TestTrieTightPathCapRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	limits := DefaultLimits()
+	limits.MaxPathBytes = 16
+	files := []File{
+		{Path: "abcdefgh/mid/nm", Size: 1},  // 15 bytes under a 9- and 13-byte dir prefix
+		{Path: "abcdefghijklmnop", Size: 2}, // exactly the cap
+	}
+
+	raw, sel, err := encodeWith(DirectoryTrie, files, limits)
+	if err != nil {
+		t.Fatalf("encodeWith(trie) error = %v", err)
+	}
+	if sel.Serializer != DirectoryTrie {
+		t.Fatalf("selection = %+v, want the trie serializer", sel)
+	}
+	decodeRoundTrip(t, raw, files, limits)
 }
 
 func TestDecodeTrieAggregateChargedPerFilePath(t *testing.T) {

@@ -434,6 +434,39 @@ func TestSchemaStateDetailsSurfaced(t *testing.T) {
 		}
 	})
 
+	t.Run("wrapped schema-state errors surface details too", func(t *testing.T) {
+		t.Parallel()
+
+		// errors.As unwraps: a SchemaStateError wrapped by an upper layer
+		// still contributes its bounded detail list.
+		stateErr := &persistence.SchemaStateError{
+			Err:     persistence.ErrUnsupportedSchema,
+			Details: []string{"unexpected table magneticod.stray"},
+		}
+		wrapped := fmt.Errorf("startup verification failed: %w", stateErr)
+		msg := databaseOpenFailureMessage("postgres://user:hunter2@localhost/db", wrapped)
+
+		if strings.Contains(msg, "hunter2") {
+			t.Errorf("message leaks credentials: %s", msg)
+		}
+		if !strings.Contains(msg, strconv.Quote("unexpected table magneticod.stray")) {
+			t.Errorf("the wrapped error's details did not surface: %s", msg)
+		}
+	})
+
+	t.Run("schema-init composer keeps its exact non-schema shape", func(t *testing.T) {
+		t.Parallel()
+
+		wrapped := fmt.Errorf("connect failed: %w", persistence.ErrStorageIO)
+		raw := "postgres://localhost/db"
+		msg := schemaInitFailureMessage(raw, wrapped)
+		want := fmt.Sprintf("Could not initialize the database schema on %s. %s",
+			redactDatabaseURL(raw), controlledErrorDetail(wrapped))
+		if msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
+	})
+
 	t.Run("non schema-state errors carry no details", func(t *testing.T) {
 		t.Parallel()
 

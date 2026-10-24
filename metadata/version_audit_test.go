@@ -377,6 +377,20 @@ func TestAuditHybridRejections(t *testing.T) {
 			tree: tree(map[string]int64{"a": 1000, "b": 2000}),
 		},
 		{
+			// An oversized trailing filler must be rejected even though the
+			// declared total still lands exactly on a piece boundary — only
+			// exact-size fillers are canonical.
+			name:   "oversized trailing filler",
+			pieces: 3,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				padding(15384),
+				{Length: 2000, Path: []string{"b"}}, // leaves a 14384-byte remainder
+				padding(30768),                      // overshoots; total stays 49152 = 3 pieces
+			},
+			tree: tree(map[string]int64{"a": 1000, "b": 2000}),
+		},
+		{
 			name:   "leading padding entry",
 			pieces: 2,
 			files: []metainfo.FileInfo{

@@ -79,6 +79,18 @@ func TestDecodeTrieRejectsMalformedStructures(t *testing.T) {
 			wantErr: ErrNonCanonicalOrder,
 		},
 		{
+			name: "nested-node equal basenames with decreasing sizes",
+			payload: bcat(bu(2), // global count
+				bu(1),          // root subdirs
+				bu(1), bs("d"), // subdir d
+				bu(0), // d: no subdirs
+				bu(2), // d: two files
+				bu(1), bs("a"), bu(2),
+				bu(1), bs("a"), bu(1), // decreasing: non-canonical
+				bu(0)), // root files
+			wantErr: ErrNonCanonicalOrder,
+		},
+		{
 			name:    "separator in subdirectory component",
 			payload: bcat(bu(1), bu(1), bu(3), bs("a/b"), bu(0), bu(0), bu(0)),
 			wantErr: ErrPathComponentSeparator,
@@ -193,23 +205,35 @@ func TestDecodeTrieDuplicateBasenamesAreValid(t *testing.T) {
 	// Equal basenames with non-decreasing sizes are canonical (vector D
 	// semantics apply per node); identical (basename, size) duplicates stay
 	// valid too.
-	for name, payload := range map[string][]byte{
-		"increasing sizes": bcat(bu(2), bu(0), bu(2),
-			bu(1), bs("a"), bu(1),
-			bu(1), bs("a"), bu(2)),
-		"identical duplicates": bcat(bu(2), bu(0), bu(2),
-			bu(1), bs("a"), bu(1),
-			bu(1), bs("a"), bu(1)),
-	} {
-		t.Run(name, func(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+		want    []File
+	}{
+		{
+			name: "increasing sizes",
+			payload: bcat(bu(2), bu(0), bu(2),
+				bu(1), bs("a"), bu(1),
+				bu(1), bs("a"), bu(2)),
+			want: []File{{Path: "a", Size: 1}, {Path: "a", Size: 2}},
+		},
+		{
+			name: "identical duplicates",
+			payload: bcat(bu(2), bu(0), bu(2),
+				bu(1), bs("a"), bu(1),
+				bu(1), bs("a"), bu(1)),
+			want: []File{{Path: "a", Size: 1}, {Path: "a", Size: 1}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := Decode(trieBlob(t, payload), DefaultLimits())
+			got, err := Decode(trieBlob(t, tt.payload), DefaultLimits())
 			if err != nil {
 				t.Fatalf("Decode() error = %v", err)
 			}
-			if !reflect.DeepEqual(got, []File{{Path: "a", Size: 1}, {Path: "a", Size: 2}}) &&
-				!reflect.DeepEqual(got, []File{{Path: "a", Size: 1}, {Path: "a", Size: 1}}) {
-				t.Errorf("Decode() = %#v", got)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Decode() = %#v, want %#v", got, tt.want)
 			}
 		})
 	}

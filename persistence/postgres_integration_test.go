@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -478,7 +479,7 @@ func TestQueryTorrents(t *testing.T) {
 	if _, err := store.QueryTorrents(ctx, TorrentQuery{MaxTuples: 0}); !errors.Is(err, ErrInvalidMetadata) {
 		t.Errorf("MaxTuples=0 error = %v, want ErrInvalidMetadata", err)
 	}
-	if _, err := store.QueryTorrents(ctx, TorrentQuery{MaxTuples: 1 << 31}); !errors.Is(err, ErrInvalidMetadata) {
+	if _, err := store.QueryTorrents(ctx, TorrentQuery{MaxTuples: math.MaxInt32 + 1}); !errors.Is(err, ErrInvalidMetadata) {
 		t.Errorf("MaxTuples>MaxInt32 error = %v, want ErrInvalidMetadata (must not truncate)", err)
 	}
 	if _, err := store.QueryTorrents(ctx, TorrentQuery{MaxTuples: 5, OrderBy: TorrentOrder(99)}); !errors.Is(err, ErrInvalidMetadata) {
