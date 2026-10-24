@@ -160,6 +160,20 @@ func warnInvalidMetadata(err error) {
 	log.Printf("dropping an invalid metadata record: %s", controlledErrorDetail(err))
 }
 
+// dropInvalidRecord handles a rejected metadata record: the throttled
+// warning plus the per-cause metric (the UTF-8/NUL bucket keeps its
+// dedicated counter). Used for every ErrInvalidMetadata drop, whether the
+// record was rejected at the conversion boundary or by AddTorrent; it is
+// never a database failure.
+func dropInvalidRecord(err error) {
+	warnInvalidMetadata(err)
+	if errors.Is(err, persistence.ErrInvalidTextEncoding) {
+		stats.GetInstance().IncNonUTF8()
+	} else {
+		stats.GetInstance().IncInvalidMetadata()
+	}
+}
+
 func runCrawl(opFlags *opflags.CrawlOptions) {
 	// Handle Ctrl-C and SIGTERM (the timeout-based smoke harness sends
 	// SIGTERM) through a context: on cancellation the event loop stops and
@@ -234,7 +248,7 @@ func runCrawl(opFlags *opflags.CrawlOptions) {
 		case md := <-metadataSink.Drain():
 			torrent, err := torrentFromMetadata(&md)
 			if err != nil {
-				warnInvalidMetadata(err)
+				dropInvalidRecord(err)
 				continue
 			}
 			created, _, err := store.AddTorrent(ctx, torrent, md.Files)
@@ -246,14 +260,8 @@ func runCrawl(opFlags *opflags.CrawlOptions) {
 			case errors.Is(err, persistence.ErrInvalidMetadata):
 				// Invalid metadata — including codec encode failures from
 				// bad input — is dropped with a throttled warning and a
-				// per-cause metric; it is never a database failure. The
-				// UTF-8/NUL bucket keeps its dedicated counter.
-				warnInvalidMetadata(err)
-				if errors.Is(err, persistence.ErrInvalidTextEncoding) {
-					go stats.GetInstance().IncNonUTF8()
-				} else {
-					go stats.GetInstance().IncInvalidMetadata()
-				}
+				// per-cause metric; it is never a database failure.
+				dropInvalidRecord(err)
 			default:
 				go stats.GetInstance().IncDBError(true)
 			}

@@ -295,6 +295,11 @@ func (s *pgxStore) QueryTorrents(ctx context.Context, query TorrentQuery) ([]Tor
 	if query.MaxTuples <= 0 {
 		return nil, fmt.Errorf("%w: MaxTuples must be positive, got %d", ErrInvalidMetadata, query.MaxTuples)
 	}
+	// The limit travels as an int32 bind parameter; an int that does not fit
+	// must be rejected, not silently truncated.
+	if query.MaxTuples > math.MaxInt32 {
+		return nil, fmt.Errorf("%w: MaxTuples %d exceeds the int32 parameter limit", ErrInvalidMetadata, query.MaxTuples)
+	}
 	order := ""
 	switch query.OrderBy {
 	case ByDiscoveredOnDesc:

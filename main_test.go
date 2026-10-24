@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/persistence"
+	"github.com/skobkin/magnetico-web/stats"
 )
 
 func TestRedactDatabaseURL(t *testing.T) {
@@ -317,4 +321,62 @@ func TestDatabaseOpenFailureMessage_UnrestrictedErrorTextNeverLogged(t *testing.
 			}
 		})
 	}
+}
+
+// prometheusCounter reads a counter's current value through the metrics
+// exposition.
+func prometheusCounter(t *testing.T, name string) float64 {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	stats.MakePrometheusHandler()(rec, req)
+
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		if !strings.HasPrefix(line, name+" ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			t.Fatalf("malformed metrics line %q", line)
+		}
+		v, err := strconv.ParseFloat(fields[1], 64)
+		if err != nil {
+			t.Fatalf("counter %s value %q: %v", name, fields[1], err)
+		}
+		return v
+	}
+	return 0
+}
+
+// TestDropInvalidRecordMetrics pins the per-cause metric routing of dropped
+// metadata records: the UTF-8/NUL bucket keeps its dedicated counter and
+// every other invalid-metadata cause — including the uint64→int64
+// conversion-boundary rejections — increments magnetico_invalid_metadata.
+func TestDropInvalidRecordMetrics(t *testing.T) {
+	t.Parallel()
+
+	t.Run("conversion-boundary rejection increments invalid_metadata", func(t *testing.T) {
+		before := prometheusCounter(t, "magnetico_invalid_metadata")
+		dropInvalidRecord(fmt.Errorf("%w: total size exceeds the maximum supported value",
+			persistence.ErrInvalidMetadata))
+		if got := prometheusCounter(t, "magnetico_invalid_metadata"); got != before+1 {
+			t.Errorf("magnetico_invalid_metadata = %v after one drop, want %v", got, before+1)
+		}
+	})
+
+	t.Run("text-encoding rejection increments non_utf8 only", func(t *testing.T) {
+		beforeInvalid := prometheusCounter(t, "magnetico_invalid_metadata")
+		beforeUTF8 := prometheusCounter(t, "magnetico_non_utf8")
+		// Production shape: the encoding cause travels dual-wrapped beneath
+		// ErrInvalidMetadata.
+		dropInvalidRecord(fmt.Errorf("%w: %w",
+			persistence.ErrInvalidMetadata, persistence.ErrInvalidTextEncoding))
+		if got := prometheusCounter(t, "magnetico_non_utf8"); got != beforeUTF8+1 {
+			t.Errorf("magnetico_non_utf8 = %v after one drop, want %v", got, beforeUTF8+1)
+		}
+		if got := prometheusCounter(t, "magnetico_invalid_metadata"); got != beforeInvalid {
+			t.Errorf("magnetico_invalid_metadata = %v, want it untouched at %v", got, beforeInvalid)
+		}
+	})
 }
