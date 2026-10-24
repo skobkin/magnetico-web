@@ -1,21 +1,22 @@
 package persistence
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
 
 // TestMakeDatabase_FailClosed is the permanent guard of the fail-closed
-// storage contract: until phase 3 implements the new PostgreSQL storage,
-// MakeDatabase must refuse every scheme and never return a usable Database,
-// so that no code path can create or migrate a legacy schema.
+// storage contract: MakeDatabase supports only postgres/postgresql schemes
+// and must refuse every other scheme with ErrStorageNotImplemented, never
+// returning a usable Store, so that no code path can create or migrate a
+// legacy schema through other backends.
 func TestMakeDatabase_FailClosed(t *testing.T) {
 	t.Parallel()
 
 	rawURLs := []string{
 		"sqlite3:///tmp/makedatabase_failclosed.db?cache=shared&mode=memory",
 		"sqlite:///tmp/makedatabase_failclosed.db?cache=shared&mode=memory",
-		"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
 		"cockroach://magnetico:magnetico@localhost:26257/magnetico",
 		"zmq://127.0.0.1:1234",
 		"zeromq://127.0.0.1:1234",
@@ -29,7 +30,7 @@ func TestMakeDatabase_FailClosed(t *testing.T) {
 	}
 
 	for _, rawURL := range rawURLs {
-		db, err := MakeDatabase(rawURL)
+		db, err := MakeDatabase(context.Background(), rawURL)
 		if !errors.Is(err, ErrStorageNotImplemented) {
 			t.Errorf("Expected ErrStorageNotImplemented for URL %q, got: %v", rawURL, err)
 		}

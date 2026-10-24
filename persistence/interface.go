@@ -16,8 +16,6 @@ package persistence
 import (
 	"context"
 	"errors"
-	"fmt"
-	"net/url"
 
 	"github.com/skobkin/magnetico-web/codec"
 )
@@ -117,21 +115,15 @@ type Database interface {
 	Close() error
 }
 
-// ErrStorageNotImplemented is returned by MakeDatabase until phase 3 implements
-// the new PostgreSQL storage. It is fail-closed by design: no legacy schema is
+// ErrStorageNotImplemented is returned by MakeDatabase for every
+// non-postgres scheme. It is fail-closed by design: no legacy schema is
 // read, created or migrated.
 var ErrStorageNotImplemented = errors.New(
-	"storage backends are not implemented yet " +
-		"(phase 3, docs/wip/03-storage-persistence.md); refusing to touch any existing database",
+	"storage backends other than postgres/postgresql are not supported " +
+		"(0.8.0 is PostgreSQL-only); refusing to touch any existing database",
 )
 
-// MakeDatabase refuses every database URL until the phase-3 storage
-// implementation exists. It never opens a connection and never performs any
-// schema operation. The scheme is parsed only for diagnostics.
-func MakeDatabase(rawURL string) (Database, error) {
-	scheme := ""
-	if parsed, err := url.Parse(rawURL); err == nil {
-		scheme = parsed.Scheme
-	}
-	return nil, fmt.Errorf("%w (requested scheme %q)", ErrStorageNotImplemented, scheme)
-}
+// ErrStorageNotImplemented is returned by MakeDatabase for every
+// non-postgres scheme (declared in postgres.go together with the new
+// MakeDatabase). It is fail-closed by design: no legacy schema is read,
+// created or migrated.

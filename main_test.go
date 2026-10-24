@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 
+	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -88,17 +91,15 @@ func TestRedactDatabaseURL_NoCredentialMaterial(t *testing.T) {
 func TestDatabaseOpenFailureMessage_SentinelError(t *testing.T) {
 	t.Parallel()
 
-	raw := "postgres://user:hunter2@localhost/db?password=x"
-	_, err := persistence.MakeDatabase(raw)
+	// A non-postgres scheme fails closed without any network activity.
+	raw := "sqlite3:///tmp/failclosed.db"
+	_, err := persistence.MakeDatabase(context.Background(), raw)
 	msg := databaseOpenFailureMessage(raw, err)
 
-	for _, leak := range []string{"hunter2", "user:hunter2@", "password=x"} {
+	for _, leak := range []string{"/tmp/failclosed.db"} {
 		if strings.Contains(msg, leak) {
 			t.Errorf("message leaks %q: %s", leak, msg)
 		}
-	}
-	if !strings.Contains(msg, "postgres://localhost/db") {
-		t.Errorf("message lost the redacted URL: %s", msg)
 	}
 	if !strings.Contains(msg, persistence.ErrStorageNotImplemented.Error()) {
 		t.Errorf("message lost the sentinel's fixed detail: %s", msg)
@@ -120,6 +121,123 @@ func TestDatabaseOpenFailureMessage_WrappedSentinelCarryingCredentials(t *testin
 	// Only the sentinel's own fixed message may surface, never the wrapper's.
 	if !strings.Contains(msg, persistence.ErrStorageNotImplemented.Error()) {
 		t.Errorf("message must contain the sentinel's fixed detail: %s", msg)
+	}
+}
+
+func TestControlledErrorDetail_NewSentinels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "missing extension",
+			err:  persistence.ErrMissingExtension,
+			want: persistence.ErrMissingExtension.Error(),
+		},
+		{
+			name: "unsupported schema",
+			err:  persistence.ErrUnsupportedSchema,
+			want: persistence.ErrUnsupportedSchema.Error(),
+		},
+		{
+			name: "legacy schema via SchemaStateError",
+			err: &persistence.SchemaStateError{
+				Err:     persistence.ErrLegacySchema,
+				Details: []string{"public.files", "magneticod.torrents without file_count column"},
+			},
+			want: persistence.ErrLegacySchema.Error(),
+		},
+		{
+			name: "invalid metadata",
+			err:  persistence.ErrInvalidMetadata,
+			want: persistence.ErrInvalidMetadata.Error(),
+		},
+		{
+			name: "storage I/O",
+			err:  persistence.ErrStorageIO,
+			want: persistence.ErrStorageIO.Error(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := controlledErrorDetail(tt.err); got != tt.want {
+				t.Errorf("controlledErrorDetail() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestControlledErrorDetail_WrappedCredentialsNeverSurface pins the rule on
+// the new sentinels: a wrapper that embeds credentials around a recognized
+// sentinel contributes only the sentinel's fixed message.
+func TestControlledErrorDetail_WrappedCredentialsNeverSurface(t *testing.T) {
+	t.Parallel()
+
+	dsn := "postgres://user:hunter2@host/db?password=secret"
+	wrapped := fmt.Errorf("%w: failed connecting to %s", persistence.ErrStorageIO, dsn)
+	got := controlledErrorDetail(wrapped)
+
+	if got != persistence.ErrStorageIO.Error() {
+		t.Errorf("controlledErrorDetail() = %q, want the fixed sentinel text", got)
+	}
+	for _, leak := range []string{"hunter2", "secret", dsn, "failed connecting"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("controlledErrorDetail() leaks %q: %s", leak, got)
+		}
+	}
+}
+
+// TestTorrentFromMetadata_OversizedTotalSizeRejected is the uint64→int64
+// conversion-boundary regression: an oversized uint64 total size must be
+// rejected before any conversion or Torrent construction, so it can never
+// wrap into a negative value and reach persistence.
+func TestTorrentFromMetadata_OversizedTotalSizeRejected(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		totalSize uint64
+		wantErr   bool
+		wantTotal int64
+	}{
+		{name: "max int64 is representable", totalSize: math.MaxInt64, wantTotal: math.MaxInt64},
+		{name: "max int64 + 1 wraps — must be rejected", totalSize: math.MaxInt64 + 1, wantErr: true},
+		{name: "1<<63 + 1 wraps — must be rejected", totalSize: 1<<63 + 1, wantErr: true},
+		{name: "max uint64 must be rejected", totalSize: math.MaxUint64, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			md := metadata.Metadata{
+				InfoHash:     []byte("01234567890123456789"),
+				Name:         "release",
+				TotalSize:    tt.totalSize,
+				DiscoveredOn: 1700000000,
+			}
+			got, err := torrentFromMetadata(&md)
+			if tt.wantErr {
+				if !errors.Is(err, persistence.ErrInvalidMetadata) {
+					t.Fatalf("torrentFromMetadata() error = %v, want ErrInvalidMetadata", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("torrentFromMetadata() error = %v", err)
+			}
+			if got.TotalSize != tt.wantTotal {
+				t.Errorf("Torrent.TotalSize = %d, want %d", got.TotalSize, tt.wantTotal)
+			}
+			if got.TotalSize < 0 {
+				t.Errorf("Torrent.TotalSize = %d wrapped negative", got.TotalSize)
+			}
+		})
 	}
 }
 
