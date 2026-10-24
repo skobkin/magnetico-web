@@ -42,7 +42,7 @@ func validateIngest(meta Torrent, files []File, limits codec.Limits) error {
 			ErrInvalidMetadata, meta.DiscoveredOn)
 	}
 	if !utf8.ValidString(meta.Name) || strings.ContainsRune(meta.Name, '\x00') {
-		return fmt.Errorf("%w: torrent name is not NUL-free UTF-8", ErrInvalidMetadata)
+		return fmt.Errorf("%w: %w: torrent name", ErrInvalidMetadata, ErrInvalidTextEncoding)
 	}
 
 	if len(files) == 0 {
@@ -59,7 +59,7 @@ func validateIngest(meta Torrent, files []File, limits codec.Limits) error {
 			return fmt.Errorf("%w: file size is negative", ErrInvalidMetadata)
 		}
 		if !utf8.ValidString(f.Path) || strings.ContainsRune(f.Path, '\x00') {
-			return fmt.Errorf("%w: file path is not NUL-free UTF-8", ErrInvalidMetadata)
+			return fmt.Errorf("%w: %w: file path", ErrInvalidMetadata, ErrInvalidTextEncoding)
 		}
 		if sum > math.MaxInt64-f.Size {
 			return fmt.Errorf("%w: file sizes overflow the total size", ErrInvalidMetadata)

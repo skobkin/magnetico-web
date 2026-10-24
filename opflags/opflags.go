@@ -14,9 +14,21 @@ type OpFlags struct {
 	// `magnetico --config-file-path config.yml crawl`.
 	ConfigFilePath string `long:"config-file-path" description:"Configuration YAML file path. If not filled in, it will default to disabled." default:""`
 
-	Crawl     CrawlOptions `command:"crawl" description:"Run the DHT indexer (storage is not implemented yet, it fails closed)."`
-	Web       StubOptions  `command:"web" description:"Reserved for the future authenticated web UI (not implemented yet)."`
-	Migration StubOptions  `command:"migrate" description:"Reserved for the offline legacy database migrator (not implemented yet)."`
+	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT indexer (storage is not implemented yet, it fails closed)."`
+	Web     StubOptions    `command:"web" description:"Reserved for the future authenticated web UI (not implemented yet)."`
+	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
+}
+
+// MigrateOptions carries the subcommands of `migrate`.
+type MigrateOptions struct {
+	SchemaInit SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
+}
+
+// SchemaInitOptions carries the options of `migrate schema-init`. The DSN is
+// configurable via CLI flag, environment and config file so that no
+// password-bearing URL is forced onto the command line.
+type SchemaInitOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to initialize." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
 }
 
 // StubOptions carries the options of reserved, not-yet-implemented commands.

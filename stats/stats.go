@@ -26,6 +26,8 @@ type Stats struct {
 	addError prometheus.Counter
 	// mseEncryption represents the number of times a peer connection has been obfuscated with mse.
 	mseEncryption prometheus.Counter
+	// invalidMetadata represents the number of records dropped for invalid metadata other than non-UTF-8 text.
+	invalidMetadata prometheus.Counter
 	// extensions represents the number of times a peer connection has been negotiated with a given extension set.
 	extensions map[string]prometheus.Counter
 
@@ -41,6 +43,7 @@ func (s *Stats) Collect(ch chan<- prometheus.Metric) {
 	s.checkError.Collect(ch)
 	s.addError.Collect(ch)
 	s.mseEncryption.Collect(ch)
+	s.invalidMetadata.Collect(ch)
 
 	s.Lock()
 	defer s.Unlock()
@@ -77,6 +80,12 @@ func (s *Stats) IncRtClearing() {
 // IncNonUTF8 increments the nonUTF8 counter in the Stats struct.
 func (s *Stats) IncNonUTF8() {
 	s.nonUTF8.Inc()
+}
+
+// IncInvalidMetadata increments the invalidMetadata counter: a record was
+// dropped for reasons other than non-UTF-8 text (shape, sizes, limits, ...).
+func (s *Stats) IncInvalidMetadata() {
+	s.invalidMetadata.Inc()
 }
 
 // IncDBError increments the error count for the database.

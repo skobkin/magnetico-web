@@ -16,6 +16,7 @@ func TestCollect(t *testing.T) {
 	stats.IncUDPError(false)
 	stats.IncRtClearing()
 	stats.IncNonUTF8()
+	stats.IncInvalidMetadata()
 	stats.IncDBError(false)
 	stats.IncDBError(true)
 	stats.IncLeech([8]byte{})
@@ -31,7 +32,7 @@ func TestCollect(t *testing.T) {
 		count++
 	}
 
-	expectedCount := 9 // 8 counters + 1 extension counter
+	expectedCount := 10 // 9 counters + 1 extension counter
 	if count != expectedCount {
 		t.Errorf("Expected %d metrics, but got %d", expectedCount, count)
 	}

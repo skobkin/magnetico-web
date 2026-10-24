@@ -36,6 +36,14 @@ var (
 	// throttled WARN + drop + metric path and are never database failures.
 	ErrInvalidMetadata = errors.New("torrent metadata is invalid")
 
+	// ErrInvalidTextEncoding reports the UTF-8/NUL bucket of
+	// ErrInvalidMetadata: torrent names or file paths that are not valid
+	// UTF-8 or contain NUL bytes. It is wrapped beneath ErrInvalidMetadata
+	// (dual %w) so the wiring can route these records to the dedicated
+	// non-UTF-8 metric while every other check keeps matching only
+	// ErrInvalidMetadata.
+	ErrInvalidTextEncoding = errors.New("text is not NUL-free valid UTF-8")
+
 	// ErrStorageIO wraps an actual database/transaction failure. It is kept
 	// distinct from ErrInvalidMetadata so callers can classify reliably.
 	ErrStorageIO = errors.New("storage I/O error")

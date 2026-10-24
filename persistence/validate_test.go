@@ -47,9 +47,10 @@ func TestValidateIngestRejections(t *testing.T) {
 	tooManySum[0] = File{Path: "f0", Size: 1}
 
 	tests := []struct {
-		name  string
-		meta  Torrent
-		files []File
+		name         string
+		meta         Torrent
+		files        []File
+		wantEncoding bool // also matches ErrInvalidTextEncoding (UTF-8/NUL bucket)
 	}{
 		{
 			name:  "empty infohash",
@@ -92,14 +93,16 @@ func TestValidateIngestRejections(t *testing.T) {
 			files: validFiles(),
 		},
 		{
-			name:  "name with NUL",
-			meta:  func() Torrent { m := validMeta(); m.Name = "rele\x00ase"; return m }(),
-			files: validFiles(),
+			name:         "name with NUL",
+			meta:         func() Torrent { m := validMeta(); m.Name = "rele\x00ase"; return m }(),
+			files:        validFiles(),
+			wantEncoding: true,
 		},
 		{
-			name:  "name with invalid UTF-8",
-			meta:  func() Torrent { m := validMeta(); m.Name = "rele\xffase"; return m }(),
-			files: validFiles(),
+			name:         "name with invalid UTF-8",
+			meta:         func() Torrent { m := validMeta(); m.Name = "rele\xffase"; return m }(),
+			files:        validFiles(),
+			wantEncoding: true,
 		},
 		{
 			name: "empty file list",
@@ -116,14 +119,16 @@ func TestValidateIngestRejections(t *testing.T) {
 			files: []File{{Path: "a", Size: 100}, {Path: "b", Size: -1}},
 		},
 		{
-			name:  "path with NUL",
-			meta:  validMeta(),
-			files: []File{{Path: "a\x00b", Size: 300}},
+			name:         "path with NUL",
+			meta:         validMeta(),
+			files:        []File{{Path: "a\x00b", Size: 300}},
+			wantEncoding: true,
 		},
 		{
-			name:  "path with invalid UTF-8",
-			meta:  validMeta(),
-			files: []File{{Path: "a\xffb", Size: 300}},
+			name:         "path with invalid UTF-8",
+			meta:         validMeta(),
+			files:        []File{{Path: "a\xffb", Size: 300}},
+			wantEncoding: true,
 		},
 		{
 			name:  "sum does not match total size",
@@ -143,6 +148,9 @@ func TestValidateIngestRejections(t *testing.T) {
 			err := validateIngest(tt.meta, tt.files, codec.DefaultLimits())
 			if !errors.Is(err, ErrInvalidMetadata) {
 				t.Errorf("validateIngest() error = %v, want ErrInvalidMetadata", err)
+			}
+			if got := errors.Is(err, ErrInvalidTextEncoding); got != tt.wantEncoding {
+				t.Errorf("validateIngest() matches ErrInvalidTextEncoding = %v, want %v", got, tt.wantEncoding)
 			}
 		})
 	}

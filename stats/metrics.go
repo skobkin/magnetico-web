@@ -60,6 +60,11 @@ func GetInstance() *Stats {
 				Name:      "mse_encryption",
 				Help:      "Number of times a peer connection has been obfuscated with MSE",
 			}),
+			invalidMetadata: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: namespace,
+				Name:      "invalid_metadata",
+				Help:      "Number of metadata records dropped as invalid, excluding the non-UTF-8 bucket",
+			}),
 			extensions: map[string]prometheus.Counter{},
 		}
 	})

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/skobkin/magnetico-web/codec"
@@ -34,18 +33,6 @@ func connectPool(ctx context.Context, rawURL string) (*pgxpool.Pool, error) {
 		return nil, fmt.Errorf("%w: %w", ErrStorageIO, err)
 	}
 	return pool, nil
-}
-
-// storageErrorDetail reduces a database error to content that is safe to log:
-// the SQLSTATE code and message for real PostgreSQL errors (they never
-// contain credentials), the Go type for anything else — driver and net errors
-// can embed the connection string.
-func storageErrorDetail(err error) string {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return fmt.Sprintf("pg %s: %s", pgErr.Code, pgErr.Message)
-	}
-	return fmt.Sprintf("unexpected database error (%T)", err)
 }
 
 // storeEncoderWorkers is the encoder-pool size owned by a store.

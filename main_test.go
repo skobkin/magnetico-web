@@ -241,6 +241,44 @@ func TestTorrentFromMetadata_OversizedTotalSizeRejected(t *testing.T) {
 	}
 }
 
+// TestSchemaInitFailureMessage pins the credential rules on the
+// `migrate schema-init` failure path: only the redacted URL and a controlled
+// error detail may appear.
+func TestSchemaInitFailureMessage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sentinel detail without error text", func(t *testing.T) {
+		t.Parallel()
+
+		raw := "postgres://user:hunter2@localhost:5432/db?sslmode=disable"
+		wrapped := fmt.Errorf("connect failed with dsn %s: %w", raw, persistence.ErrLegacySchema)
+		msg := schemaInitFailureMessage(raw, wrapped)
+
+		if strings.Contains(msg, "hunter2") || strings.Contains(msg, raw) {
+			t.Errorf("message leaks credentials: %s", msg)
+		}
+		if !strings.Contains(msg, persistence.ErrLegacySchema.Error()) {
+			t.Errorf("message lost the sentinel's fixed detail: %s", msg)
+		}
+		if !strings.Contains(msg, "postgres://localhost:5432/db") {
+			t.Errorf("message lost the redacted URL: %s", msg)
+		}
+	})
+
+	t.Run("unrecognized error reduces to its type", func(t *testing.T) {
+		t.Parallel()
+
+		raw := "postgres://localhost/db"
+		msg := schemaInitFailureMessage(raw, errors.New("pg: password=hunter2 rejected"))
+		if strings.Contains(msg, "hunter2") || strings.Contains(msg, "pg:") {
+			t.Errorf("message leaks the unrestricted error text: %s", msg)
+		}
+		if !strings.Contains(msg, "unexpected error (*errors.errorString)") {
+			t.Errorf("message must name the error category: %s", msg)
+		}
+	})
+}
+
 func TestDatabaseOpenFailureMessage_UnrestrictedErrorTextNeverLogged(t *testing.T) {
 	t.Parallel()
 

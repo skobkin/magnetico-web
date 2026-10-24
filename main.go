@@ -36,8 +36,7 @@ func main() {
 		notImplemented("web",
 			"the authenticated web UI will be designed from the historical PHP application in a later phase")
 	case "migrate":
-		notImplemented("migrate",
-			"the offline legacy database migrator follows phase 3, see docs/specs/postgresql-persistence-v2.md")
+		runMigrateSchemaInit(&opFlags.Migrate.SchemaInit)
 	}
 }
 
@@ -95,6 +94,27 @@ func databaseOpenFailureMessage(rawURL string, err error) string {
 		"Could not open the database %s. %s",
 		redactDatabaseURL(rawURL), controlledErrorDetail(err),
 	)
+}
+
+// schemaInitFailureMessage composes the `migrate schema-init` failure log
+// line from controlled content only.
+func schemaInitFailureMessage(rawURL string, err error) string {
+	return fmt.Sprintf(
+		"Could not initialize the database schema on %s. %s",
+		redactDatabaseURL(rawURL), controlledErrorDetail(err),
+	)
+}
+
+// runMigrateSchemaInit implements `magnetico migrate schema-init`: it creates
+// the 0.8.0 schema on a fresh database, strictly non-destructively (existing
+// and legacy databases are refused, never modified).
+func runMigrateSchemaInit(opFlags *opflags.SchemaInitOptions) {
+	if err := persistence.InitSchema(context.Background(), opFlags.DatabaseURL); err != nil {
+		log.Fatalln(schemaInitFailureMessage(opFlags.DatabaseURL, err))
+	}
+	// The redacted URL carries no credentials by construction.
+	log.Printf("the database schema on %s is ready (created now or already up to date)",
+		redactDatabaseURL(opFlags.DatabaseURL))
 }
 
 // torrentFromMetadata converts a drained metadata record into a persistence
@@ -225,9 +245,15 @@ func runCrawl(opFlags *opflags.CrawlOptions) {
 				// Inserted.
 			case errors.Is(err, persistence.ErrInvalidMetadata):
 				// Invalid metadata — including codec encode failures from
-				// bad input — is dropped with a throttled warning; it is
-				// never a database failure.
+				// bad input — is dropped with a throttled warning and a
+				// per-cause metric; it is never a database failure. The
+				// UTF-8/NUL bucket keeps its dedicated counter.
 				warnInvalidMetadata(err)
+				if errors.Is(err, persistence.ErrInvalidTextEncoding) {
+					go stats.GetInstance().IncNonUTF8()
+				} else {
+					go stats.GetInstance().IncInvalidMetadata()
+				}
 			default:
 				go stats.GetInstance().IncDBError(true)
 			}

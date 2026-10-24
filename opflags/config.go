@@ -10,7 +10,15 @@ import (
 	"github.com/jessevdk/go-flags"
 )
 
-const envPrefix = "MAGNETICO_CRAWL_"
+const (
+	envPrefix        = "MAGNETICO_CRAWL_"
+	migrateEnvPrefix = "MAGNETICO_MIGRATE_"
+
+	// migrateDatabaseYamlKey and migrateDatabaseEnvName configure
+	// `migrate schema-init`'s DSN outside the command line.
+	migrateDatabaseYamlKey = "migrateDatabaseURL"
+	migrateDatabaseEnvName = migrateEnvPrefix + "DATABASE"
+)
 
 // crawlSetting describes one configurable crawl option: its CLI long name,
 // its YAML key and its environment variable, plus the setters used to apply
@@ -107,9 +115,13 @@ var crawlSettings = []crawlSetting{
 }
 
 // applyConfig overlays the configuration file and the environment onto the
-// parsed crawl options, enforcing CLI > ENV > config file > defaults.
+// parsed options of the active command, enforcing CLI > ENV > config file >
+// defaults. The config file is shared across subcommands: it is decoded
+// strictly against every documented key of all subcommands (so a typo in an
+// unused section is still an error), and only the active command's settings
+// are merged in.
 // explicit maps the long names of options set on the command line.
-func (o *OpFlags) applyConfig(explicit map[string]bool) error {
+func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 	// The config file location itself follows CLI > ENV.
 	configPath := o.ConfigFilePath
 	if !explicit["config-file-path"] {
@@ -128,12 +140,20 @@ func (o *OpFlags) applyConfig(explicit map[string]bool) error {
 		}
 	}
 
-	return o.applyEnvConfig(explicit)
+	switch command {
+	case "crawl":
+		return o.applyEnvConfig(explicit)
+	case "migrate":
+		return o.applyEnvMigrateConfig(explicit)
+	default:
+		return fmt.Errorf("unknown command %q", command)
+	}
 }
 
 // applyYamlConfig merges the parsed file into the live options. The file is
 // decoded twice: once into a generic map to learn which keys are present, and
-// once strictly into a fresh CrawlOptions (unknown keys are an error). Only
+// once strictly into the combined view of every subcommand's documented keys
+// (unknown keys are an error — including those of inactive subcommands). Only
 // present keys are merged, so a sparse file never replaces defaults with zero
 // values; explicitly configured zero-ish values are real values and apply.
 func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
@@ -142,7 +162,10 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		return fmt.Errorf("config file: %w", err)
 	}
 
-	var file CrawlOptions
+	var file struct {
+		CrawlOptions       `yaml:",inline"`
+		MigrateDatabaseURL string `yaml:"migrateDatabaseURL"`
+	}
 	if err := yaml.UnmarshalWithOptions(data, &file, yaml.Strict()); err != nil {
 		return fmt.Errorf("config file: %w", err)
 	}
@@ -154,7 +177,11 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		if explicit[s.longName] {
 			continue
 		}
-		s.copyFrom(&o.Crawl, &file)
+		s.copyFrom(&o.Crawl, &file.CrawlOptions)
+	}
+
+	if _, found := present[migrateDatabaseYamlKey]; found && !explicit["database"] {
+		o.Migrate.SchemaInit.DatabaseURL = file.MigrateDatabaseURL
 	}
 
 	return nil
@@ -193,6 +220,29 @@ func (o *OpFlags) applyEnvConfig(explicit map[string]bool) error {
 		return fmt.Errorf(
 			"unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s",
 			name, strings.Join(names, ", "),
+		)
+	}
+
+	return nil
+}
+
+// applyEnvMigrateConfig applies MAGNETICO_MIGRATE_* variables and rejects
+// unknown ones, with the same empty-means-unset rule as the crawl variables.
+func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
+	if !explicit["database"] {
+		if value, ok := os.LookupEnv(migrateDatabaseEnvName); ok && value != "" {
+			o.Migrate.SchemaInit.DatabaseURL = value
+		}
+	}
+
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, migrateEnvPrefix) || name == migrateDatabaseEnvName {
+			continue
+		}
+		return fmt.Errorf(
+			"unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s",
+			name, migrateDatabaseEnvName,
 		)
 	}
 

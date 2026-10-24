@@ -290,7 +290,7 @@ func TestApplyConfig_ConfigFilePathFromEnv(t *testing.T) {
 	t.Setenv("MAGNETICO_CONFIG_FILE_PATH", path)
 
 	o := &OpFlags{Crawl: defaults()}
-	if err := o.applyConfig(map[string]bool{}); err != nil {
+	if err := o.applyConfig(map[string]bool{}, "crawl"); err != nil {
 		t.Fatalf("applyConfig() error = %v", err)
 	}
 
@@ -304,7 +304,7 @@ func TestApplyConfig_MissingFileError(t *testing.T) {
 		ConfigFilePath: filepath.Join(t.TempDir(), "does-not-exist.yml"),
 		Crawl:          defaults(),
 	}
-	if err := o.applyConfig(map[string]bool{}); err == nil {
+	if err := o.applyConfig(map[string]bool{}, "crawl"); err == nil {
 		t.Error("expected an error for a missing config file, got nil")
 	}
 }
