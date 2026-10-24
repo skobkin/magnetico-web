@@ -506,6 +506,104 @@ func TestDegenerateStateNamesEverything(t *testing.T) {
 	}
 }
 
+// A view carrying an expected family name must be classified as an
+// unsupported unexpected view, never as a legacy table: only real and
+// partitioned tables (relkind r/p) feed the legacy detection path.
+func TestFamilyNamedViewIsUnsupportedNotLegacy(t *testing.T) {
+	t.Parallel()
+
+	t.Run("view named magneticod.files", func(t *testing.T) {
+		t.Parallel()
+
+		dsn := integrationCluster(t).testDatabase(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		if err := InitSchema(ctx, dsn); err != nil {
+			t.Fatalf("InitSchema() error = %v", err)
+		}
+
+		conn := openConn(t, dsn)
+		execCtx, execCancel := context.WithTimeout(context.Background(), dbOpTimeout)
+		defer execCancel()
+		if _, err := conn.Exec(execCtx, `CREATE VIEW magneticod.files AS SELECT 1`); err != nil {
+			t.Fatal(err)
+		}
+		conn.Close(context.Background())
+
+		before := catalogSnapshot(t, dsn)
+
+		initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer initCancel()
+		err := InitSchema(initCtx, dsn)
+		var stateErr *SchemaStateError
+		if !errors.As(err, &stateErr) {
+			t.Fatalf("InitSchema() error = %v, want a SchemaStateError", err)
+		}
+		if errors.Is(err, ErrLegacySchema) {
+			t.Errorf("InitSchema() error = %v, want ErrUnsupportedSchema, not the legacy sentinel", err)
+		}
+		if !errors.Is(err, ErrUnsupportedSchema) {
+			t.Fatalf("InitSchema() error = %v, want ErrUnsupportedSchema", err)
+		}
+		found := false
+		for _, d := range stateErr.Details {
+			if strings.Contains(d, "unexpected view magneticod.files") {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("refusal details %q do not name the unexpected view", stateErr.Details)
+		}
+
+		dbCtx, dbCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer dbCancel()
+		if _, dbErr := MakeDatabase(dbCtx, dsn); !errors.Is(dbErr, ErrUnsupportedSchema) {
+			t.Errorf("MakeDatabase() error = %v, want ErrUnsupportedSchema", dbErr)
+		}
+
+		if got := catalogSnapshot(t, dsn); got != before {
+			t.Error("refusal changed the catalog")
+		}
+	})
+
+	// Without the relkind guard, the column probe would read the view's
+	// columns, miss file_count and misclassify the state as a legacy layout.
+	t.Run("view named magneticod.torrents", func(t *testing.T) {
+		t.Parallel()
+
+		dsn := integrationCluster(t).testDatabase(t)
+		conn := openConn(t, dsn)
+		ctx, cancel := context.WithTimeout(context.Background(), dbOpTimeout)
+		defer cancel()
+		if _, err := conn.Exec(ctx, `CREATE SCHEMA magneticod`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := conn.Exec(ctx,
+			`CREATE VIEW magneticod.torrents AS SELECT 1 AS id`); err != nil {
+			t.Fatal(err)
+		}
+		conn.Close(context.Background())
+
+		initCtx, initCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer initCancel()
+		err := InitSchema(initCtx, dsn)
+		if errors.Is(err, ErrLegacySchema) {
+			t.Errorf("InitSchema() error = %v, want ErrUnsupportedSchema, not the legacy sentinel", err)
+		}
+		var stateErr *SchemaStateError
+		if !errors.As(err, &stateErr) || !errors.Is(err, ErrUnsupportedSchema) {
+			t.Fatalf("InitSchema() error = %v, want ErrUnsupportedSchema as SchemaStateError", err)
+		}
+		joined := strings.Join(stateErr.Details, "\n")
+		if !strings.Contains(joined, "unexpected view magneticod.torrents") {
+			t.Errorf("details %q do not name the unexpected view", stateErr.Details)
+		}
+		if strings.Contains(joined, "without file_count") {
+			t.Errorf("details %q treat the view as a legacy torrents table", stateErr.Details)
+		}
+	})
+}
+
 func TestMakeDatabaseStartupVerification(t *testing.T) {
 	t.Parallel()
 

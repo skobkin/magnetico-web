@@ -300,6 +300,11 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
 	if err != nil {
 		return nil, err
 	}
+	// hasMagneticodTorrentsTable records whether magneticod.torrents exists
+	// as a real or partitioned table; only then is its column list probed
+	// for the legacy marker (information_schema.columns also exposes views,
+	// whose columns must never feed legacy detection).
+	hasMagneticodTorrentsTable := false
 	for rows.Next() {
 		var schema, name, kind string
 		if err := rows.Scan(&schema, &name, &kind); err != nil {
@@ -309,15 +314,20 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
 		qt := schema + "." + name
 		if schema == "magneticod" {
 			inv.magneticodObjects = append(inv.magneticodObjects, magneticoObject{name: name, kind: kind})
+			if name == "torrents" && (kind == "r" || kind == "p") {
+				hasMagneticodTorrentsTable = true
+			}
 		}
 		switch name {
 		case "torrents", "files", "torrent_file_blobs", "schema_version":
 			// Only real tables reach the family tracking: legacy layouts
 			// are tables (plain or partitioned), never views or foreign
 			// tables, so a view named "files" cannot fake a legacy marker.
-			inv.familyTables = append(inv.familyTables, qt)
-			if kind == "p" {
-				inv.partitioned = append(inv.partitioned, qt)
+			if kind == "r" || kind == "p" {
+				inv.familyTables = append(inv.familyTables, qt)
+				if kind == "p" {
+					inv.partitioned = append(inv.partitioned, qt)
+				}
 			}
 		}
 	}
@@ -349,22 +359,24 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
 		return nil, err
 	}
 
-	rows, err = q.Query(ctx, `SELECT column_name FROM information_schema.columns
+	if hasMagneticodTorrentsTable {
+		rows, err = q.Query(ctx, `SELECT column_name FROM information_schema.columns
         WHERE table_schema = 'magneticod' AND table_name = 'torrents' ORDER BY ordinal_position`)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			rows.Close()
+		if err != nil {
 			return nil, err
 		}
-		inv.torrentCols = append(inv.torrentCols, name)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return nil, err
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			inv.torrentCols = append(inv.torrentCols, name)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
 	if inv.hasFamilyTableAnywhere("schema_version") {
