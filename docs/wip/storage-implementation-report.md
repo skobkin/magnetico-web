@@ -139,17 +139,21 @@ go build ./…            # ok
 go vet ./…              # ok
 gofmt -l .              # empty
 go test ./… -count=1    # all 14 packages ok
-go test ./persistence/ -count=1 -v    # 20 passed / 0 skipped / 0 failed
-go test -race ./ ./opflags/ ./persistence/ ./stats/ -count=1    # ok (persistence 29s)
+go test ./persistence/ -count=1 -v    # 25 passed / 0 skipped / 0 failed
+go test -race ./ ./codec/ ./metadata/ ./persistence/ ./opflags/ ./stats/ -count=1    # ok (codec 17s, persistence 35s)
+golangci-lint run       # 0 issues
 ```
 
-**Integration: passed vs skipped — 20 passed, 0 skipped, 0 failed** against the
+**Integration: passed vs skipped — 25 passed, 0 skipped, 0 failed** against the
 disposable Docker `postgres:17` cluster (image was cached locally; the harness
 never pulls, binds 127.0.0.1 only, and creates/drops only
 `magnetico_test_<random>` databases). Suites: fresh + idempotent +
 4-way concurrent `InitSchema` (exactly one version row `{1}`); five legacy
 look-alikes refused with byte-identical catalog snapshots and no extension
-installation; partial-state refusal; `MakeDatabase` verification (absent
+installation; partial-state refusal; unknown table / view / materialized view
+inside `magneticod` refused by both `InitSchema` and `MakeDatabase` with a
+byte-identical catalog; degenerate-state refusal naming everything;
+unrelated-schema coexistence; `MakeDatabase` verification (absent
 schema → init hint; missing pg_trgm → extension hint; initialized → opens);
 AddTorrent/GetFiles all branches (typical no-blob, atypical vector-B, multi
 round-trip, missing blob, garbage/trailing-junk/count-mismatch/total-mismatch
@@ -202,17 +206,44 @@ Peak RSS of the encode path is bounded by the pool: q11 workers hold ~64 KiB
 window state each plus the payload buffers; the 238 MB/op figure is transient
 garbage (allocations), not resident state.
 
+## Corrective round (owner code review, 2026-10-24)
+
+A seven-finding external review of this task was validated (all seven
+confirmed) and fixed in separate commits, each with focused regression tests;
+a follow-up pass (`78d78515`, `12274dd3`) acted on the residuals of an
+adversarial verification of those fixes. The wire format, the PostgreSQL
+schema and the approved scope are unchanged: `schemaStatements` and
+`expectedIndexes` are byte-identical to the pre-round state and
+`docs/specs/` was not touched.
+
+| Commit | Finding fixed | How |
+|---|---|---|
+| `dfacc706` | All-candidates-skipped encode returned the wrong error | both limit sites in `encodeSelected` record the **first** `*LimitError` and skip the candidate; it is returned only when no candidate fits, so one oversized candidate never masks the real cause |
+| `6e2f9e96` | Prefix-delta decode bounded each record part instead of the reconstructed path | pre-concatenation bound on `shared + suffix` against the 64 KiB per-path cap; the aggregate budget is charged once per complete reconstructed file path (directories are structural) |
+| `15039fe1` | Trie decode accepted `/` inside a component and equal basenames with decreasing sizes | both are rejected (`ErrPathComponentSeparator`, `ErrNonCanonicalOrder`); the file size is read before the order comparison so the misordered pair is detectable |
+| `df9d11aa` | Hybrid validation exempted the last real file from piece alignment and mis-placed BEP 47 padding | every real file must start piece-aligned; a `"p"` entry is valid only directly after a real file that ended mid-piece, filling exactly `PieceLength − offset % PieceLength`; the final entry may end unaligned without filler |
+| `f01fd68c` | An unknown table inside `magneticod` passed verification | the unknown-object guard runs regardless of which expected objects are missing, so a degenerate (partial + unexpected) state names everything found |
+| `0b8ce6d8` | `MaxTuples` travels as an int32 bind parameter; `MaxInt32+1` silently truncated | bounded in `QueryTorrents` (`ErrInvalidMetadata`); pinned as a unit test with a nil pool (validation precedes any database access) and in the integration boundary table |
+| `4a4466a5` | The operator saw only the fixed sentinel text for schema refusals | both failure lines append a bounded, quoted catalog-name list (≤8 items, ≤128 B each, `(+N more)`) extracted with `errors.As`; credential-free by construction, escaped against hostile catalog content |
+| `da8b9c17` | The blob-cap integration fixture no longer exceeded the cap | the old fixture's winning candidate (trie+brotli, 26 B from a ≈619 B raw payload) slipped under the 1024 B cap; names are now 32 *distinct* hash segments each, denying compressors shared context — every candidate trips `stored_bytes` (6159 B actual vs 1024 B allowed) |
+| `78d78515` | Unknown views, materialized views and foreign tables inside `magneticod` were invisible to the inventory | inventory widened to relkind `r/p/v/m/f` with kind-labeled refusal details; the legacy-marker arm stays real-tables-only, so a view named `files` cannot fake a legacy shape |
+| `12274dd3` | Residual test gaps from the verification pass | first-recorded-failure-wins across limit kinds; exact-cap directory accepted but admitting no file beneath it; tight per-path cap round-trip; nested-node order enforcement; exact decoded list for duplicate basenames; oversized trailing filler rejected; details surface through a wrapper around `SchemaStateError`; exact non-schema failure-line shape; `MaxTuples` unit pin |
+
+Deliberately not implemented: an end-to-end pin of the `runCrawl` →
+`dropInvalidRecord` routing (the event loop is not injectable; the routing
+logic and both metric buckets are pinned at unit level in `main_test.go`).
+
 ## Deviations, notes and open questions
 
 1. **`schema_version` table** (`version INTEGER PRIMARY KEY, applied_on
    TIMESTAMPTZ NOT NULL DEFAULT now()`) is a contract-mandated addition
    beyond spec §2 verbatim DDL; verification requires exactly one row carrying
    version 1.
-2. **Refusal details are computed but not logged.** `SchemaStateError` carries
-   the found catalog object names (credential-free by construction), but the
-   operator-facing log line shows only the fixed sentinel text, per the
-   controlled-detail rule. Surfacing the object list on stderr would be safe
-   and more actionable — owner's call for a follow-up.
+2. **Refusal details surfaced to the operator (resolved).** Initially the
+   `SchemaStateError` catalog names were computed but only the fixed sentinel
+   text was logged. Per the 2026-10-24 review round, both failure lines now
+   append the bounded, quoted object list (see the corrective-round section,
+   `4a4466a5`).
 3. **Bare `migrate`** exits non-zero with go-flags' own "Please specify the
    schema-init command" message (the parser rejects a command group without a
    subcommand before our usage text applies). Cosmetic.
