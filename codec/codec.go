@@ -115,6 +115,8 @@ func decodeRaw(ser SerializerID, payload []byte, limits Limits) ([]File, error) 
 		return decodeFlat(payload, limits)
 	case PrefixDelta:
 		return decodePrefix(payload, limits)
+	case DirectoryTrie:
+		return decodeTrie(payload, limits)
 	default:
 		return nil, fmt.Errorf("serializer 0x%x: %w", ser, ErrUnsupportedSerializer)
 	}

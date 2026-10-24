@@ -34,6 +34,8 @@ func TestProfileCandidateSets(t *testing.T) {
 			want: []candidate{
 				{ser: PrefixDelta, comp: None},
 				{ser: PrefixDelta, comp: Brotli, quality: 9},
+				{ser: DirectoryTrie, comp: None},
+				{ser: DirectoryTrie, comp: Brotli, quality: 9},
 			},
 		},
 		{
@@ -41,6 +43,8 @@ func TestProfileCandidateSets(t *testing.T) {
 			want: []candidate{
 				{ser: PrefixDelta, comp: None},
 				{ser: PrefixDelta, comp: Brotli, quality: 11},
+				{ser: DirectoryTrie, comp: None},
+				{ser: DirectoryTrie, comp: Brotli, quality: 11},
 			},
 		},
 	}

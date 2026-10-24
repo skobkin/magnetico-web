@@ -18,9 +18,9 @@ func mustHex(t testing.TB, s string) []byte {
 	return b
 }
 
-// goldenVectors are vectors B–F from docs/specs/wire-format-v1.md §6. Vector
+// goldenVectors are vectors B–G from docs/specs/wire-format-v1.md §6. Vector
 // A (the no-blob single-file case) has no serialized bytes and is tested at
-// the persistence boundary. Trie vectors are added by trie_test.go.
+// the persistence boundary.
 var goldenVectors = []struct {
 	name string
 	ser  SerializerID
@@ -62,6 +62,20 @@ var goldenVectors = []struct {
 		ser:  PrefixDelta,
 		hex:  "01 20 02 00 06 61 2F 2E 2E 2F 63 02 02 02 2F 62 01",
 		want: []File{{Path: "a/../c", Size: 2}, {Path: "a//b", Size: 1}},
+	},
+	{
+		name: "C directory-trie two episodes",
+		ser:  DirectoryTrie,
+		hex:  "01 40 02 01 01 53 00 02 07 45 30 31 2E 6D 6B 76 E8 07 07 45 30 32 2E 6D 6B 76 CC 08 00",
+		want: []File{{Path: "S/E01.mkv", Size: 1000}, {Path: "S/E02.mkv", Size: 1100}},
+	},
+	{
+		// Tree depth-first order (z/ subtree before the root file) differs
+		// from the canonical output order; decoding must sort.
+		name: "G trie traversal differs from global sorting",
+		ser:  DirectoryTrie,
+		hex:  "01 40 02 01 01 7A 00 01 05 66 2E 62 69 6E 02 01 05 61 2E 74 78 74 01",
+		want: []File{{Path: "a.txt", Size: 1}, {Path: "z/f.bin", Size: 2}},
 	},
 }
 

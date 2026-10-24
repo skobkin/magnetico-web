@@ -41,11 +41,15 @@ func (p Profile) candidates() []candidate {
 		return []candidate{
 			{ser: PrefixDelta, comp: None},
 			{ser: PrefixDelta, comp: Brotli, quality: 9},
+			{ser: DirectoryTrie, comp: None},
+			{ser: DirectoryTrie, comp: Brotli, quality: 9},
 		}
 	case ProfileMaximum:
 		return []candidate{
 			{ser: PrefixDelta, comp: None},
 			{ser: PrefixDelta, comp: Brotli, quality: 11},
+			{ser: DirectoryTrie, comp: None},
+			{ser: DirectoryTrie, comp: Brotli, quality: 11},
 		}
 	default:
 		return nil

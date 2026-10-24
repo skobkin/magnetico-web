@@ -7,6 +7,15 @@ import (
 	"strings"
 )
 
+// compareCanonical orders two files in canonical order: path bytes
+// ascending, then size ascending.
+func compareCanonical(a, b File) int {
+	if c := strings.Compare(a.Path, b.Path); c != 0 {
+		return c
+	}
+	return cmp.Compare(a.Size, b.Size)
+}
+
 // canonicalize validates files against the limits and returns a canonically
 // sorted copy (path bytes ascending, then size ascending). The caller's
 // slice is never modified.
@@ -36,12 +45,7 @@ func canonicalize(files []File, limits Limits) ([]File, error) {
 
 	sorted := make([]File, len(files))
 	copy(sorted, files)
-	slices.SortFunc(sorted, func(a, b File) int {
-		if c := strings.Compare(a.Path, b.Path); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Size, b.Size)
-	})
+	slices.SortFunc(sorted, compareCanonical)
 	return sorted, nil
 }
 
@@ -62,6 +66,8 @@ func encodeRaw(ser SerializerID, files []File) ([]byte, error) {
 		return encodeFlat(files)
 	case PrefixDelta:
 		return encodePrefix(files)
+	case DirectoryTrie:
+		return encodeTrie(files), nil
 	default:
 		return nil, fmt.Errorf("serializer 0x%x: %w", ser, ErrUnsupportedSerializer)
 	}
@@ -92,6 +98,15 @@ func encodeSelected(st *compressState, profile Profile, sorted []File, limits Li
 		haveBest bool
 	)
 	for _, c := range profile.candidates() {
+		// Trie candidates are skipped — never an error — when the input's
+		// paths cannot be split and rejoined exactly (spec §3.3) or would
+		// exceed the trie depth limit; another candidate represents the
+		// list instead. The depth limit still rejects trie-encoded blobs on
+		// decode.
+		if c.ser == DirectoryTrie &&
+			(!trieEligible(sorted) || maxTrieDepth(sorted) > limits.MaxTrieDepth) {
+			continue
+		}
 		payload, err := encodeRaw(c.ser, sorted)
 		if err != nil {
 			return nil, Selection{}, err
