@@ -76,6 +76,12 @@ func validateInfo(info *metainfo.Info) error {
 	if info.PieceLength == 0 {
 		return errors.New("zero piece length")
 	}
+	if info.HasV2() {
+		// Hybrid (v1 fields + v2 tree): the v1 layer is authoritative for
+		// the SHA-1 piece hashes; validate against it, never against the
+		// v2 tree walk.
+		return validateHybrid(info)
+	}
 	if int((info.TotalLength()+info.PieceLength-1)/info.PieceLength) != info.NumPieces() {
 		return errors.New("piece count and file lengths are at odds")
 	}
@@ -85,7 +91,8 @@ func validateInfo(info *metainfo.Info) error {
 // Extract the files from the metainfo
 func extractFiles(info *metainfo.Info) (files []persistence.File) {
 	if len(info.Files) == 0 {
-		// Single file
+		// Single file (also covers single-file hybrids, whose v1 Length is
+		// validated against the v2 tree).
 		files = append(files, persistence.File{
 			Size: info.Length,
 			Path: info.Name,
@@ -93,8 +100,13 @@ func extractFiles(info *metainfo.Info) (files []persistence.File) {
 		return
 	}
 
-	// Multiple files
+	// Multiple files; synthetic BEP 52 padding entries are not part of the
+	// torrent's logical file list and are excluded from it, file_count and
+	// total_size.
 	for _, file := range info.Files {
+		if isPaddingFile(&file) {
+			continue
+		}
 		files = append(files, persistence.File{
 			Size: file.Length,
 			Path: file.DisplayPath(info),

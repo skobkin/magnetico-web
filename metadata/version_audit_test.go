@@ -1,21 +1,21 @@
 package metadata
 
-// BEP 52 v2/hybrid audit (task 03). The outcomes pinned here were
-// established empirically against the actual pipeline before the guard was
-// added, and are documented in docs/wip/storage-implementation-report.md:
+// BEP 52 v2/hybrid handling (task 03). The original audit established
+// empirically, before any fix, and is documented in
+// docs/wip/storage-implementation-report.md:
 //
 //   - v2-only metadata used to slip through validateInfo and persist as a
 //     zero-size single file (total=0, files=[{0, name}]) — silent corruption,
 //     now rejected with ErrV2OnlyUnsupported.
-//   - Multi-file hybrids whose files need BEP 52 padding (the standard layout
-//     for unaligned files) are rejected by the piece-count comparison in
-//     validateInfo: NumPieces() sums per-file piece counts from the v2 tree
-//     while TotalLength() sums the real file lengths, so any required padding
-//     breaks the equality. Aligned multi-file hybrids and hybrid single files
-//     pass and extract correctly. This is a recorded limitation, reported to
-//     the owner before the persistence store was built on top.
-//   - extractFiles does not filter v1 padding entries (attr "p"); in the
-//     layouts that pass validation none are present.
+//   - Multi-file hybrids needing BEP 52 padding were rejected by the
+//     piece-count comparison (NumPieces() walked the v2 tree while
+//     TotalLength() summed real file lengths). On the owner's decision
+//     (stop-gate answer, 2026-10-24) hybrids are now supported through
+//     v1-authoritative validation; see metadata/hybrid.go.
+//
+// Hybrid ingestion verifies the v1 SHA-1 identity only; the v2 per-file
+// piece roots are not verified and support must not be presented as
+// complete v2 hash-layer verification.
 
 import (
 	"crypto/sha1"
@@ -114,9 +114,8 @@ func TestAuditHybridLayouts(t *testing.T) {
 		raw := auditInfo(t, &metainfo.Info{
 			PieceLength: 16384, Pieces: make([]byte, 20), Name: "hybridsingle.bin",
 			Length: 16384, MetaVersion: 2,
-			FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
-				"": {File: metainfo.FileTreeFile{Length: 16384}},
-			}},
+			// A file node carries its properties in File; Dir stays empty.
+			FileTree: metainfo.FileTree{File: metainfo.FileTreeFile{Length: 16384}},
 		})
 
 		md, err := auditExtract(t, raw)
@@ -131,12 +130,10 @@ func TestAuditHybridLayouts(t *testing.T) {
 	})
 
 	// Padded layouts are the standard BEP 52 representation for unaligned
-	// multi-file hybrids. They are rejected by the piece-count comparison —
-	// a recorded limitation (stop-gate), not silently mis-extracted. If this
-	// test starts failing because validation changed, the owner-approved
-	// decision recorded in the implementation report has been superseded and
-	// must be revisited.
-	t.Run("padded multi-file rejected as a recorded limitation", func(t *testing.T) {
+	// multi-file hybrids. Supported via v1-authoritative validation: the
+	// padding entries are excluded from the extracted list, file count and
+	// total size.
+	t.Run("padded multi-file extracts real files without padding", func(t *testing.T) {
 		t.Parallel()
 
 		raw := auditInfo(t, &metainfo.Info{
@@ -155,10 +152,170 @@ func TestAuditHybridLayouts(t *testing.T) {
 			}},
 		})
 
-		if _, err := auditExtract(t, raw); err == nil {
-			t.Fatal("extractMetadata() succeeded for a padded hybrid, want the recorded rejection")
+		md, err := auditExtract(t, raw)
+		if err != nil {
+			t.Fatalf("extractMetadata() error = %v", err)
+		}
+		if md.TotalSize != 3000 || !reflect.DeepEqual(md.Files, []persistence.File{
+			{Size: 1000, Path: "a"}, {Size: 2000, Path: "b"},
+		}) {
+			t.Errorf("extractMetadata() = total %d files %#v", md.TotalSize, md.Files)
 		}
 	})
+
+	// Padding is identified by the attr, never the name: a real file named
+	// ".padding" persists, and an attr-p file under an ordinary name is
+	// excluded.
+	t.Run("padding identified by attr not name", func(t *testing.T) {
+		t.Parallel()
+
+		raw := auditInfo(t, &metainfo.Info{
+			PieceLength: 16384, Pieces: make([]byte, 60), Name: "attrpadding", MetaVersion: 2,
+			Files: []metainfo.FileInfo{
+				{Length: 16384, Path: []string{".padding"}}, // real file, no attr
+				{Length: 16384, Path: []string{"hide.bin"},
+					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}}, // padding by attr
+				{Length: 16384, Path: []string{"b"}},
+			},
+			FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
+				".padding": {File: metainfo.FileTreeFile{Length: 16384}},
+				"b":        {File: metainfo.FileTreeFile{Length: 16384}},
+			}},
+		})
+
+		md, err := auditExtract(t, raw)
+		if err != nil {
+			t.Fatalf("extractMetadata() error = %v", err)
+		}
+		if md.TotalSize != 32768 || !reflect.DeepEqual(md.Files, []persistence.File{
+			{Size: 16384, Path: ".padding"}, {Size: 16384, Path: "b"},
+		}) {
+			t.Errorf("extractMetadata() = total %d files %#v", md.TotalSize, md.Files)
+		}
+	})
+
+	// Wrong v1 piece count for the padded v1 layout: the v1 layer is
+	// authoritative, so this is rejected even though the v2 tree looks
+	// consistent.
+	t.Run("padded multi-file with wrong v1 piece count rejected", func(t *testing.T) {
+		t.Parallel()
+
+		raw := auditInfo(t, &metainfo.Info{
+			PieceLength: 16384, Pieces: make([]byte, 20), Name: "hybridpad", MetaVersion: 2,
+			Files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				{Length: 15362, Path: []string{".padding"},
+					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}},
+				{Length: 2000, Path: []string{"b"}},
+				{Length: 14384, Path: []string{".padding"},
+					ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}},
+			},
+			FileTree: metainfo.FileTree{Dir: map[string]metainfo.FileTree{
+				"a": {File: metainfo.FileTreeFile{Length: 1000}},
+				"b": {File: metainfo.FileTreeFile{Length: 2000}},
+			}},
+		})
+
+		if _, err := auditExtract(t, raw); err == nil {
+			t.Fatal("extractMetadata() succeeded with a wrong v1 piece count")
+		}
+	})
+}
+
+// TestAuditHybridRejections pins the malformed-hybrid rejections: the v1
+// layer and the v2 file tree must agree, and alignment must hold.
+func TestAuditHybridRejections(t *testing.T) {
+	t.Parallel()
+
+	padding := func(length int64) metainfo.FileInfo {
+		return metainfo.FileInfo{Length: length, Path: []string{".padding"},
+			ExtendedFileAttrs: metainfo.ExtendedFileAttrs{Attr: "p"}}
+	}
+	tree := func(files map[string]int64) metainfo.FileTree {
+		dir := make(map[string]metainfo.FileTree, len(files))
+		for name, length := range files {
+			dir[name] = metainfo.FileTree{File: metainfo.FileTreeFile{Length: length}}
+		}
+		return metainfo.FileTree{Dir: dir}
+	}
+
+	tests := []struct {
+		name   string
+		pieces int // v1 piece count matching the declared v1 layout
+		files  []metainfo.FileInfo
+		tree   metainfo.FileTree
+	}{
+		{
+			name:   "real file size differs from the tree",
+			pieces: 2,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				padding(15384),
+				{Length: 2000, Path: []string{"b"}},
+			},
+			tree: tree(map[string]int64{"a": 1000, "b": 3000}),
+		},
+		{
+			name:   "real file path missing from the tree",
+			pieces: 2,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				padding(15384),
+				{Length: 2000, Path: []string{"c"}},
+			},
+			tree: tree(map[string]int64{"a": 1000, "b": 2000}),
+		},
+		{
+			name:   "real file count differs from the tree",
+			pieces: 3,
+			files: []metainfo.FileInfo{
+				{Length: 16384, Path: []string{"a"}},
+				{Length: 16384, Path: []string{"b"}},
+				{Length: 16384, Path: []string{"c"}},
+			},
+			tree: tree(map[string]int64{"a": 16384, "b": 16384}),
+		},
+		{
+			name:   "v1 real files out of tree order",
+			pieces: 3,
+			files: []metainfo.FileInfo{
+				{Length: 16384, Path: []string{"b"}},
+				padding(16384),
+				{Length: 16384, Path: []string{"a"}},
+			},
+			tree: tree(map[string]int64{"a": 16384, "b": 16384}),
+		},
+		{
+			name:   "malformed padding leaves a later real file misaligned",
+			pieces: 3,
+			files: []metainfo.FileInfo{
+				{Length: 1000, Path: []string{"a"}},
+				padding(100),                        // must fill to the next piece boundary
+				{Length: 2000, Path: []string{"b"}}, // starts at 1100: misaligned
+				padding(29668),
+				{Length: 16384, Path: []string{"c"}},
+			},
+			tree: tree(map[string]int64{
+				"a": 1000, "b": 2000, "c": 16384,
+			}),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// The declared v1 piece count matches the declared v1 layout, so
+			// each case exercises its intended tree/alignment check rather
+			// than failing the piece-count precondition.
+			raw := auditInfo(t, &metainfo.Info{
+				PieceLength: 16384, Pieces: make([]byte, 20*tt.pieces), Name: "badhybrid", MetaVersion: 2,
+				Files: tt.files, FileTree: tt.tree,
+			})
+			if _, err := auditExtract(t, raw); err == nil {
+				t.Error("extractMetadata() succeeded for a malformed hybrid, want rejection")
+			}
+		})
+	}
 }
 
 func TestAuditV1MultiFileRegression(t *testing.T) {
