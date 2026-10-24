@@ -530,6 +530,39 @@ func TestGetStatistics(t *testing.T) {
 	}
 }
 
+// The total_size aggregate stays exact past MaxInt64: each row is capped by
+// the CHECK constraint, but two valid torrents may sum above the int64
+// range, and Statistics.TotalSize is uint64 by contract.
+func TestGetStatisticsTotalSizeBeyondInt64(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	big := int64(math.MaxInt64)
+	for _, name := range []string{"huge-a", "huge-b"} {
+		// No-blob eligible: a single file with Path == Name, Size == TotalSize.
+		mustAdd(t, store, Torrent{
+			InfoHash:     infoHash(name),
+			Name:         name,
+			TotalSize:    big,
+			DiscoveredOn: 1700000000,
+		}, []File{{Path: name, Size: big}})
+	}
+
+	stats, err := store.GetStatistics(ctx)
+	if err != nil {
+		t.Fatalf("GetStatistics() error = %v", err)
+	}
+	if want := uint64(math.MaxInt64) * 2; stats.TotalSize != want { // 2^64 - 2, fits uint64
+		t.Errorf("TotalSize = %d, want %d", stats.TotalSize, want)
+	}
+	if stats.Torrents != 2 || stats.Files != 2 {
+		t.Errorf("statistics = %+v, want 2 torrents and 2 files", stats)
+	}
+}
+
 func TestAddTorrentValidationErrors(t *testing.T) {
 	t.Parallel()
 

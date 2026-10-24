@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"math/big"
 	"net/url"
 	"runtime"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/codec"
 )
@@ -354,19 +356,64 @@ func escapeLikePattern(s string) string {
 }
 
 func (s *pgxStore) GetStatistics(ctx context.Context) (Statistics, error) {
-	// SUM(BIGINT) is numeric in PostgreSQL; cast to bigint and scan as
-	// int64. Negative values are impossible (CHECK constraints), so the
-	// conversion to uint64 is lossless for realizable states.
-	var torrents, files, totalSize int64
+	// SUM(BIGINT) is numeric in PostgreSQL, and the total_size aggregate may
+	// legitimately exceed MaxInt64 (each row is capped by the CHECK, not the
+	// sum), so it stays numeric and is converted with an explicit range
+	// check. file_count is INTEGER and its sum cannot leave the bigint range
+	// for any realizable state (MaxFiles × at most MaxInt32 rows), so the
+	// bigint cast there is safe.
+	var torrents, files int64
+	var totalSize pgtype.Numeric
 	err := s.pool.QueryRow(ctx, `SELECT COUNT(*)::bigint,
             COALESCE(SUM(file_count), 0)::bigint,
-            COALESCE(SUM(total_size), 0)::bigint
+            COALESCE(SUM(total_size), 0)
         FROM magneticod.torrents`,
 	).Scan(&torrents, &files, &totalSize)
 	if err != nil {
 		return Statistics{}, fmt.Errorf("%w: %w", ErrStorageIO, err)
 	}
-	return Statistics{Torrents: uint64(torrents), Files: uint64(files), TotalSize: uint64(totalSize)}, nil
+	total, err := numericToUint64(totalSize)
+	if err != nil {
+		return Statistics{}, err
+	}
+	return Statistics{Torrents: uint64(torrents), Files: uint64(files), TotalSize: total}, nil
+}
+
+// numericToUint64 converts a scale-carrying PostgreSQL numeric aggregate
+// into a uint64. Negative, fractional, NaN, infinite, NULL and out-of-range
+// values are refused with ErrStorageIO instead of being silently truncated
+// or wrapped around.
+func numericToUint64(n pgtype.Numeric) (uint64, error) {
+	refuse := func(reason string) (uint64, error) {
+		return 0, fmt.Errorf("%w: total size aggregate %s", ErrStorageIO, reason)
+	}
+	switch {
+	case !n.Valid:
+		return refuse("is NULL")
+	case n.NaN:
+		return refuse("is NaN")
+	case n.InfinityModifier != pgtype.Finite:
+		return refuse("is infinite")
+	case n.Int == nil:
+		return 0, nil // a valid, finite numeric with no digits is zero
+	}
+
+	bi := new(big.Int).Set(n.Int)
+	switch {
+	case n.Exp > 0:
+		bi.Mul(bi, new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n.Exp)), nil))
+	case n.Exp < 0:
+		// A negative scale is a fractional aggregate: not representable as
+		// a uint64 without truncation, so it is refused.
+		return refuse("is not an integer")
+	}
+	if bi.Sign() < 0 {
+		return refuse("is negative")
+	}
+	if !bi.IsUint64() {
+		return refuse("exceeds the uint64 range")
+	}
+	return bi.Uint64(), nil
 }
 
 func (s *pgxStore) DoesTorrentExist(ctx context.Context, infoHash []byte) (bool, error) {
