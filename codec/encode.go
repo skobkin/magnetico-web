@@ -67,6 +67,76 @@ func encodeRaw(ser SerializerID, files []File) ([]byte, error) {
 	}
 }
 
+// Encode serializes files under the profile's candidate set and returns the
+// smallest complete framed blob, breaking ties deterministically
+// (uncompressed first, then prefix-delta, then trie, then flat). The input
+// is canonically sorted on a copy and never mutated.
+func Encode(files []File, profile Profile, limits Limits) ([]byte, Selection, error) {
+	if !profile.valid() {
+		return nil, Selection{}, fmt.Errorf("profile %d: %w", profile, ErrUnsupportedSerializer)
+	}
+	sorted, err := canonicalize(files, limits)
+	if err != nil {
+		return nil, Selection{}, err
+	}
+	return encodeSelected(nil, profile, sorted, limits)
+}
+
+// encodeSelected encodes an already canonical list across the profile's
+// candidates. st may be nil (one-shot compressors are created per call).
+func encodeSelected(st *compressState, profile Profile, sorted []File, limits Limits) ([]byte, Selection, error) {
+	var (
+		bestBlob []byte
+		bestSel  Selection
+		bestRank int
+		haveBest bool
+	)
+	for _, c := range profile.candidates() {
+		payload, err := encodeRaw(c.ser, sorted)
+		if err != nil {
+			return nil, Selection{}, err
+		}
+		if len(payload) > limits.MaxUncompressedBytes {
+			return nil, Selection{}, &LimitError{
+				Limit: LimitUncompressedBytes, Actual: uint64(len(payload)), Allowed: uint64(limits.MaxUncompressedBytes),
+			}
+		}
+		rawLen := uint64(len(payload))
+
+		if c.comp != None {
+			if st == nil {
+				tmp := newCompressState(profile)
+				payload, err = tmp.compress(c.comp, payload)
+			} else {
+				payload, err = st.compress(c.comp, payload)
+			}
+			if err != nil {
+				return nil, Selection{}, err
+			}
+		}
+
+		blob, err := buildEnvelope(c.ser, c.comp, rawLen, payload)
+		if err != nil {
+			return nil, Selection{}, err
+		}
+		if len(blob) > limits.MaxStoredBytes {
+			return nil, Selection{}, &LimitError{
+				Limit: LimitStoredBytes, Actual: uint64(len(blob)), Allowed: uint64(limits.MaxStoredBytes),
+			}
+		}
+
+		r := rank(c)
+		if !haveBest || better(len(blob), r, len(bestBlob), bestRank) {
+			// Copy: compressed payloads alias a reusable buffer.
+			bestBlob = append([]byte(nil), blob...)
+			bestSel = Selection{Serializer: c.ser, Compressor: c.comp}
+			bestRank = r
+			haveBest = true
+		}
+	}
+	return bestBlob, bestSel, nil
+}
+
 // encodeWith serializes files under a fixed serializer with no compression
 // and returns the framed blob plus the selection it used. It is the building
 // block for the profile-based Encode and the direct entry point for the
@@ -85,7 +155,7 @@ func encodeWith(ser SerializerID, files []File, limits Limits) ([]byte, Selectio
 			Limit: LimitUncompressedBytes, Actual: uint64(len(payload)), Allowed: uint64(limits.MaxUncompressedBytes),
 		}
 	}
-	blob, err := buildEnvelope(ser, None, payload)
+	blob, err := buildEnvelope(ser, None, uint64(len(payload)), payload)
 	if err != nil {
 		return nil, Selection{}, err
 	}

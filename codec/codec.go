@@ -89,16 +89,22 @@ func DefaultLimits() Limits {
 }
 
 // Decode parses blob and returns the complete file list, or a typed error.
-// The output is canonically sorted. Decompression (Zstandard, Brotli) must
-// yield exactly the envelope's declared length; any trailing input, unknown
-// version/IDs, limit violation or structural defect is rejected.
+// The output is canonically sorted. Decompression must yield exactly the
+// envelope's declared length with the compressed input fully consumed; any
+// trailing input, unknown version/IDs, limit violation or structural defect
+// is rejected. file_count and total_size verification against torrent
+// metadata is the caller's responsibility.
 func Decode(blob []byte, limits Limits) ([]File, error) {
-	ser, comp, payload, _, err := parseEnvelope(blob, limits)
+	ser, comp, payload, declared, err := parseEnvelope(blob, limits)
 	if err != nil {
 		return nil, err
 	}
 	if comp != None {
-		return nil, fmt.Errorf("compressor 0x%x: %w", comp, ErrUnsupportedCompressor)
+		raw, err := decompressExact(comp, payload, int(declared))
+		if err != nil {
+			return nil, err
+		}
+		payload = raw
 	}
 	return decodeRaw(ser, payload, limits)
 }

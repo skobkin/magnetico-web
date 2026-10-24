@@ -2,22 +2,28 @@ package codec
 
 import "fmt"
 
-// buildEnvelope frames a raw payload: version byte, serializer/compressor
-// nibble byte and — for compressed payloads only — the minimal uvarint of the
-// exact uncompressed payload length (wire-format-v1 §2). Uncompressed
-// payloads carry no length field; they extend to the end of the blob.
-func buildEnvelope(ser SerializerID, comp CompressorID, payload []byte) ([]byte, error) {
+// buildEnvelope frames a payload: version byte, serializer/compressor
+// nibble byte and — for compressed payloads only — the minimal uvarint of
+// rawLen, the exact *uncompressed* payload length (wire-format-v1 §2). For
+// compressed payloads `payload` is the compressed stream and rawLen is
+// len(pre-compression bytes); for None, payload is the raw serialization and
+// rawLen must equal len(payload). Uncompressed payloads carry no length
+// field; they extend to the end of the blob.
+func buildEnvelope(ser SerializerID, comp CompressorID, rawLen uint64, payload []byte) ([]byte, error) {
 	if !validSerializer(ser) {
 		return nil, fmt.Errorf("serializer 0x%x: %w", ser, ErrUnsupportedSerializer)
 	}
 	if !validCompressor(comp) {
 		return nil, fmt.Errorf("compressor 0x%x: %w", comp, ErrUnsupportedCompressor)
 	}
-	out := make([]byte, 2, 2+uvarintLen(uint64(len(payload)))+len(payload))
+	if comp == None && rawLen != uint64(len(payload)) {
+		return nil, fmt.Errorf("uncompressed envelope: rawLen %d != payload length %d", rawLen, len(payload))
+	}
+	out := make([]byte, 2, 2+uvarintLen(rawLen)+len(payload))
 	out[0] = FormatVersion
 	out[1] = byte(ser)<<4 | byte(comp)
 	if comp != None {
-		out = appendUvarint(out, uint64(len(payload)))
+		out = appendUvarint(out, rawLen)
 	}
 	return append(out, payload...), nil
 }

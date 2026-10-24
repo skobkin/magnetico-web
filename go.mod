@@ -5,9 +5,11 @@ go 1.26.0
 toolchain go1.27.0
 
 require (
+	github.com/andybalholm/brotli v1.2.6
 	github.com/goccy/go-yaml v1.19.2
 	github.com/grafana/pyroscope-go v1.4.3
 	github.com/jessevdk/go-flags v1.6.1
+	github.com/klauspost/compress v1.20.3
 	github.com/multiformats/go-multihash v0.2.3
 	github.com/prometheus/client_golang v1.25.0
 )
@@ -16,7 +18,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/grafana/pyroscope-go/godeltaprof v0.1.12 // indirect
-	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.1 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/mr-tron/base58 v1.3.0 // indirect

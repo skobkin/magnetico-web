@@ -1,0 +1,133 @@
+{
+  "fixtures": [
+    {
+      "file": "zstd-valid.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "decode",
+      "sha256": "a7a2a835576fe8ab6ea0d6a2dd5da5b09ab0409a76e37e4fec584623dde9b972",
+      "note": "valid frame of the manifest payload"
+    },
+    {
+      "file": "zstd-trailing-junk.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "d252dbe0b9ee16e06b4b5fc722d9d9369243be8e716480c15a5db7b443d1d9a3",
+      "note": "valid frame followed by junk bytes"
+    },
+    {
+      "file": "zstd-concatenated.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "97e6c8bd00c53ea47ddd47cf573ed08bac5ac4421d7531e5007d2d25d36de8c5",
+      "note": "two concatenated frames, declared covers only the first"
+    },
+    {
+      "file": "zstd-truncated.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "reject-truncated",
+      "sha256": "d4ec6c065b953c15c7683d3c7a3ed619758790db535ceede152f5ac99873fbb6",
+      "note": "frame cut off mid-stream"
+    },
+    {
+      "file": "zstd-corrupted.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "ded930b202d10a81c774f599b4bed558e57ee8b778b875d85a42dc727f522b41",
+      "note": "frame header byte flipped (brotli has no content checksum: mid-payload flips may decode and are caught by the serializer/persistence layers instead — see compress_test.go)"
+    },
+    {
+      "file": "zstd-declared-too-small.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "fa350c29a0b4b138704aebd821a56ecb99222b3055f4daeefcb2f02ac3d0a495",
+      "note": "declared length one byte below the actual payload"
+    },
+    {
+      "file": "zstd-declared-too-large.hex",
+      "compressor": 1,
+      "serializer": 1,
+      "outcome": "reject-truncated",
+      "sha256": "4633864f0441addd26d4bdc1e300d35087dd93efe963d2b006896506c16898cb",
+      "note": "declared length one byte above the actual payload"
+    },
+    {
+      "file": "brotli-valid.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "decode",
+      "sha256": "eacfb5caa14ac87da75c8451aab26feea174d1c247cecf0655ded90f7bc168dd",
+      "note": "valid frame of the manifest payload"
+    },
+    {
+      "file": "brotli-trailing-junk.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "4e2fd0c7c0a3c4f5b2d5a99caccb7672661da3c8834bc37fb920bb09b4e82e48",
+      "note": "valid frame followed by junk bytes"
+    },
+    {
+      "file": "brotli-concatenated.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "e91efe09eb8115e96ff0a326f2477b7ff0eb878a4797519e5fc78be29c615880",
+      "note": "two concatenated frames, declared covers only the first"
+    },
+    {
+      "file": "brotli-truncated.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "reject-truncated",
+      "sha256": "fe153335f981b7e431c2b823183a747be17c643fd152298070ab4d9e12949e1f",
+      "note": "frame cut off mid-stream"
+    },
+    {
+      "file": "brotli-corrupted.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "1d51469096ea7e94f253e8857afacaa7b12cfaf96caa59a0ee7bb80d85119061",
+      "note": "frame header byte flipped (brotli has no content checksum: mid-payload flips may decode and are caught by the serializer/persistence layers instead — see compress_test.go)"
+    },
+    {
+      "file": "brotli-declared-too-small.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "reject-corrupt",
+      "sha256": "b15f42a9894cffb606b89e06a6bceacf459a2a8878f99a8573c661eb6433fd34",
+      "note": "declared length one byte below the actual payload"
+    },
+    {
+      "file": "brotli-declared-too-large.hex",
+      "compressor": 2,
+      "serializer": 1,
+      "outcome": "reject-truncated",
+      "sha256": "5163988221862cac89d9090cc9b9aa134389790c4b8903daab4e618f35548a54",
+      "note": "declared length one byte above the actual payload"
+    }
+  ],
+  "generated_with": {
+    "date": "2026-10-24",
+    "github.com/andybalholm/brotli": "v1.2.6",
+    "github.com/klauspost/compress": "v1.20.3"
+  },
+  "payload_files": [
+    {
+      "path": "a/b/c.txt",
+      "size": 1234
+    },
+    {
+      "path": "a/d.txt",
+      "size": 5678
+    }
+  ],
+  "payload_hex": "0209612F622F632E747874D20907612F642E747874AE2C",
+  "wire_format": 1
+}

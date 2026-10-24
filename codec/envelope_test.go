@@ -121,7 +121,7 @@ func TestBuildEnvelopeRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	payload := []byte{0x01, 0x02, 0x03}
-	blob, err := buildEnvelope(Flat, None, payload)
+	blob, err := buildEnvelope(Flat, None, uint64(len(payload)), payload)
 	if err != nil {
 		t.Fatalf("buildEnvelope() error = %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBuildEnvelopeRoundTrip(t *testing.T) {
 		t.Errorf("parseEnvelope(buildEnvelope) = (0x%x, 0x%x, %x, %d, %v)", ser, comp, got, declared, err)
 	}
 
-	blob, err = buildEnvelope(PrefixDelta, Brotli, payload)
+	blob, err = buildEnvelope(PrefixDelta, Brotli, 3, payload)
 	if err != nil {
 		t.Fatalf("buildEnvelope() error = %v", err)
 	}
@@ -141,15 +141,15 @@ func TestBuildEnvelopeRoundTrip(t *testing.T) {
 		t.Errorf("compressed envelope = %x, want 0122 03010203", blob)
 	}
 
-	if _, err := buildEnvelope(SerializerID(0x9), None, payload); !errors.Is(err, ErrUnsupportedSerializer) {
+	if _, err := buildEnvelope(SerializerID(0x9), None, uint64(len(payload)), payload); !errors.Is(err, ErrUnsupportedSerializer) {
 		t.Errorf("reserved serializer: error = %v, want ErrUnsupportedSerializer", err)
 	}
-	if _, err := buildEnvelope(Flat, CompressorID(0x5), payload); !errors.Is(err, ErrUnsupportedCompressor) {
+	if _, err := buildEnvelope(Flat, CompressorID(0x5), uint64(len(payload)), payload); !errors.Is(err, ErrUnsupportedCompressor) {
 		t.Errorf("reserved compressor: error = %v, want ErrUnsupportedCompressor", err)
 	}
 
 	// The declared length varint must be minimal.
-	blob, err = buildEnvelope(Flat, Zstd, make([]byte, 300))
+	blob, err = buildEnvelope(Flat, Zstd, 300, make([]byte, 10))
 	if err != nil {
 		t.Fatalf("buildEnvelope() error = %v", err)
 	}
