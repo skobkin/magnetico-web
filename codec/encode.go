@@ -90,12 +90,18 @@ func Encode(files []File, profile Profile, limits Limits) ([]byte, Selection, er
 
 // encodeSelected encodes an already canonical list across the profile's
 // candidates. st may be nil (one-shot compressors are created per call).
+//
+// A candidate whose payload or framed blob exceeds a limit is skipped, not
+// fatal: limits prune candidates while any other candidate can still
+// represent the list (spec §5 applies the limits to every candidate). The
+// recorded limit error is returned only when no valid candidate remains.
 func encodeSelected(st *compressState, profile Profile, sorted []File, limits Limits) ([]byte, Selection, error) {
 	var (
-		bestBlob []byte
-		bestSel  Selection
-		bestRank int
-		haveBest bool
+		bestBlob      []byte
+		bestSel       Selection
+		bestRank      int
+		haveBest      bool
+		firstLimitErr error
 	)
 	for _, c := range profile.candidates() {
 		// Trie candidates are skipped — never an error — when the input's
@@ -112,9 +118,12 @@ func encodeSelected(st *compressState, profile Profile, sorted []File, limits Li
 			return nil, Selection{}, err
 		}
 		if len(payload) > limits.MaxUncompressedBytes {
-			return nil, Selection{}, &LimitError{
-				Limit: LimitUncompressedBytes, Actual: uint64(len(payload)), Allowed: uint64(limits.MaxUncompressedBytes),
+			if firstLimitErr == nil {
+				firstLimitErr = &LimitError{
+					Limit: LimitUncompressedBytes, Actual: uint64(len(payload)), Allowed: uint64(limits.MaxUncompressedBytes),
+				}
 			}
+			continue
 		}
 		rawLen := uint64(len(payload))
 
@@ -135,9 +144,12 @@ func encodeSelected(st *compressState, profile Profile, sorted []File, limits Li
 			return nil, Selection{}, err
 		}
 		if len(blob) > limits.MaxStoredBytes {
-			return nil, Selection{}, &LimitError{
-				Limit: LimitStoredBytes, Actual: uint64(len(blob)), Allowed: uint64(limits.MaxStoredBytes),
+			if firstLimitErr == nil {
+				firstLimitErr = &LimitError{
+					Limit: LimitStoredBytes, Actual: uint64(len(blob)), Allowed: uint64(limits.MaxStoredBytes),
+				}
 			}
+			continue
 		}
 
 		r := rank(c)
@@ -148,6 +160,13 @@ func encodeSelected(st *compressState, profile Profile, sorted []File, limits Li
 			bestRank = r
 			haveBest = true
 		}
+	}
+	if !haveBest {
+		if firstLimitErr != nil {
+			return nil, Selection{}, firstLimitErr
+		}
+		// Defensive: an invalid profile yields no candidates at all.
+		return nil, Selection{}, fmt.Errorf("profile %d: %w", profile, ErrUnsupportedSerializer)
 	}
 	return bestBlob, bestSel, nil
 }
