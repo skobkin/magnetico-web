@@ -380,3 +380,69 @@ func TestDropInvalidRecordMetrics(t *testing.T) {
 		}
 	})
 }
+
+// TestSchemaStateDetailsSurfaced pins the bounded, escaped catalog-object
+// list in the schema-refusal failure messages — and that no other error
+// category contributes details.
+func TestSchemaStateDetailsSurfaced(t *testing.T) {
+	t.Parallel()
+
+	t.Run("bounded list with overflow marker", func(t *testing.T) {
+		t.Parallel()
+
+		details := make([]string, 12)
+		for i := range details {
+			details[i] = fmt.Sprintf("magneticod.table_%02d", i)
+		}
+		err := &persistence.SchemaStateError{Err: persistence.ErrUnsupportedSchema, Details: details}
+		msg := schemaInitFailureMessage("postgres://user:hunter2@localhost:5432/db", err)
+
+		if strings.Contains(msg, "hunter2") {
+			t.Errorf("message leaks credentials: %s", msg)
+		}
+		if !strings.Contains(msg, strconv.Quote("magneticod.table_07")) {
+			t.Errorf("message lacks the eighth detail: %s", msg)
+		}
+		if strings.Contains(msg, "table_08") {
+			t.Errorf("message carries more than the bounded detail count: %s", msg)
+		}
+		if !strings.Contains(msg, "(+4 more)") {
+			t.Errorf("message lacks the overflow marker: %s", msg)
+		}
+	})
+
+	t.Run("long and hostile details are truncated and escaped", func(t *testing.T) {
+		t.Parallel()
+
+		// The specials sit inside the kept prefix; the marker sits past the
+		// truncation point.
+		hostile := "e\"q\n" + strings.Repeat("x", 123) + "TAILMARKER"
+		err := &persistence.SchemaStateError{
+			Err:     persistence.ErrUnsupportedSchema,
+			Details: []string{hostile},
+		}
+		msg := databaseOpenFailureMessage("postgres://localhost/db", err)
+
+		if strings.Contains(msg, "\n") {
+			t.Errorf("message must stay single-line: %q", msg)
+		}
+		if !strings.Contains(msg, `e\"q`) || !strings.Contains(msg, `\n`) {
+			t.Errorf("message lacks the escaped detail: %s", msg)
+		}
+		if strings.Contains(msg, "TAILMARKER") {
+			t.Errorf("detail not truncated: %s", msg)
+		}
+	})
+
+	t.Run("non schema-state errors carry no details", func(t *testing.T) {
+		t.Parallel()
+
+		wrapped := fmt.Errorf("connect failed: %w", persistence.ErrStorageNotImplemented)
+		msg := databaseOpenFailureMessage("postgres://localhost/db", wrapped)
+		want := fmt.Sprintf("Could not open the database %s. %s",
+			redactDatabaseURL("postgres://localhost/db"), controlledErrorDetail(wrapped))
+		if msg != want {
+			t.Errorf("message = %q, want %q", msg, want)
+		}
+	})
+}

@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -87,22 +89,65 @@ func controlledErrorDetail(err error) string {
 	return fmt.Sprintf("unexpected error (%T)", err)
 }
 
+// schemaStateDetailLimits bound the catalog-object list surfaced to the
+// operator: at most this many entries, each at most this many bytes before
+// quoting.
+const (
+	schemaStateDetailMaxItems = 8
+	schemaStateDetailMaxBytes = 128
+)
+
+// schemaStateDetails returns a bounded, quoted copy of the catalog-object
+// list carried by a SchemaStateError, or nil for any other error. The
+// details are schema-qualified object names built from catalog data — never
+// driver error text and never credentials — and each is quoted so the log
+// line stays single-line and printable whatever an object is named.
+func schemaStateDetails(err error) []string {
+	var stateErr *persistence.SchemaStateError
+	if !errors.As(err, &stateErr) {
+		return nil
+	}
+	out := make([]string, 0, min(len(stateErr.Details), schemaStateDetailMaxItems+1))
+	for i, d := range stateErr.Details {
+		if i == schemaStateDetailMaxItems {
+			out = append(out, fmt.Sprintf("(+%d more)", len(stateErr.Details)-i))
+			break
+		}
+		if len(d) > schemaStateDetailMaxBytes {
+			d = d[:schemaStateDetailMaxBytes]
+		}
+		out = append(out, strconv.Quote(d))
+	}
+	return out
+}
+
+// appendSchemaStateDetails appends the bounded catalog-object list of a
+// SchemaStateError to a failure message; other errors contribute nothing.
+func appendSchemaStateDetails(msg string, err error) string {
+	details := schemaStateDetails(err)
+	if len(details) == 0 {
+		return msg
+	}
+	return msg + " " + strings.Join(details, " ")
+}
+
 // databaseOpenFailureMessage composes the database-open failure log line from
-// controlled content only: the redacted URL and the controlled error detail.
+// controlled content only: the redacted URL, the controlled error detail and,
+// for a schema-state refusal, the bounded escaped catalog-object list.
 func databaseOpenFailureMessage(rawURL string, err error) string {
-	return fmt.Sprintf(
+	return appendSchemaStateDetails(fmt.Sprintf(
 		"Could not open the database %s. %s",
 		redactDatabaseURL(rawURL), controlledErrorDetail(err),
-	)
+	), err)
 }
 
 // schemaInitFailureMessage composes the `migrate schema-init` failure log
-// line from controlled content only.
+// line from controlled content only, with the same schema-refusal details.
 func schemaInitFailureMessage(rawURL string, err error) string {
-	return fmt.Sprintf(
+	return appendSchemaStateDetails(fmt.Sprintf(
 		"Could not initialize the database schema on %s. %s",
 		redactDatabaseURL(rawURL), controlledErrorDetail(err),
-	)
+	), err)
 }
 
 // runMigrateSchemaInit implements `magnetico migrate schema-init`: it creates
