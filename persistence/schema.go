@@ -83,18 +83,27 @@ var expectedIndexes = []string{
 	"idx_torrents_name_gin_trgm",
 }
 
+// magneticoObject is one non-sequence relation inside the magneticod schema.
+// kind is the catalog relkind: r/p table, v view, m materialized view,
+// f foreign table. Identity sequences are part of the expected state (owned
+// by the IDENTITY columns) and are not inventoried.
+type magneticoObject struct {
+	name string
+	kind string
+}
+
 // catalogInventory is the read-only picture of a database's magnetico-related
 // state. Every query is SELECT-only; taking the inventory never writes
 // anything, so a refusal leaves the database byte-identical.
 type catalogInventory struct {
-	schemas          []string // non-system schema names
-	familyTables     []string // qualified `schema.table` for torrents/files/torrent_file_blobs/schema_version
-	magneticodTables []string // every table name inside magneticod, known or not
-	partitioned      []string // qualified names of partitioned tables among the family
-	indexes          []string // index names inside magneticod
-	torrentCols      []string // columns of magneticod.torrents (nil if absent)
-	versionRows      []int64  // rows of magneticod.schema_version (nil if table absent)
-	trgm             bool     // pg_trgm installed
+	schemas           []string // non-system schema names
+	familyTables      []string // qualified `schema.table` for torrents/files/torrent_file_blobs/schema_version
+	magneticodObjects []magneticoObject
+	partitioned       []string // qualified names of partitioned tables among the family
+	indexes           []string // index names inside magneticod
+	torrentCols       []string // columns of magneticod.torrents (nil if absent)
+	versionRows       []int64  // rows of magneticod.schema_version (nil if table absent)
+	trgm              bool     // pg_trgm installed
 }
 
 type inventoryState int
@@ -153,6 +162,13 @@ func (inv *catalogInventory) classify() (inventoryState, []string) {
 		return stateLegacy, details
 	}
 
+	// Unknown objects inside our own schema make the state unverifiable.
+	// Every non-sequence relation in magneticod is inventoried, so views,
+	// materialized views and foreign tables are caught along with ordinary
+	// tables; the details are computed before the missing-objects checks so
+	// a degenerate state names everything that was found.
+	unknown := unknownObjectDetails(inv)
+
 	// Expected new state: exactly our objects and exactly one version row
 	// carrying SchemaVersion.
 	wantTables := []string{"torrents", "torrent_file_blobs", "schema_version"}
@@ -168,32 +184,46 @@ func (inv *catalogInventory) classify() (inventoryState, []string) {
 		}
 	}
 	if len(missing) > 0 {
-		return stateUnsupported, append(missing, detailVersionRows(inv.versionRows))
+		return stateUnsupported, append(append(missing, unknown...), detailVersionRows(inv.versionRows))
 	}
 	if !versionRowsEqual(inv.versionRows, SchemaVersion) {
-		return stateUnsupported, []string{detailVersionRows(inv.versionRows)}
+		return stateUnsupported, append(unknown, detailVersionRows(inv.versionRows))
 	}
 
-	// Unknown objects inside our own schema make the state unverifiable.
-	// magneticodTables lists every table in the schema regardless of name,
-	// so foreign tables are visible even though the family-table tracking
-	// is name-filtered for the legacy markers.
-	known := map[string]bool{"torrents": true, "torrent_file_blobs": true, "schema_version": true}
-	for _, name := range inv.magneticodTables {
-		if !known[name] {
-			details = append(details, "unexpected table magneticod."+name)
-		}
-	}
 	for _, index := range inv.indexes {
 		if !containsString(expectedIndexes, index) {
-			details = append(details, "unexpected index magneticod."+index)
+			unknown = append(unknown, "unexpected index magneticod."+index)
 		}
 	}
-	if len(details) > 0 {
-		return stateUnsupported, details
+	if len(unknown) > 0 {
+		return stateUnsupported, unknown
 	}
 
 	return stateOK, nil
+}
+
+// unknownObjectDetails names every inventoried magneticod relation that is
+// not one of the expected tables, labeled by relation kind. Sequences are
+// never inventoried, so they cannot appear here.
+func unknownObjectDetails(inv *catalogInventory) []string {
+	known := map[string]bool{"torrents": true, "torrent_file_blobs": true, "schema_version": true}
+	var details []string
+	for _, obj := range inv.magneticodObjects {
+		if known[obj.name] && (obj.kind == "r" || obj.kind == "p") {
+			continue
+		}
+		switch obj.kind {
+		case "m":
+			details = append(details, "unexpected materialized view magneticod."+obj.name)
+		case "v":
+			details = append(details, "unexpected view magneticod."+obj.name)
+		case "f":
+			details = append(details, "unexpected foreign table magneticod."+obj.name)
+		default:
+			details = append(details, "unexpected table magneticod."+obj.name)
+		}
+	}
+	return details
 }
 
 func detailVersionRows(rows []int64) string {
@@ -261,10 +291,11 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
 
 	rows, err = q.Query(ctx, `SELECT n.nspname, c.relname, c.relkind
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE c.relkind IN ('r','p')
+        WHERE c.relkind IN ('r','p','v','m','f')
           AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
           AND (n.nspname = 'magneticod'
-               OR c.relname IN ('torrents','files','torrent_file_blobs','schema_version'))
+               OR (c.relkind IN ('r','p')
+                   AND c.relname IN ('torrents','files','torrent_file_blobs','schema_version')))
         ORDER BY 1, 2`)
 	if err != nil {
 		return nil, err
@@ -277,10 +308,13 @@ func readInventory(ctx context.Context, q queryer) (*catalogInventory, error) {
 		}
 		qt := schema + "." + name
 		if schema == "magneticod" {
-			inv.magneticodTables = append(inv.magneticodTables, name)
+			inv.magneticodObjects = append(inv.magneticodObjects, magneticoObject{name: name, kind: kind})
 		}
 		switch name {
 		case "torrents", "files", "torrent_file_blobs", "schema_version":
+			// Only real tables reach the family tracking: legacy layouts
+			// are tables (plain or partitioned), never views or foreign
+			// tables, so a view named "files" cannot fake a legacy marker.
 			inv.familyTables = append(inv.familyTables, qt)
 			if kind == "p" {
 				inv.partitioned = append(inv.partitioned, qt)
