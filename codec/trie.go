@@ -162,6 +162,10 @@ func (d *trieDecoder) node(dirPath string, depth int) ([]File, error) {
 			return nil, fmt.Errorf("subdirectory %d: %w", i, ErrDuplicateDirName)
 		case name < prevDir:
 			return nil, fmt.Errorf("subdirectory %d: %w", i, ErrNonCanonicalOrder)
+		case strings.IndexByte(name, '/') >= 0:
+			// A separator would make the split-on-"/" representation not
+			// reversible exactly (wire-format-v1 §3.3).
+			return nil, fmt.Errorf("subdirectory %d: %w", i, ErrPathComponentSeparator)
 		}
 		prevDir = name
 
@@ -193,6 +197,7 @@ func (d *trieDecoder) node(dirPath string, depth int) ([]File, error) {
 			fileCount, d.remaining, ErrInvalidCount)
 	}
 	prevBase := ""
+	var prevSizeU uint64
 	for i := uint64(0); i < fileCount; i++ {
 		baseLen, err := d.uvarint("file name length")
 		if err != nil {
@@ -211,10 +216,11 @@ func (d *trieDecoder) node(dirPath string, depth int) ([]File, error) {
 			return nil, err
 		}
 		base := string(baseBytes)
-		if base < prevBase {
-			return nil, fmt.Errorf("file %d: %w", i, ErrNonCanonicalOrder)
+		if strings.IndexByte(base, '/') >= 0 {
+			// A separator would make the split-on-"/" representation not
+			// reversible exactly (wire-format-v1 §3.3).
+			return nil, fmt.Errorf("file %d: %w", i, ErrPathComponentSeparator)
 		}
-		prevBase = base
 
 		sizeU, err := d.uvarint("file size")
 		if err != nil {
@@ -223,6 +229,15 @@ func (d *trieDecoder) node(dirPath string, depth int) ([]File, error) {
 		if sizeU > math.MaxInt64 {
 			return nil, fmt.Errorf("file %d size: %w", i, ErrOverflow)
 		}
+
+		// Local canonical order (spec §3.3): strictly increasing basenames,
+		// or an identical basename with a non-decreasing size — identical
+		// (basename, size) duplicates remain valid. The size must be read
+		// before the comparison: equal basenames are ordered by size.
+		if base < prevBase || (base == prevBase && sizeU < prevSizeU) {
+			return nil, fmt.Errorf("file %d: %w", i, ErrNonCanonicalOrder)
+		}
+		prevBase, prevSizeU = base, sizeU
 
 		// Complete reconstructed path bound (spec §5): components are
 		// bounded individually, but their concatenation is what the

@@ -70,6 +70,25 @@ func TestDecodeTrieRejectsMalformedStructures(t *testing.T) {
 			wantErr: ErrNonCanonicalOrder,
 		},
 		{
+			name: "equal basenames with decreasing sizes",
+			payload: bcat(bu(2),
+				bu(0),
+				bu(2),
+				bu(1), bs("a"), bu(2),
+				bu(1), bs("a"), bu(1)),
+			wantErr: ErrNonCanonicalOrder,
+		},
+		{
+			name:    "separator in subdirectory component",
+			payload: bcat(bu(1), bu(1), bu(3), bs("a/b"), bu(0), bu(0), bu(0)),
+			wantErr: ErrPathComponentSeparator,
+		},
+		{
+			name:    "separator in file component",
+			payload: bcat(bu(1), bu(0), bu(1), bu(3), bs("a/b"), bu(1)),
+			wantErr: ErrPathComponentSeparator,
+		},
+		{
 			name:    "empty subdirectory component",
 			payload: bcat(bu(1), bu(1), bu(0)),
 			wantErr: ErrEmptyPathComponent,
@@ -172,17 +191,27 @@ func TestDecodeTrieDuplicateBasenamesAreValid(t *testing.T) {
 	t.Parallel()
 
 	// Equal basenames with non-decreasing sizes are canonical (vector D
-	// semantics apply per node).
-	payload := bcat(bu(2), bu(0), bu(2),
-		bu(1), bs("a"), bu(1),
-		bu(1), bs("a"), bu(2))
-	got, err := Decode(trieBlob(t, payload), DefaultLimits())
-	if err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-	want := []File{{Path: "a", Size: 1}, {Path: "a", Size: 2}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("Decode() = %#v, want %#v", got, want)
+	// semantics apply per node); identical (basename, size) duplicates stay
+	// valid too.
+	for name, payload := range map[string][]byte{
+		"increasing sizes": bcat(bu(2), bu(0), bu(2),
+			bu(1), bs("a"), bu(1),
+			bu(1), bs("a"), bu(2)),
+		"identical duplicates": bcat(bu(2), bu(0), bu(2),
+			bu(1), bs("a"), bu(1),
+			bu(1), bs("a"), bu(1)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := Decode(trieBlob(t, payload), DefaultLimits())
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, []File{{Path: "a", Size: 1}, {Path: "a", Size: 2}}) &&
+				!reflect.DeepEqual(got, []File{{Path: "a", Size: 1}, {Path: "a", Size: 1}}) {
+				t.Errorf("Decode() = %#v", got)
+			}
+		})
 	}
 }
 

@@ -19,10 +19,14 @@ var (
 	ErrPrefixOutOfRange      = errors.New("shared prefix length exceeds the previous path length")
 	ErrDuplicateDirName      = errors.New("duplicate subdirectory name")
 	ErrEmptyPathComponent    = errors.New("empty path component")
-	ErrInvalidCount          = errors.New("invalid file count")
-	ErrCorruptCompressed     = errors.New("corrupt compressed stream")
-	ErrOverflow              = errors.New("numeric value exceeds the target type range")
-	ErrNegativeSize          = errors.New("file size is negative")
+	// ErrPathComponentSeparator reports a trie component carrying the path
+	// separator: splitting on "/" would then not reverse exactly
+	// (wire-format-v1 §3.3).
+	ErrPathComponentSeparator = errors.New("path component contains the path separator")
+	ErrInvalidCount           = errors.New("invalid file count")
+	ErrCorruptCompressed      = errors.New("corrupt compressed stream")
+	ErrOverflow               = errors.New("numeric value exceeds the target type range")
+	ErrNegativeSize           = errors.New("file size is negative")
 )
 
 // Limit names reported by LimitError.Limit.
