@@ -90,3 +90,21 @@ func noBlobEligible(meta Torrent, files []File) bool {
 func wrapEncodeError(err error) error {
 	return fmt.Errorf("%w: %w", ErrInvalidMetadata, err)
 }
+
+// ValidateIngest, NoBlobEligible and WrapEncodeError are the exported form
+// of the ingestion rules, for bulk importers inside this module (the offline
+// legacy migrator) that must apply exactly the production validation and
+// no-blob eligibility semantics without duplicating them. They delegate to
+// the unexported implementations used by AddTorrent — behavior-preserving by
+// construction.
+func ValidateIngest(meta Torrent, files []File, limits codec.Limits) error {
+	return validateIngest(meta, files, limits)
+}
+
+func NoBlobEligible(meta Torrent, files []File) bool {
+	return noBlobEligible(meta, files)
+}
+
+func WrapEncodeError(err error) error {
+	return wrapEncodeError(err)
+}
