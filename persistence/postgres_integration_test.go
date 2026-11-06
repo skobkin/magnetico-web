@@ -25,7 +25,7 @@ import (
 // newTestStore returns a Store backed by a fresh, fully initialized database.
 func newTestStore(t *testing.T) (Store, string) {
 	t.Helper()
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -631,7 +631,7 @@ func TestAddTorrentValidationErrors(t *testing.T) {
 func TestBlobSizeCapClassifiedAsInvalidMetadata(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := InitSchema(ctx, dsn); err != nil {
@@ -752,7 +752,7 @@ func TestRestrictedRoleNoBlobDecodeAccess(t *testing.T) {
 		t.Skip("role/permission setup, skipped in -short runs")
 	}
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := InitSchema(ctx, dsn); err != nil {

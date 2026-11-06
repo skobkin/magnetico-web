@@ -129,7 +129,7 @@ func trgmInstalled(t *testing.T, dsn string) bool {
 func TestInitSchemaFreshAndIdempotent(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -179,7 +179,7 @@ func openConn(t *testing.T, dsn string) *pgx.Conn {
 func TestInitSchemaConcurrentInvocations(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -275,7 +275,7 @@ func TestInitSchemaRefusesLegacyLayouts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			dsn := integrationCluster(t).testDatabase(t)
+			dsn := integrationCluster(t).TestDatabase(t)
 			tt.build(t, dsn)
 			before := catalogSnapshot(t, dsn)
 
@@ -311,7 +311,7 @@ func TestInitSchemaRefusesLegacyLayouts(t *testing.T) {
 func TestInitSchemaRefusesPartialState(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 
 	conn := openConn(t, dsn)
 	ctx, cancel := context.WithTimeout(context.Background(), dbOpTimeout)
@@ -347,7 +347,7 @@ func TestInitSchemaRefusesPartialState(t *testing.T) {
 func TestUnknownTableInsideMagneticodRefused(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := InitSchema(ctx, dsn); err != nil {
@@ -398,7 +398,7 @@ func TestUnknownTableInsideMagneticodRefused(t *testing.T) {
 func TestUnrelatedSchemaCoexists(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 
 	conn := openConn(t, dsn)
 	ctx, cancel := context.WithTimeout(context.Background(), dbOpTimeout)
@@ -425,7 +425,7 @@ func TestUnrelatedSchemaCoexists(t *testing.T) {
 func TestUnknownNonTableRelationsRefused(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := InitSchema(ctx, dsn); err != nil {
@@ -477,7 +477,7 @@ func TestUnknownNonTableRelationsRefused(t *testing.T) {
 func TestDegenerateStateNamesEverything(t *testing.T) {
 	t.Parallel()
 
-	dsn := integrationCluster(t).testDatabase(t)
+	dsn := integrationCluster(t).TestDatabase(t)
 
 	conn := openConn(t, dsn)
 	ctx, cancel := context.WithTimeout(context.Background(), dbOpTimeout)
@@ -515,7 +515,7 @@ func TestFamilyNamedViewIsUnsupportedNotLegacy(t *testing.T) {
 	t.Run("view named magneticod.files", func(t *testing.T) {
 		t.Parallel()
 
-		dsn := integrationCluster(t).testDatabase(t)
+		dsn := integrationCluster(t).TestDatabase(t)
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		if err := InitSchema(ctx, dsn); err != nil {
@@ -571,7 +571,7 @@ func TestFamilyNamedViewIsUnsupportedNotLegacy(t *testing.T) {
 	t.Run("view named magneticod.torrents", func(t *testing.T) {
 		t.Parallel()
 
-		dsn := integrationCluster(t).testDatabase(t)
+		dsn := integrationCluster(t).TestDatabase(t)
 		conn := openConn(t, dsn)
 		ctx, cancel := context.WithTimeout(context.Background(), dbOpTimeout)
 		defer cancel()
@@ -609,7 +609,7 @@ func TestMakeDatabaseStartupVerification(t *testing.T) {
 
 	t.Run("absent schema fails with the init hint", func(t *testing.T) {
 		t.Parallel()
-		dsn := integrationCluster(t).testDatabase(t)
+		dsn := integrationCluster(t).TestDatabase(t)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -627,7 +627,7 @@ func TestMakeDatabaseStartupVerification(t *testing.T) {
 
 	t.Run("initialized schema opens", func(t *testing.T) {
 		t.Parallel()
-		dsn := integrationCluster(t).testDatabase(t)
+		dsn := integrationCluster(t).TestDatabase(t)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
@@ -643,7 +643,7 @@ func TestMakeDatabaseStartupVerification(t *testing.T) {
 
 	t.Run("missing pg_trgm fails with the extension hint", func(t *testing.T) {
 		t.Parallel()
-		dsn := integrationCluster(t).testDatabase(t)
+		dsn := integrationCluster(t).TestDatabase(t)
 
 		// Build the schema objects WITHOUT the extension.
 		if err := InitSchema(context.Background(), dsn); err != nil {
