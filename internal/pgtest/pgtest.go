@@ -54,10 +54,13 @@ const (
 // Cluster is one disposable PostgreSQL server. AdminDSN connects to its
 // maintenance database ("postgres"); External reports a server the operator
 // pointed at (never stopped); Stop, when non-nil, tears the server down.
+// SocketDir is the Unix-socket directory of a locally started cluster
+// (empty for Docker/external servers).
 type Cluster struct {
-	AdminDSN string
-	External bool
-	Stop     func() // nil for external servers
+	AdminDSN  string
+	External  bool
+	SocketDir string
+	Stop      func() // nil for external servers
 }
 
 var (
@@ -228,7 +231,7 @@ func bootstrapLocalBinaries() (*Cluster, error) {
 		stop()
 		return nil, err
 	}
-	return &Cluster{AdminDSN: adminDSN, Stop: stop}, nil
+	return &Cluster{AdminDSN: adminDSN, SocketDir: socketDir, Stop: stop}, nil
 }
 
 func waitForPostgres(ctx context.Context, dsn string) error {
@@ -304,4 +307,10 @@ func RandomSuffix() string {
 // QuoteIdent safely quotes a PostgreSQL identifier we generated ourselves.
 func QuoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// QuoteLiteral renders a Go string as a PostgreSQL string literal (fixture
+// seed data only — never production SQL paths).
+func QuoteLiteral(s string) string {
+	return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
 }
