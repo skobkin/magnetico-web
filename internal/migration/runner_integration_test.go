@@ -1116,3 +1116,40 @@ func TestRunnerShortDuplicatePathsImportCleanly(t *testing.T) {
 		t.Fatalf("progress = %+v, want import_complete with 20 successes and no errors", p)
 	}
 }
+
+// Metadata-heavy source under a small window budget: long torrent names
+// force the reader's METADATA phase to cut its windows (the keyset page —
+// the batch — is far larger than the budget can retain), and the run must
+// still account for every torrent exactly once — including the file-less
+// ones, which become missing_files errors. A skipped torrent fails the
+// completion accounting gate; a duplicated one violates the target's
+// UNIQUE(info_hash) and fatals — this test pins both absences end to end.
+func TestRunnerMetadataHeavyWindowsImportCleanly(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	name := strings.Repeat("n", 32<<10) // 32896 B of metadata weight per torrent
+	for id := int32(1); id <= 40; id++ {
+		if id%2 == 0 { // half the torrents have files, half are missing_files
+			seedSourceTorrent(t, src, id, name, 2, 1700000000+id)
+			seedSourceFile(t, src, id, "a", 1)
+			seedSourceFile(t, src, id, "b", 1)
+		} else {
+			seedSourceTorrent(t, src, id, name, 1, 1700000000+id)
+		}
+	}
+
+	err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt,
+		Workers:          2,
+		BatchSize:        100,     // one naive page would hold all 40 torrents
+		MaxInflightBytes: 1 << 20, // the runner's floor: ~31 heavy torrents fit per window
+	})
+	if err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	p := snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseCompleteWithErrors || p.SuccessCount != 20 || p.ErrorCount != 20 || p.ScannedCount != 40 {
+		t.Fatalf("progress = %+v, want import_complete_with_errors with 20 successes, 20 missing_files errors, 40 scanned", p)
+	}
+}

@@ -361,3 +361,179 @@ func TestReaderPathByteOverflowDrainedWithoutRetention(t *testing.T) {
 		t.Fatalf("healthy torrent kept %d rows, want 1", len(rows))
 	}
 }
+
+// The window byte budget must bound the METADATA scan too, not just the
+// file rows: a keyset page far larger than the budget, full of long-named
+// torrents with no files (which never reach the file-row pass), used to be
+// retained in full before any budget check. Regression: the metadata phase
+// truncates at exact budget arithmetic, and iterating windows still reads
+// every torrent exactly once — no skips, no duplicates.
+func TestReaderWindowBudgetBoundsMetadataScan(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	// 60 file-less torrents with 512-byte names: 128+512 = 640 B of
+	// metadata weight each, zero file rows.
+	name := strings.Repeat("n", 512)
+	for id := int32(1); id <= 60; id++ {
+		seedTorrent(t, dsn, id, fmt.Sprintf("%040x", id), name, 1, 1700000000+id)
+	}
+
+	const budget = 16384 // 16 KiB: floor(budget/640) = 25 torrents per window
+	perTorrent := int64(retainedTorrentOverhead + 512)
+	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: budget}
+	var got []TorrentRow
+	after := int64(0)
+	windows := 0
+	for {
+		w, err := src.Window(ctx, after, 1000, limits)
+		if err != nil {
+			t.Fatalf("Window(after=%d) error = %v", after, err)
+		}
+		windows++
+		if len(w.Torrents) > int(budget/perTorrent) {
+			t.Fatalf("window(after=%d) returned %d torrents, want at most %d (budget / per-torrent metadata weight)",
+				after, len(w.Torrents), budget/perTorrent)
+		}
+		// An occupied window never exceeds the budget: the cut happens
+		// BEFORE retention (the only over-budget window is a single
+		// oversized torrent admitted into an empty one).
+		if len(w.Torrents) > 1 && w.RetainedBytes > budget {
+			t.Fatalf("window(after=%d) retained %d bytes, want at most %d", after, w.RetainedBytes, budget)
+		}
+		if windows <= 2 {
+			// The first two windows start from a full page: the cut must be
+			// exactly floor(budget/perTorrent) and flagged as truncated.
+			if len(w.Torrents) != int(budget/perTorrent) {
+				t.Fatalf("window %d returned %d torrents, want exactly %d", windows, len(w.Torrents), budget/perTorrent)
+			}
+			if !w.Truncated() {
+				t.Fatalf("window %d reports not truncated, want a metadata-phase budget cut", windows)
+			}
+		}
+		if len(w.Torrents) == 0 {
+			break
+		}
+		got = append(got, w.Torrents...)
+		after = int64(w.Torrents[len(w.Torrents)-1].ID)
+		if windows > 8 {
+			t.Fatal("window iteration did not terminate")
+		}
+	}
+	if len(got) != 60 {
+		t.Fatalf("read %d torrents across %d windows, want all 60 with no skips", len(got), windows)
+	}
+	for i, tr := range got {
+		if tr.ID != int32(i+1) {
+			t.Fatalf("torrent %d: got id %d, want %d (ascending, no gaps, no duplicates)", i, tr.ID, i+1)
+		}
+	}
+}
+
+// When the metadata phase makes the cut, every retained torrent must still
+// carry its complete file list — a torrent present without its files would
+// corrupt into a missing_files error past the checkpoint (the truncation
+// regression class), so the budget may never cut inside a torrent.
+func TestReaderMetadataBudgetKeepsFileListsComplete(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	// 40 torrents with 512-byte names and two one-byte paths each.
+	name := strings.Repeat("n", 512)
+	for id := int32(1); id <= 40; id++ {
+		seedTorrent(t, dsn, id, fmt.Sprintf("%040x", id), name, 2, 1700000000+id)
+		owner := id
+		seedFile(t, dsn, 10*id, &owner, "a", 1)
+		seedFile(t, dsn, 10*id+1, &owner, "b", 1)
+	}
+
+	// Budget 2 KiB: the metadata phase alone (640 B/torrent) cuts at three
+	// torrents; the file rows then trip it again at group boundaries.
+	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: 2048}
+	var got []TorrentRow
+	after := int64(0)
+	windows := 0
+	for {
+		w, err := src.Window(ctx, after, 100, limits)
+		if err != nil {
+			t.Fatalf("Window(after=%d) error = %v", after, err)
+		}
+		windows++
+		// Bound: the budget plus one torrent's metadata plus one completed
+		// file group — the same invariant the file-row truncation documents.
+		if max := int64(2048) + 640 + 2*(1+retainedFileOverhead); w.RetainedBytes > max {
+			t.Fatalf("window(after=%d) retained %d bytes, want at most %d", after, w.RetainedBytes, max)
+		}
+		for _, tr := range w.Torrents {
+			rows := w.Files[tr.ID]
+			if len(rows) != 2 || rows[0].Path != "a" || rows[1].Path != "b" {
+				t.Fatalf("window(after=%d) torrent %d kept %+v, want its complete list of 2 (a, b)",
+					after, tr.ID, rows)
+			}
+		}
+		if len(w.Torrents) == 0 {
+			break
+		}
+		got = append(got, w.Torrents...)
+		after = int64(w.Torrents[len(w.Torrents)-1].ID)
+		if windows > 64 {
+			t.Fatal("window iteration did not terminate")
+		}
+	}
+	if len(got) != 40 {
+		t.Fatalf("read %d torrents across %d windows, want all 40 with complete file lists", len(got), windows)
+	}
+	for i, tr := range got {
+		if tr.ID != int32(i+1) {
+			t.Fatalf("torrent %d: got id %d, want %d (ascending, no gaps, no duplicates)", i, tr.ID, i+1)
+		}
+	}
+}
+
+// A torrent whose metadata alone exceeds the whole window budget is still
+// admitted — alone — into an empty window: the read-side mirror of the
+// pipeline's oversized-solo admission. Refusing it would stall the run
+// forever; admitting the FOLLOW-UP torrents with it would defeat the budget.
+func TestReaderEmptyWindowAdmitsOversizedMetadata(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	huge := strings.Repeat("big", 700) // 2100 bytes against a 1 KiB budget
+	seedTorrent(t, dsn, 1, hashAA, huge, 1, 1700000001)
+	seedTorrent(t, dsn, 2, hashBB, "normal", 1, 1700000002)
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: 1024}
+	w, err := src.Window(ctx, 0, 10, limits)
+	if err != nil {
+		t.Fatalf("Window() error = %v", err)
+	}
+	if len(w.Torrents) != 1 || w.Torrents[0].ID != 1 || w.Torrents[0].Name != huge {
+		t.Fatalf("window = %+v, want exactly the oversized torrent admitted alone", w.Torrents)
+	}
+	if w.RetainedBytes != int64(retainedTorrentOverhead+len(huge)) {
+		t.Fatalf("retained %d bytes, want exactly the oversized torrent's weight %d",
+			w.RetainedBytes, retainedTorrentOverhead+len(huge))
+	}
+	if !w.Truncated() {
+		t.Fatal("the follow-up torrent must be left for the next window (truncated)")
+	}
+
+	w2, err := src.Window(ctx, 1, 10, limits)
+	if err != nil {
+		t.Fatalf("Window(after=1) error = %v", err)
+	}
+	if len(w2.Torrents) != 1 || w2.Torrents[0].ID != 2 {
+		t.Fatalf("next window = %+v, want the follow-up torrent", w2.Torrents)
+	}
+	if w2.Truncated() {
+		t.Fatal("next window read its whole range, must not report truncated")
+	}
+}

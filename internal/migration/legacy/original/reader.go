@@ -36,9 +36,13 @@ type FileRow struct {
 //     and the record is rejected with a categorized error instead of
 //     pretending a complete list was read.
 //   - WindowMaxBytes (the runner's --max-inflight-bytes): the window stops
-//     early once its retained WEIGHT reaches this budget — the torrents
-//     beyond the cut simply arrive in the next keyset window, so read-side
-//     buffering stays bounded by the budget plus one capped torrent. The
+//     early once its retained WEIGHT reaches this budget — enforced during
+//     BOTH scans, torrent metadata and file rows. The torrents beyond the
+//     cut simply arrive in the next keyset window, so read-side buffering
+//     stays bounded by the budget plus one torrent: an occupied window
+//     never retains a torrent that would push it past the budget, and an
+//     empty window always admits its first torrent whatever it weighs (the
+//     read-side mirror of the pipeline's oversized-solo admission). The
 //     weight mirrors the pipeline's memory model (path/name bytes plus the
 //     structural overhead below), because the buffered rows, not their
 //     string bytes, dominate real memory for torrents of many short paths.
@@ -148,13 +152,36 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 	if err != nil {
 		return nil, err
 	}
+	// scanned marks the torrents retained in this window: the files pass
+	// uses it to attach rows and to recognize orphans.
+	scanned := make(map[int32]bool)
 	for rows.Next() {
 		var t TorrentRow
 		if err := rows.Scan(&t.ID, &t.InfoHash, &t.Name, &t.TotalSize, &t.DiscoveredOn); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		// The window budget bounds the METADATA scan too, not just the file
+		// rows: with a keyset page far larger than the budget, torrents with
+		// long names — above all torrents with no files, which never reach
+		// the file-row pass — would otherwise be retained in full before any
+		// budget check. The weight is charged BEFORE retention; a torrent
+		// that would push an occupied window past the budget is dropped from
+		// the wire together with the rows after it (they arrive in the next
+		// keyset window — the caller's cursor stops at the last kept torrent,
+		// so nothing is skipped and nothing is duplicated). An EMPTY window
+		// always admits its first torrent: one whose metadata alone exceeds
+		// the budget is the read-side mirror of the pipeline's oversized-solo
+		// admission, and refusing it would stall the run forever.
+		weight := retainedTorrentOverhead + int64(len(t.Name))
+		if limits.WindowMaxBytes > 0 && len(w.Torrents) > 0 &&
+			w.RetainedBytes+weight > limits.WindowMaxBytes {
+			w.truncated = true
+			break
+		}
 		w.Torrents = append(w.Torrents, t)
+		scanned[t.ID] = true
+		w.RetainedBytes += weight
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -164,16 +191,6 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 		return w, nil
 	}
 	lastID := w.Torrents[len(w.Torrents)-1].ID
-
-	scanned := make(map[int32]bool, len(w.Torrents))
-	for _, t := range w.Torrents {
-		scanned[t.ID] = true
-		// The retained weight starts with the torrent rows themselves: name
-		// bytes plus per-torrent structure. Dropped (truncated) torrents'
-		// base weight stays counted — a deliberate conservative overcount
-		// that can only make the budget trip sooner.
-		w.RetainedBytes += retainedTorrentOverhead + int64(len(t.Name))
-	}
 
 	// One bounded, set-oriented files query for the whole window; NULL
 	// torrent_id rows fail the range comparison and are therefore excluded
