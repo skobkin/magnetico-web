@@ -70,6 +70,46 @@ func TestNonTTYLogsUpdatesAndFinalLine(t *testing.T) {
 	}
 }
 
+// A burst of committed batches must not become a burst of log lines:
+// ordinary progress is rate-limited to the interval no matter how many
+// updates land between renders (regression: every batch update rendered,
+// spamming the non-TTY log once per committed batch).
+func TestBurstUpdatesAreRateLimited(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	var lines []string
+	r := New(false, nil, func(f string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(f, args...))
+	})
+	r.interval = 50 * time.Millisecond
+	go r.Run()
+
+	const batches = 300
+	start := time.Now()
+	for i := 1; i <= batches; i++ {
+		r.Update(Snapshot{Phase: "importing", Scanned: int64(i), ExpectedTotal: batches})
+	}
+	time.Sleep(2 * r.interval) // let the renderer drain the burst
+	r.Stop()
+	elapsed := time.Since(start)
+
+	mu.Lock()
+	defer mu.Unlock()
+	// Rate-limit bound: at most one ordinary render per interval, plus the
+	// first snapshot and the final state — 300 batch updates must land
+	// nowhere near 300 lines.
+	if maxLines := int(elapsed/r.interval) + 2; len(lines) > maxLines {
+		t.Fatalf("%d batch updates produced %d log lines in %v, want at most %d "+
+			"(one per interval, plus first and final)", batches, len(lines), elapsed, maxLines)
+	}
+	if last := lines[len(lines)-1]; !strings.Contains(last, fmt.Sprintf("scanned=%d/%d", batches, batches)) {
+		t.Fatalf("final log line %q missing the final state scanned=%d/%d", last, batches, batches)
+	}
+}
+
 // A resumed run's first snapshot already carries the previous session's
 // cumulative counters: the reported rate must come from the session delta
 // only, and the ETA from the remaining work over that honest rate.

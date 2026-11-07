@@ -43,8 +43,11 @@ type Snapshot struct {
 }
 
 // Refresh cadence: a TTY redraws several times a second; a non-TTY run
-// logs periodically (plan cadence: every 30 s — phase changes render
-// immediately in both modes via the update wake-up).
+// logs periodically (plan cadence: every 30 s). Ordinary progress is
+// rate-limited to the interval on both sinks — Update fires once per
+// committed batch and is only a wake-up, never a render order — while
+// phase changes, index milestones, the first snapshot and the final state
+// render immediately.
 const (
 	DefaultTTYInterval = 500 * time.Millisecond
 	DefaultLogInterval = 30 * time.Second
@@ -116,8 +119,12 @@ func (r *Renderer) Run() {
 	ticker := time.NewTicker(r.interval)
 	defer ticker.Stop()
 
-	var started time.Time
-	var baseScanned int64
+	var (
+		started     time.Time
+		baseScanned int64
+		lastRender  time.Time
+		lastKey     snapshotKey
+	)
 	for {
 		select {
 		case <-r.stopped:
@@ -136,8 +143,28 @@ func (r *Renderer) Run() {
 			started = time.Now()
 			baseScanned = s.Scanned
 		}
+		// Ordinary progress is rate-limited to the refresh interval: Update
+		// fires once per committed batch, and rendering per batch would spam
+		// the non-TTY log once per batch and redraw the TTY line unboundedly.
+		// Phase changes and index milestones are rare and operator-relevant,
+		// so their key changes render immediately — as do the very first
+		// snapshot and the final state.
+		key := snapshotKey{s.Phase, s.IndexStep, s.IndexTotal, s.IndexName}
+		if !lastRender.IsZero() && key == lastKey && time.Since(lastRender) < r.interval {
+			continue
+		}
 		r.render(s, started, baseScanned, false)
+		lastRender, lastKey = time.Now(), key
 	}
+}
+
+// snapshotKey is the identity of a snapshot's operator-relevant state:
+// counter movement between equal keys is rate-limited, a key change (a
+// phase or an index milestone) renders immediately.
+type snapshotKey struct {
+	phase             string
+	idxStep, idxTotal int
+	idxName           string
 }
 
 // Stop ends the rendering goroutine and waits for it to emit the final

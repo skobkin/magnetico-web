@@ -252,6 +252,13 @@ func runMigrateTorrents(opFlags *opflags.TorrentsOptions) {
 			})
 		},
 	})
+	// The renderer's final line lands before the outcome. Stop is
+	// idempotent (the deferred call above stays as panic insurance), but an
+	// explicit call here is required: the exit paths below — os.Exit and
+	// log.Fatalln — bypass deferred calls and would leave the run without
+	// its final progress line (on a TTY, without the line-terminating
+	// newline).
+	renderer.Stop()
 	switch {
 	case err == nil:
 		// The redacted URL carries no credentials by construction.
