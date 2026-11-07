@@ -18,7 +18,7 @@ import (
 // goroutine only.
 type windowSource struct {
 	src      *original.Source
-	afterID  int32
+	afterID  int64
 	window   int
 	maxFiles int
 
@@ -27,7 +27,10 @@ type windowSource struct {
 	observedOrphans int64
 }
 
-func newWindowSource(src *original.Source, afterID int32, window, maxFiles int) *windowSource {
+// newWindowSource starts keyset iteration strictly above afterID. The
+// cursor stays int64 end to end: it is initialized to source_min_id-1, which
+// underflows int32 when the minimum source ID is MinInt32.
+func newWindowSource(src *original.Source, afterID int64, window, maxFiles int) *windowSource {
 	return &windowSource{src: src, afterID: afterID, window: window, maxFiles: maxFiles}
 }
 
@@ -41,7 +44,7 @@ func (w *windowSource) Next(ctx context.Context) ([]pipeline.Job, bool, error) {
 	if len(win.Torrents) == 0 {
 		return nil, false, nil
 	}
-	w.afterID = win.Torrents[len(win.Torrents)-1].ID
+	w.afterID = int64(win.Torrents[len(win.Torrents)-1].ID)
 	w.observedOrphans += win.OrphanFiles
 
 	jobs := make([]pipeline.Job, 0, len(win.Torrents))

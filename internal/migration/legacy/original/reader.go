@@ -50,10 +50,15 @@ type Window struct {
 // index (one set-oriented query per window — never one query per torrent,
 // no SQL-side aggregates).
 //
+// afterID is the keyset cursor one below the next ID to read. It is int64,
+// NOT int32: a fresh run starts at source_min_id-1, and for a source whose
+// minimum ID is MinInt32 that cursor is MinInt32-1 — converting it to int32
+// would wrap to MaxInt32 and silently skip the whole source.
+//
 // maxFiles is the production codec's MaxFiles: a torrent with more file
 // rows than that cannot survive validation anyway, so the reader drains and
 // counts those rows instead of retaining an uncontrolled slice.
-func (s *Source) Window(ctx context.Context, afterID int32, limit int, maxFiles int) (*Window, error) {
+func (s *Source) Window(ctx context.Context, afterID int64, limit int, maxFiles int) (*Window, error) {
 	if limit <= 0 {
 		return nil, fmt.Errorf("window limit must be positive, got %d", limit)
 	}
@@ -62,9 +67,12 @@ func (s *Source) Window(ctx context.Context, afterID int32, limit int, maxFiles 
 	}
 
 	w := &Window{Files: map[int32][]FileRow{}}
+	// $1 is cast to bigint explicitly: uncast, PostgreSQL reports the
+	// parameter as int4 (from the id column context) and pgx refuses to
+	// encode the MinInt32-1 start cursor into it.
 	rows, err := s.pool.Query(ctx, `SELECT id, info_hash, name, total_size, discovered_on
         FROM magneticod.torrents
-        WHERE id > $1
+        WHERE id > $1::bigint
         ORDER BY id
         LIMIT $2`, afterID, limit)
 	if err != nil {
@@ -97,7 +105,7 @@ func (s *Source) Window(ctx context.Context, afterID int32, limit int, maxFiles 
 	// here (they are counted at preflight and in the fingerprint).
 	frows, err := s.pool.Query(ctx, `SELECT id, torrent_id, size, path
         FROM magneticod.files
-        WHERE torrent_id > $1 AND torrent_id <= $2
+        WHERE torrent_id > $1::bigint AND torrent_id <= $2
         ORDER BY torrent_id, id`, afterID, lastID)
 	if err != nil {
 		return nil, err

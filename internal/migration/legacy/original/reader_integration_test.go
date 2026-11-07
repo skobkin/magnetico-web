@@ -40,7 +40,7 @@ func TestReaderWindowsPreserveDuplicatesAndGaps(t *testing.T) {
 	// Window size 2 forces three windows across the ID gap.
 	var got []TorrentRow
 	totalOrphans := int64(0)
-	after := int32(0)
+	after := int64(0)
 	for {
 		w, err := src.Window(ctx, after, 2, 250000)
 		if err != nil {
@@ -54,7 +54,7 @@ func TestReaderWindowsPreserveDuplicatesAndGaps(t *testing.T) {
 		if len(w.Torrents) > 2 {
 			t.Fatalf("window returned %d torrents, want at most 2", len(w.Torrents))
 		}
-		after = w.Torrents[len(w.Torrents)-1].ID
+		after = int64(w.Torrents[len(w.Torrents)-1].ID)
 	}
 	if len(got) != 4 {
 		t.Fatalf("read %d torrents, want 4", len(got))

@@ -301,7 +301,7 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 		}
 
 		const maxReplays = 3
-		ws := newWindowSource(src, int32(prog.LastProcessedID), in.BatchSize, limits.MaxFiles)
+		ws := newWindowSource(src, prog.LastProcessedID, in.BatchSize, limits.MaxFiles)
 		for attempt := 0; ; attempt++ {
 			_, perr := pipeline.Run(runCtx, ws, pcfg, rc)
 			prog.LastProcessedID = rc.expected
@@ -340,7 +340,7 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "write",
 						rc.expected, ce.LastSourceID, fmt.Errorf("%w (after %d replays)", perr, attempt))
 				}
-				ws = newWindowSource(src, int32(rc.expected), in.BatchSize, limits.MaxFiles)
+				ws = newWindowSource(src, rc.expected, in.BatchSize, limits.MaxFiles)
 				continue
 			}
 
@@ -358,6 +358,19 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 				rc.expected, rc.expected, fmt.Errorf(
 					"read %d orphaned file rows but the fingerprint counted %d (source changed during import)",
 					ws.observedOrphans, fp.OrphanFiles))
+		}
+
+		// Complete accounting: on a frozen source every torrent row must have
+		// been scanned exactly once across the whole run (the committer's
+		// mirrors are cumulative, including restored resume totals). A
+		// shortfall means rows were silently skipped — e.g. a cursor bug —
+		// and must stop the import before any completion phase can claim it;
+		// an excess means the source grew mid-run, breaking the fingerprint.
+		if rc.scanned != prog.ExpectedTotal {
+			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "read",
+				rc.expected, rc.expected, fmt.Errorf(
+					"scanned %d source records but the fingerprint counted %d torrents (incomplete or changed source)",
+					rc.scanned, prog.ExpectedTotal))
 		}
 
 		// All source data processed: importing → data_loaded (compare-and-swap).

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 
@@ -82,7 +83,8 @@ func seedSourceTorrent(t *testing.T, dsn string, id int32, name string, totalSiz
 }
 
 func hexHash(id int32) string {
-	return fmt.Sprintf("%040x", id)
+	// uint32 keeps negative IDs (e.g. MinInt32 fixtures) valid hex digits.
+	return fmt.Sprintf("%040x", uint32(id))
 }
 
 func seedSourceFile(t *testing.T, dsn string, torrentID int32, path string, size int64) {
@@ -851,4 +853,91 @@ func poolForRunner(t *testing.T, dsn string) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// A source row at the signed 32-bit minimum must still be scanned: the
+// keyset cursor is initialized to source_min_id-1, which only fits int64.
+// (Regression: an int32 cursor conversion wrapped MinInt32-1 to MaxInt32 and
+// the whole source silently scanned as empty.) The row itself is refused by
+// the reader's positive-ID policy as a per-record integrity failure, and the
+// run completes as import_complete_with_errors with complete accounting.
+func TestRunnerScansMinInt32SourceID(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	seedSourceTorrent(t, src, math.MinInt32, "floor", 2, 1700000000)
+	seedSourceFile(t, src, math.MinInt32, "floor.bin", 2)
+	for id := int32(1); id <= 3; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 2, 1700000000+id)
+		seedSourceFile(t, src, id, fmt.Sprintf("t%d.bin", id), 2)
+	}
+
+	if err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt}); err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	snap := snapshotTarget(t, tgt)
+	p := snap.progress
+	if p.Phase != state.PhaseCompleteWithErrors {
+		t.Fatalf("phase = %s, want import_complete_with_errors", p.Phase)
+	}
+	if p.ScannedCount != 4 || p.SuccessCount != 3 || p.ErrorCount != 1 || p.ExpectedTotal != 4 {
+		t.Fatalf("progress = %+v, want 4 scanned (the MinInt32 row included), 3 successes, 1 error", p)
+	}
+	if p.LastProcessedID != 3 {
+		t.Fatalf("checkpoint = %d, want 3 (past every scanned ID)", p.LastProcessedID)
+	}
+	if snap.torrents != 3 {
+		t.Fatalf("torrents = %d, want 3", snap.torrents)
+	}
+}
+
+// Complete accounting is enforced before any completion phase: if the run's
+// scanned total disagrees with the fingerprint's expected total, the import
+// stops as a fatal read incident instead of committing a completion phase
+// over silently skipped rows.
+func TestRunnerAccountingMismatchIsFatal(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	for id := int32(1); id <= 20; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 2, 1700000000+id)
+		seedSourceFile(t, src, id, fmt.Sprintf("t%d.bin", id), 2)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reports int
+	if err := runTorrents(t, ctx, TorrentsInput{
+		SourceDSN: src, TargetDSN: tgt,
+		Progress: func(Progress) {
+			reports++
+			if reports == 2 {
+				cancel()
+			}
+		},
+	}); !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("first run error = %v, want ErrInterrupted", err)
+	}
+
+	// Corrupt the stored expectation so the resumed scan cannot account for
+	// every row it should.
+	pool := poolForRunner(t, tgt)
+	ctxUp, cancelUp := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancelUp()
+	if _, err := pool.Exec(ctxUp,
+		`UPDATE magnetico_migration.progress SET expected_total = scanned_count + 5`); err != nil {
+		t.Fatalf("corrupt expected_total: %v", err)
+	}
+
+	err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt})
+	var fatal *FatalError
+	if !errors.As(err, &fatal) || fatal.Stage != "read" {
+		t.Fatalf("resume error = %v, want a fatal read incident", err)
+	}
+	snap := snapshotTarget(t, tgt)
+	if snap.progress.Phase.Complete() {
+		t.Fatalf("phase = %s, want a non-completion phase after the accounting refusal", snap.progress.Phase)
+	}
 }
