@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrLockBusy reports another migration holds the run lock on the target.
@@ -74,9 +73,12 @@ func (l *RunLock) withLocked(ctx context.Context, fn func(conn *pgx.Conn) error)
 		return fmt.Errorf("migration lock lost: %w", l.deadErr)
 	}
 	if err := fn(l.conn); err != nil {
-		if isConnClosed(err) {
-			l.markDeadLocked(err)
-		}
+		// Fail closed: ANY error on the lock-owning connection is treated as
+		// lock loss (plan directive ①). A backend terminated by an
+		// administrator surfaces as SQLSTATE 57P05 or a raw transport error,
+		// neither of which is reliably distinguishable from other fatal
+		// conditions — and continuing unprotected is never an option.
+		l.markDeadLocked(err)
 		return err
 	}
 	return nil
@@ -139,13 +141,6 @@ func (l *RunLock) Release(ctx context.Context) {
 		l.conn.Close(ctx)
 		l.conn = nil
 	}
-}
-
-// isConnClosed reports errors that mean the lock connection itself is gone.
-func isConnClosed(err error) bool {
-	return errors.Is(err, pgconn.ErrConnClosed) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded)
 }
 
 // MonitorLockLoss runs idle liveness pings until the lock dies or ctx is

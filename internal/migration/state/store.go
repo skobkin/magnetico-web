@@ -228,7 +228,7 @@ func InitRun(ctx context.Context, pool *pgxpool.Pool, in InitInput) (*Progress, 
                 codec_profile, expected_total, source_min_id, source_max_id, source_file_rows,
                 last_processed_id, scanned_count, success_count, error_count,
                 defer_indexes, options)
-            SELECT $1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, 0, 0, $11, $12
+            SELECT $1::uuid, $2, $3, $4, $5, $6, $7, $8::bigint, $9, $10, $8::bigint - 1, 0, 0, 0, $11, $12
             WHERE NOT EXISTS (SELECT 1 FROM magnetico_migration.progress)
             RETURNING run_id::text`,
 			in.RunID, string(PhaseImporting), string(in.FingerprintRaw), in.SourceAdapter,
@@ -255,6 +255,7 @@ func InitRun(ctx context.Context, pool *pgxpool.Pool, in InitInput) (*Progress, 
 		SourceMinID:     in.SourceMinID,
 		SourceMaxID:     in.SourceMaxID,
 		SourceFileRows:  in.SourceFileRows,
+		LastProcessedID: in.SourceMinID - 1, // mirrors the INSERTed checkpoint
 		DeferIndexes:    in.DeferIndexes,
 		OptionsRaw:      opts,
 	}

@@ -78,7 +78,7 @@ type Result struct {
 // reconciles a resume. It acquires the run-scoped advisory lock for the
 // caller. Failures are typed and secret-free.
 func Preflight(ctx context.Context, in Input) (*Result, error) {
-	pool, err := openPool(ctx, in.DSN)
+	pool, err := OpenPool(ctx, in.DSN)
 	if err != nil {
 		return nil, err
 	}
@@ -223,8 +223,10 @@ func freshRun(ctx context.Context, pool *pgxpool.Pool, in Input) (*Result, error
 	return &Result{Progress: progress, Fresh: true}, nil
 }
 
-// openPool connects the target with a small bounded pool.
-func openPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+// OpenPool connects the target with a small bounded pool. Exported for the
+// migration runner, which drives commits and incident recording on its own
+// pool after preflight.
+func OpenPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	scheme := ""
 	if parsed, err := url.Parse(dsn); err == nil {
 		scheme = parsed.Scheme

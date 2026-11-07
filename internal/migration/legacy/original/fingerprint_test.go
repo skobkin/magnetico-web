@@ -20,6 +20,8 @@ func TestFingerprintEquivalent(t *testing.T) {
 		FileRows:          100,
 		NullOwnerFiles:    2,
 		OrphanFiles:       1,
+		OrphanIDMin:       ptrInt64(7),
+		OrphanIDMax:       ptrInt64(9),
 	}
 
 	// Transport fields may differ (resume over another connection path).
@@ -41,6 +43,8 @@ func TestFingerprintEquivalent(t *testing.T) {
 		func(f *Fingerprint) { f.FileRows++ },
 		func(f *Fingerprint) { f.NullOwnerFiles++ },
 		func(f *Fingerprint) { f.OrphanFiles++ },
+		func(f *Fingerprint) { f.OrphanIDMin = ptrInt64(8) },
+		func(f *Fingerprint) { f.OrphanIDMax = nil },
 	}
 	for i, mutate := range change {
 		f := base
@@ -63,3 +67,5 @@ func TestFingerprintEquivalent(t *testing.T) {
 		t.Fatal("JSON round-trip must preserve equivalence")
 	}
 }
+
+func ptrInt64(v int64) *int64 { return &v }

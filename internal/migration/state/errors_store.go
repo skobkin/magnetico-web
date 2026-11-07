@@ -67,6 +67,46 @@ func RecordIncident(ctx context.Context, pool *pgxpool.Pool, runID string, rec E
 	})
 }
 
+// EnsureIncident records a run-scope incident exactly once per (run, code):
+// if an unresolved incident with the same code already exists, it is left
+// untouched and nothing is counted. Resume-safe — a crash between run-state
+// creation and incident recording is repaired on the next start. Integrity
+// incidents bump run_error_count; operational incidents are history only.
+func EnsureIncident(ctx context.Context, pool *pgxpool.Pool, runID string, rec ErrorRecord) (inserted bool, err error) {
+	if rec.Scope != ScopeRun {
+		return false, fmt.Errorf("incident scope must be %q", ScopeRun)
+	}
+	rec.Scope = ScopeRun
+	inserted = false
+	err = pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		var existing int64
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM magnetico_migration.errors
+            WHERE run_id = $1::uuid AND scope = 'run' AND code = $2 AND NOT resolved`,
+			runID, rec.Code).Scan(&existing); err != nil {
+			return err
+		}
+		if existing > 0 {
+			return nil
+		}
+		if err := InsertErrorRecords(ctx, tx, runID, []ErrorRecord{rec}); err != nil {
+			return err
+		}
+		if rec.Category == CategoryIntegrity {
+			if _, err := tx.Exec(ctx, `UPDATE magnetico_migration.progress
+                SET run_error_count = run_error_count + 1, updated_at = now()
+                WHERE run_id = $1::uuid`, runID); err != nil {
+				return err
+			}
+		}
+		inserted = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return inserted, nil
+}
+
 // CountErrors returns the registry counts compared by Reconcile.
 func CountErrors(ctx context.Context, q queryer, runID string) (record int64, unresolvedIntegrity int64, err error) {
 	if err := q.QueryRow(ctx, `SELECT

@@ -54,7 +54,7 @@ func VerifySchema(ctx context.Context, dsn string, in verifyInput) error {
 		return nil
 	}
 
-	pool, err := openPool(ctx, dsn)
+	pool, err := OpenPool(ctx, dsn)
 	if err != nil {
 		return err
 	}

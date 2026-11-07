@@ -31,6 +31,12 @@ type Fingerprint struct {
 	FileRows       int64 `json:"file_rows"`
 	NullOwnerFiles int64 `json:"null_owner_files"`
 	OrphanFiles    int64 `json:"orphan_files"`
+
+	// OrphanIDMin/OrphanIDMax bracket the torrent_id values of dangling
+	// (non-NULL, unowned) file rows — forensic pointers for 04B/04C, never
+	// file paths. Nil when there are no orphan rows.
+	OrphanIDMin *int64 `json:"orphan_id_min,omitempty"`
+	OrphanIDMax *int64 `json:"orphan_id_max,omitempty"`
 }
 
 // Fingerprint aggregates the source state: identity, torrent/file counts,
@@ -69,9 +75,10 @@ func (s *Source) Fingerprint(ctx context.Context) (Fingerprint, error) {
 		`SELECT COUNT(*) FROM magneticod.files WHERE torrent_id IS NULL`).Scan(&fp.NullOwnerFiles); err != nil {
 		return Fingerprint{}, err
 	}
-	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM magneticod.files f
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*), MIN(f.torrent_id), MAX(f.torrent_id) FROM magneticod.files f
         LEFT JOIN magneticod.torrents t ON t.id = f.torrent_id
-        WHERE f.torrent_id IS NOT NULL AND t.id IS NULL`).Scan(&fp.OrphanFiles); err != nil {
+        WHERE f.torrent_id IS NOT NULL AND t.id IS NULL`).Scan(
+		&fp.OrphanFiles, &fp.OrphanIDMin, &fp.OrphanIDMax); err != nil {
 		return Fingerprint{}, err
 	}
 	return fp, nil
@@ -91,5 +98,14 @@ func (a Fingerprint) Equivalent(b Fingerprint) bool {
 		a.AnchorMaxInfoHash == b.AnchorMaxInfoHash &&
 		a.FileRows == b.FileRows &&
 		a.NullOwnerFiles == b.NullOwnerFiles &&
-		a.OrphanFiles == b.OrphanFiles
+		a.OrphanFiles == b.OrphanFiles &&
+		ptrEq(a.OrphanIDMin, b.OrphanIDMin) &&
+		ptrEq(a.OrphanIDMax, b.OrphanIDMax)
+}
+
+func ptrEq(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
