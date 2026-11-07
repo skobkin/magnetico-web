@@ -6,8 +6,9 @@ Branch `refactor/0.8.0-unify-and-new-storage`, commits 1–9 of the approved pla
 assignment: [`docs/wip/04A-core-migrator.md`](04A-core-migrator.md). No spec file was
 edited. No schema DDL, wire format or crawler code was changed. No production database
 was contacted — every integration test ran against disposable per-test databases from
-the Docker harness. The branch was pushed once on owner command after the first review
-round; the second round below is local until the owner says otherwise.
+the Docker harness. The branch was pushed twice on owner commands (after the first
+and second review rounds); the third round below is local until the owner says
+otherwise.
 
 ## What shipped
 
@@ -94,6 +95,20 @@ its own commit with regression tests.
 | #3 — the planned operator progress reporting existed only as a final summary | Valid (spec §5 `progress/` package and plan work package C promised it; the report had deferred it as an ergonomics item) | `83ee0fba` — `internal/migration/progress`: rolling TTY line renderer and periodic non-TTY logs (30 s + immediate on phase change), cumulative resume-honest counters, rate/ETA from the session delta only, secondary-index rebuild progress (`n/total` + index name) surfaced through a `BuildSecondaryIndexes` callback. Display-only by construction (non-blocking update, own goroutine — a stalled sink cannot stall the import); TTY detection via the character-device heuristic, no new dependencies. Unit tests for both sinks, rate math, never-block guarantee, TTY detection; binary smoke exercises the non-TTY path |
 | — infra — `TestCancelSettlesContiguousPrefix` flaked in the full suite: a fast machine can settle all 100 records before the first commit observes the cancel, and committing them is correct settling behavior | Valid (pre-existing timing race, exposed once) | `fdfa2ddd` — the source releases its second chunk only when the cancellation opens the gate; the test now pins exactly the first batch committed, the dropped remainder and `ErrInterrupted`, deterministically |
 | — infra — the new TTY rendering test raced on its `bytes.Buffer` (`-race`) | Valid (my own test bug) | `48424c6f` — mutex-guarded sink |
+
+## Third review round (external reviewer agent, after second push)
+
+Each finding was re-validated against the code before fixing; each fix landed
+as its own commit with regression tests.
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| #1 — `Renderer.Run` rendered on every wake signal, and `Update` fires once per committed batch: non-TTY mode logged one line per batch instead of every 30 s, the TTY line redrew without its 500 ms cap; `Renderer.Stop` was deferred, so the `os.Exit(2)`/`log.Fatalln` exit paths skipped it | Valid (the code contradicted its own documented cadence; both exit paths bypass deferred calls) | `2071477c` — ordinary progress is rate-limited to the configured interval (key change over phase + index identity renders immediately, as do the first snapshot and the final state); `Stop` runs explicitly before the outcome switch. Regression: 300 batch updates must produce only the interval-bounded number of log lines, ending in the final state |
+| #2 — `Source.Window` loaded up to the whole keyset page of torrent metadata before any budget check (`WindowMaxBytes` was consulted only in the file-row pass): a large batch of long-named torrents — above all file-less ones, which never reach that pass — was retained in full, far past the reader budget | Valid (60 file-less long-named torrents retained in one window against a 16 KiB budget, reproduced) | `b8168d4c` — the budget bounds the metadata scan too: the torrent's weight is charged before retention, an occupied window cuts before the torrent that would exceed it (it arrives in the next keyset window — no skips, no duplicates), and an empty window still admits its first torrent whatever it weighs (the read-side mirror of the pipeline's oversized-solo admission, so a budget smaller than one torrent never stalls the run). Regressions: exact metadata-phase window arithmetic, complete file lists when the cut lands in the metadata phase, the oversized-metadata exception admitted alone, and an end-to-end runner run of 40 heavy torrents (half `missing_files`) at the 1 MiB budget floor with a 100-torrent page |
+
+Verification on the final tree: build/vet/gofmt clean, `golangci-lint run` 0
+issues, full `go test ./...` green, `go test -race ./internal/... ./persistence/
+./opflags/ .` green.
 
 Verification on the final tree: build/vet/gofmt clean, `golangci-lint run` 0
 issues, full `go test ./...` green, `go test -race ./internal/... . ./persistence/
@@ -189,7 +204,7 @@ disposable per-test databases):
 - `golangci-lint run` — pass (see final battery below)
 
 Verbose census of the migration area (`go test -v ./internal/... .`), rerun on the
-final tree after both review rounds: **142 tests pass, 1 skips** —
+final tree after all three review rounds: **147 tests pass, 1 skips** —
 `TestIdentitySameDatabaseViaSocketAndTCP`, because the
 Docker-cached-cluster harness exposes no Unix socket (the initdb bootstrap path does;
 the test skips and documents itself when absent, exactly as planned). Everything else
