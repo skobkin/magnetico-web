@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -19,12 +18,12 @@ func TestPreflightFreshRun(t *testing.T) {
 	t.Parallel()
 
 	dsn := createTarget(t)
-	sourceIdentity := identityOf(t, dsn) // any identity; distinctness checked against itself below
 
 	// A different-database identity: another harness database on the same
-	// instance is a genuinely distinct target.
+	// instance is a genuinely distinct target (the identity is checked for
+	// distinctness against itself below, so any identity works).
 	otherDB := pgtest.IntegrationCluster(t).TestDatabase(t)
-	sourceIdentity = identityOf(t, otherDB)
+	sourceIdentity := identityOf(t, otherDB)
 
 	res, err := Preflight(context.Background(), preflightInput(dsn, sourceIdentity))
 	if err != nil {

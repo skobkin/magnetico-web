@@ -325,7 +325,7 @@ func Run(ctx context.Context, src Source, cfg Config, commit Committer) (Result,
 			if err != nil {
 				cancel()
 				<-workersDone
-				<-feedErr
+				<-feedErr //nolint:errcheck // secondary: the commit error is the one reported
 				return res, err
 			}
 			if batch, _ := peekBatch(); len(batch) == 0 {
@@ -379,7 +379,7 @@ func Run(ctx context.Context, src Source, cfg Config, commit Committer) (Result,
 		if err := commitReady(ctx); err != nil {
 			cancel()
 			<-workersDone
-			<-feedErr
+			<-feedErr //nolint:errcheck // secondary: the commit error is the one reported
 			return res, err
 		}
 	}

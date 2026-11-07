@@ -6,7 +6,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
 	"github.com/skobkin/magnetico-web/internal/migration/pgidentity"
 	"github.com/skobkin/magnetico-web/internal/migration/state"

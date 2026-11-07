@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/internal/pgtest"

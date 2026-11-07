@@ -12,7 +12,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 )
 
@@ -138,10 +137,10 @@ func ReconcileAmbiguousCommit(ctx context.Context, pool *pgxpool.Pool, runID str
 	if err != nil {
 		return false, fmt.Errorf("%w: read checkpoint: %w", ErrTargetDrift, err)
 	}
-	switch {
-	case ckpt == attemptedThrough:
+	switch ckpt {
+	case attemptedThrough:
 		return true, nil
-	case ckpt == prevCheckpoint:
+	case prevCheckpoint:
 		var rows int64
 		if err := pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM magneticod.torrents WHERE id > $1 AND id <= $2`,
