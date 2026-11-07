@@ -137,8 +137,10 @@ func DropSecondaryIndexes(ctx context.Context, lock *state.RunLock, runID string
 // a present, valid, definition-identical index is kept; a missing one is
 // created (plain CREATE INDEX, never CONCURRENTLY) and verified inside the
 // same transaction. Partial progress after a crash is valid input.
-func BuildSecondaryIndexes(ctx context.Context, lock *state.RunLock) error {
-	for _, name := range secondaryIndexNames {
+// onIndex, when non-nil, reports each ensured index (1-based count, total,
+// name) so the operator sees the rebuild advancing.
+func BuildSecondaryIndexes(ctx context.Context, lock *state.RunLock, onIndex func(ensured, total int, name string)) error {
+	for i, name := range secondaryIndexNames {
 		err := lock.With(ctx, func(conn *pgx.Conn) error {
 			return pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 				valid, def, present, err := secondaryIndexState(ctx, tx, name)
@@ -165,6 +167,9 @@ func BuildSecondaryIndexes(ctx context.Context, lock *state.RunLock) error {
 		})
 		if err != nil {
 			return err
+		}
+		if onIndex != nil {
+			onIndex(i+1, len(secondaryIndexNames), name)
 		}
 	}
 	return nil

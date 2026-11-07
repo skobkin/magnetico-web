@@ -19,6 +19,7 @@ import (
 	"github.com/skobkin/magnetico-web/dht/mainline"
 	"github.com/skobkin/magnetico-web/internal/migration"
 	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
+	"github.com/skobkin/magnetico-web/internal/migration/progress"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/metadata"
@@ -218,6 +219,14 @@ func runMigrateTorrents(opFlags *opflags.TorrentsOptions) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Operator progress: a rolling single line on a TTY, periodic log lines
+	// otherwise (every 30 s, plus immediately on phase changes and index
+	// steps). Update never blocks the import pipeline; the renderer writes
+	// on its own goroutine to stderr, leaving stdout untouched.
+	renderer := progress.New(progress.IsTTY(os.Stderr), os.Stderr, nil)
+	go renderer.Run()
+	defer renderer.Stop()
+
 	var lastProgress migration.Progress
 	err := migration.ImportTorrents(ctx, migration.TorrentsInput{
 		SourceDSN:        opFlags.SourceDatabaseURL,
@@ -226,7 +235,22 @@ func runMigrateTorrents(opFlags *opflags.TorrentsOptions) {
 		Workers:          int(opFlags.Workers),
 		BatchSize:        int(opFlags.BatchSize),
 		MaxInflightBytes: opFlags.MaxInflightBytes,
-		Progress:         func(p migration.Progress) { lastProgress = p },
+		Progress: func(p migration.Progress) {
+			lastProgress = p
+			renderer.Update(progress.Snapshot{
+				Phase:         string(p.Phase),
+				Checkpoint:    p.Checkpoint,
+				Scanned:       p.Scanned,
+				Successes:     p.Successes,
+				Errors:        p.Errors,
+				Blobs:         p.Blobs,
+				RunErrors:     p.RunErrors,
+				ExpectedTotal: p.ExpectedTotal,
+				IndexStep:     p.IndexStep,
+				IndexTotal:    p.IndexTotal,
+				IndexName:     p.IndexName,
+			})
+		},
 	})
 	switch {
 	case err == nil:

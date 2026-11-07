@@ -165,7 +165,7 @@ func TestBuildSecondaryIndexesCrashBoundaries(t *testing.T) {
 				execTarget(t, dsn, secondaryIndexDDL[idx])
 			}
 			lock := makeLock(t, dsn)
-			if err := BuildSecondaryIndexes(context.Background(), lock); err != nil {
+			if err := BuildSecondaryIndexes(context.Background(), lock, nil); err != nil {
 				t.Fatalf("BuildSecondaryIndexes() error = %v", err)
 			}
 			for idx, fragment := range secondaryIndexDefinitions {
@@ -190,7 +190,7 @@ func TestBuildSecondaryIndexesRefusesWrongDefinition(t *testing.T) {
 	execTarget(t, dsn, `CREATE INDEX idx_torrents_total_size ON magneticod.torrents (discovered_on)`)
 	lock := makeLock(t, dsn)
 
-	err := BuildSecondaryIndexes(context.Background(), lock)
+	err := BuildSecondaryIndexes(context.Background(), lock, nil)
 	var sse *persistence.SchemaStateError
 	if !errors.As(err, &sse) {
 		t.Fatalf("BuildSecondaryIndexes() error = %v (%T), want SchemaStateError", err, err)

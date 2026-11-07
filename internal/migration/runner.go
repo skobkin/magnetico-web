@@ -89,6 +89,13 @@ type Progress struct {
 	Blobs         int64
 	RunErrors     int64
 	ExpectedTotal int64
+
+	// Secondary-index rebuild progress (deferred runs, building_indexes
+	// phase only): IndexStep of IndexTotal indexes ensured, IndexName the
+	// most recently ensured one. Zero/"" outside that phase.
+	IndexStep  int
+	IndexTotal int
+	IndexName  string
 }
 
 // TorrentsInput configures one migrate-torrents run.
@@ -106,7 +113,8 @@ type TorrentsInput struct {
 	Limits *codec.Limits
 
 	// Progress, when set, receives cumulative snapshots after every
-	// committed batch and at start/end.
+	// committed batch, at start/end, on every phase transition and after
+	// each secondary index is ensured during the rebuild.
 	Progress func(Progress)
 
 	// committer is the batch-commit dependency; nil uses the real target
@@ -209,6 +217,10 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 	})
 
 	prog := *pf.Progress
+	// Index-rebuild display state lives outside the DB row: the rebuild is
+	// not checkpointed per index, only reconciled against the catalog.
+	var idxStep, idxTotal int
+	var idxName string
 	report := func() {
 		if in.Progress != nil {
 			in.Progress(Progress{
@@ -220,6 +232,9 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 				Blobs:         prog.BlobCount,
 				RunErrors:     prog.RunErrorCount,
 				ExpectedTotal: prog.ExpectedTotal,
+				IndexStep:     idxStep,
+				IndexTotal:    idxTotal,
+				IndexName:     idxName,
 			})
 		}
 	}
@@ -438,7 +453,14 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 	// transition itself executes on the lock-owning connection (proven
 	// ownership at completion time — pool-side bookkeeping alone must never
 	// finalize a run).
-	fin, err := finalizeImport(runCtx, pf.Lock, pool, pf.Progress.RunID, prog.LastProcessedID, prog.IndexesDeferred)
+	// The index-rebuild callback runs on this goroutine (finalizeImport is
+	// synchronous), so mutating the display state and reporting here is
+	// race-free.
+	onIndex := func(ensured, total int, name string) {
+		idxStep, idxTotal, idxName = ensured, total, name
+		report()
+	}
+	fin, err := finalizeImport(runCtx, pf.Lock, pool, pf.Progress.RunID, prog.LastProcessedID, prog.IndexesDeferred, onIndex)
 	if err != nil {
 		if cause := fatalCause(runCtx); cause != nil {
 			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
@@ -472,9 +494,10 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 // (not the parent): every step must stop once the lock is known lost or the
 // run was interrupted, and the completion transition runs on the
 // lock-owning connection so finalization cannot succeed unprotected.
-func finalizeImport(ctx context.Context, lock *state.RunLock, pool *pgxpool.Pool, runID string, checkpoint int64, deferred bool) (state.Phase, error) {
+// onIndex, when non-nil, reports each ensured secondary index for display.
+func finalizeImport(ctx context.Context, lock *state.RunLock, pool *pgxpool.Pool, runID string, checkpoint int64, deferred bool, onIndex func(ensured, total int, name string)) (state.Phase, error) {
 	if deferred {
-		if err := target.BuildSecondaryIndexes(ctx, lock); err != nil {
+		if err := target.BuildSecondaryIndexes(ctx, lock, onIndex); err != nil {
 			return "", err
 		}
 	}
