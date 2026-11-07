@@ -12,6 +12,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -939,5 +940,70 @@ func TestRunnerAccountingMismatchIsFatal(t *testing.T) {
 	snap := snapshotTarget(t, tgt)
 	if snap.progress.Phase.Complete() {
 		t.Fatalf("phase = %s, want a non-completion phase after the accounting refusal", snap.progress.Phase)
+	}
+}
+
+// The completion transition must prove lock ownership: terminating the
+// lock-holding backend while the run is in building_indexes stops the run
+// as a fatal lock-loss incident instead of letting pool-side bookkeeping
+// (reseed, ANALYZE) finish the migration unprotected. (Regression: the
+// finalization ran on the parent context and the pool, so a silently dead
+// lock connection still produced import_complete.)
+func TestRunnerLockLossDuringFinalization(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	for id := int32(1); id <= 6; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 2, 1700000000+id)
+		seedSourceFile(t, src, id, fmt.Sprintf("t%d.bin", id), 2)
+	}
+
+	err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt,
+		Progress: func(p Progress) {
+			if p.Phase != state.PhaseBuildingIndexes {
+				return
+			}
+			// Kill the advisory-lock holder the moment the run enters
+			// building_indexes, and wait until the lock is REALLY gone — so
+			// the completion transition below races a provably dead
+			// connection, not an in-flight termination.
+			pool := poolForRunner(t, tgt)
+			ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+			defer cancel()
+			for i := 0; i < 100; i++ {
+				var pid int32
+				// The migrator's fixed advisory key ('migrat08' little-endian,
+				// state.migrationLockAdvisoryKey — unexported, so the 64-bit
+				// value is split into (classid, objid) here exactly as
+				// PostgreSQL stores it; the pg_locks column is `database`).
+				// Both scoping filters keep parallel tests on other databases
+				// (or other keys) safe. If the key ever changes, the lookup
+				// below finds nothing and this test fails loudly.
+				const key = int64(4048864026886105453)
+				err := pool.QueryRow(ctx,
+					`SELECT pid FROM pg_locks WHERE locktype = 'advisory'
+                       AND classid = $1 AND objid = $2
+                       AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`,
+					int32(uint32(key>>32)), int32(uint32(key&0xFFFFFFFF))).Scan(&pid)
+				if err != nil {
+					return // advisory lock gone: the holder is dead
+				}
+				if _, err := pool.Exec(ctx, `SELECT pg_terminate_backend($1)`, pid); err != nil {
+					t.Fatalf("pg_terminate_backend(%d): %v", pid, err)
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatal("advisory lock survived 100 termination rounds")
+		},
+	})
+	var fatal *FatalError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("run error = %v (%T), want a FatalError from lock loss", err, err)
+	}
+
+	snap := snapshotTarget(t, tgt)
+	if snap.progress.Phase.Complete() {
+		t.Fatalf("phase = %s, want a non-completion phase after lock loss", snap.progress.Phase)
 	}
 }

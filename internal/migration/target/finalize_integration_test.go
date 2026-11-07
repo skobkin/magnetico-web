@@ -308,7 +308,7 @@ func TestCompleteImportGating(t *testing.T) {
 		t.Parallel()
 		dsn := createTarget(t)
 		runID := runAtBuildingIndexes(t, dsn)
-		phase, err := CompleteImport(context.Background(), poolFor(t, dsn), runID, 0)
+		phase, err := CompleteImport(context.Background(), makeLock(t, dsn), runID, 0)
 		if err != nil {
 			t.Fatalf("CompleteImport() error = %v", err)
 		}
@@ -333,7 +333,7 @@ func TestCompleteImportGating(t *testing.T) {
 			RunID: runID, ExpectedPhase: state.PhaseBuildingIndexes, NewPhase: state.PhaseBuildingIndexes,
 			ExpectedLastID: 0, NewLastID: 0, ScannedDelta: 1, ErrorDelta: 1,
 		})
-		phase, err := CompleteImport(context.Background(), poolFor(t, dsn), runID, 0)
+		phase, err := CompleteImport(context.Background(), makeLock(t, dsn), runID, 0)
 		if err != nil {
 			t.Fatalf("CompleteImport() error = %v", err)
 		}
@@ -353,7 +353,7 @@ func TestCompleteImportGating(t *testing.T) {
 		if err != nil || !inserted {
 			t.Fatalf("EnsureIncident() = (%v, %v), want true, nil", inserted, err)
 		}
-		phase, err := CompleteImport(context.Background(), poolFor(t, dsn), runID, 0)
+		phase, err := CompleteImport(context.Background(), makeLock(t, dsn), runID, 0)
 		if err != nil {
 			t.Fatalf("CompleteImport() error = %v", err)
 		}
@@ -373,7 +373,7 @@ func TestCompleteImportGating(t *testing.T) {
 		if err != nil || !inserted {
 			t.Fatalf("EnsureIncident() = (%v, %v), want true, nil", inserted, err)
 		}
-		phase, err := CompleteImport(context.Background(), poolFor(t, dsn), runID, 0)
+		phase, err := CompleteImport(context.Background(), makeLock(t, dsn), runID, 0)
 		if err != nil {
 			t.Fatalf("CompleteImport() error = %v", err)
 		}

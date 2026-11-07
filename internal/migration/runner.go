@@ -424,8 +424,12 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 	// building_indexes: rebuild missing deferred indexes (lock connection),
 	// reseed the identity sequence, refresh statistics, commit the
 	// completion phase. Partial index progress on resume is reconciled
-	// against the catalog.
-	fin, err := finalizeImport(ctx, pf.Lock, pool, pf.Progress.RunID, prog.LastProcessedID, prog.IndexesDeferred)
+	// against the catalog. Finalization runs on runCtx so a detected lock
+	// loss or operator interrupt stops it, and the completion phase
+	// transition itself executes on the lock-owning connection (proven
+	// ownership at completion time — pool-side bookkeeping alone must never
+	// finalize a run).
+	fin, err := finalizeImport(runCtx, pf.Lock, pool, pf.Progress.RunID, prog.LastProcessedID, prog.IndexesDeferred)
 	if err != nil {
 		if cause := fatalCause(runCtx); cause != nil {
 			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
@@ -433,6 +437,13 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 		}
 		if runCtx.Err() != nil {
 			return ErrInterrupted
+		}
+		// The lock connection can die between monitor pings; the failing
+		// lock-connection operation itself is the first detector (RunLock
+		// fails closed). Report it as the lock-loss fatal it is.
+		if lockErr := pf.Lock.Lost(); lockErr != nil {
+			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+				prog.LastProcessedID, 0, lockErr)
 		}
 		stage := "write"
 		if errors.Is(err, target.ErrCheckpointConflict) {
@@ -448,7 +459,10 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 
 // finalizeImport completes a data-loaded run. The caller has already
 // transitioned into building_indexes; deferred=false runs keep their indexes
-// maintained throughout and skip the rebuild.
+// maintained throughout and skip the rebuild. ctx must be the run context
+// (not the parent): every step must stop once the lock is known lost or the
+// run was interrupted, and the completion transition runs on the
+// lock-owning connection so finalization cannot succeed unprotected.
 func finalizeImport(ctx context.Context, lock *state.RunLock, pool *pgxpool.Pool, runID string, checkpoint int64, deferred bool) (state.Phase, error) {
 	if deferred {
 		if err := target.BuildSecondaryIndexes(ctx, lock); err != nil {
@@ -461,7 +475,7 @@ func finalizeImport(ctx context.Context, lock *state.RunLock, pool *pgxpool.Pool
 	if err := target.AnalyzeTarget(ctx, pool); err != nil {
 		return "", err
 	}
-	return target.CompleteImport(ctx, pool, runID, checkpoint)
+	return target.CompleteImport(ctx, lock, runID, checkpoint)
 }
 
 // fatalCause distinguishes an operator interrupt (nil, or plain

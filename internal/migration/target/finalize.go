@@ -208,28 +208,47 @@ func AnalyzeTarget(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// CompleteImport commits the completion phase: import_complete only with
-// zero record errors AND zero unresolved integrity run-scope errors
-// (run_error_count); recorded operational incidents are history and never
-// force import_complete_with_errors. Returns the committed phase.
-func CompleteImport(ctx context.Context, pool *pgxpool.Pool, runID string, checkpoint int64) (state.Phase, error) {
-	var errCount, runErrCount int64
-	if err := pool.QueryRow(ctx, `SELECT error_count, run_error_count
-        FROM magnetico_migration.progress WHERE run_id = $1::uuid`, runID,
-	).Scan(&errCount, &runErrCount); err != nil {
-		return "", err
-	}
-	phase := state.PhaseImportComplete
-	if errCount > 0 || runErrCount > 0 {
-		phase = state.PhaseCompleteWithErrors
-	}
-	if err := TransitionPhase(ctx, pool, runID, state.AdvanceInput{
-		RunID:          runID,
-		ExpectedPhase:  state.PhaseBuildingIndexes,
-		NewPhase:       phase,
-		ExpectedLastID: checkpoint,
-		NewLastID:      checkpoint,
-	}); err != nil {
+// CompleteImport commits the completion phase ON THE LOCK-OWNING
+// CONNECTION, like the index DDL: finalizing a run must prove lock
+// ownership at the moment of the transition, so a silently lost lock can
+// never let pool-side bookkeeping complete a run it no longer protects.
+// Any lock-connection failure marks the lock dead (RunLock fails closed).
+//
+// import_complete only with zero record errors AND zero unresolved
+// integrity run-scope errors (run_error_count); recorded operational
+// incidents are history and never force import_complete_with_errors.
+// Returns the committed phase.
+func CompleteImport(ctx context.Context, lock *state.RunLock, runID string, checkpoint int64) (state.Phase, error) {
+	var phase state.Phase
+	err := lock.With(ctx, func(conn *pgx.Conn) error {
+		return pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
+			var errCount, runErrCount int64
+			if err := tx.QueryRow(ctx, `SELECT error_count, run_error_count
+                FROM magnetico_migration.progress WHERE run_id = $1::uuid`, runID,
+			).Scan(&errCount, &runErrCount); err != nil {
+				return err
+			}
+			phase = state.PhaseImportComplete
+			if errCount > 0 || runErrCount > 0 {
+				phase = state.PhaseCompleteWithErrors
+			}
+			advanced, err := state.AdvanceCheckpoint(ctx, tx, state.AdvanceInput{
+				RunID:          runID,
+				ExpectedPhase:  state.PhaseBuildingIndexes,
+				NewPhase:       phase,
+				ExpectedLastID: checkpoint,
+				NewLastID:      checkpoint,
+			})
+			if err != nil {
+				return err
+			}
+			if !advanced {
+				return ErrCheckpointConflict
+			}
+			return nil
+		})
+	})
+	if err != nil {
 		return "", err
 	}
 	return phase, nil
