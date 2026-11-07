@@ -180,6 +180,12 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 		}
 	}
 	budgetHit := false
+	// stopped records an EARLY stop: the loop broke before the window's
+	// torrent range was exhausted, so the torrents beyond the cut were never
+	// read and must be truncated from the window (they arrive in the next
+	// keyset window). A normal loop end leaves stopped false even when the
+	// budget tripped inside the final group — that range was read in full.
+	stopped := false
 	for frows.Next() {
 		var f FileRow
 		if err := frows.Scan(&f.ID, &f.TorrentID, &f.Size, &f.Path); err != nil {
@@ -192,8 +198,11 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 				// just completed and stop reading. Torrents beyond the cut
 				// are re-read by the next keyset window (the caller's cursor
 				// stops at the last kept torrent), so nothing is lost — the
-				// window just got smaller under backpressure.
-				budgetHit = false
+				// window just got smaller under backpressure. The flag stays
+				// set: the post-loop truncation below drops the unread
+				// torrents, and returning them without their files would
+				// corrupt them into missing_files errors past the checkpoint.
+				stopped = true
 				break
 			}
 			current, currentCount, currentBytes, currentKnown, currentOverflow, currentReason = f.TorrentID, 0, 0, false, false, ""
@@ -231,8 +240,8 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 		return nil, err
 	}
 	finishGroup()
-	if budgetHit {
-		// The budget was hit inside the final group: that group is complete
+	if stopped {
+		// The read stopped early at a group boundary: that group is complete
 		// and kept; everything after it was never read and moves to the next
 		// window. Truncate the torrent list to the read range.
 		w.truncated = true

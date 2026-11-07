@@ -233,6 +233,16 @@ func TestReaderWindowByteBudgetTruncatesWithoutLoss(t *testing.T) {
 		}
 		got = append(got, w.Torrents...)
 		totalOrphans += w.OrphanFiles
+		// Every returned torrent must carry its COMPLETE file list: a
+		// torrent present without its files would be misclassified as
+		// missing_files downstream and checkpointed past — data loss the
+		// truncation must never cause. (Regression: an early version broke
+		// out of the read loop without truncating and shipped exactly that.)
+		for _, tr := range w.Torrents {
+			if len(w.Files[tr.ID]) != 2 {
+				t.Fatalf("window(after=%d) torrent %d kept %d file rows, want its complete list of 2", after, tr.ID, len(w.Files[tr.ID]))
+			}
+		}
 		if len(w.Torrents) == 0 {
 			break
 		}

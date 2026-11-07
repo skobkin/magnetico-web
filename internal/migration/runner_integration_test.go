@@ -1043,3 +1043,44 @@ func TestRunnerPathByteOverflowIsPerRecordError(t *testing.T) {
 		t.Fatalf("progress = %+v, want with_errors with 1 success and 1 codec_limit failure", p)
 	}
 }
+
+// The reader's window byte budget must bound buffering, never coverage:
+// torrents beyond the cut arrive in the next keyset window and must all be
+// IMPORTED, never misclassified as missing_files and checkpointed past.
+// (Regression: an early truncation returned the unread torrents without
+// their files — 2 of 4 valid torrents became per-record errors and the run
+// still completed. Reproduction from review round 2.)
+func TestRunnerByteBudgetTruncationKeepsValidTorrents(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	fatPath := strings.Repeat("p", 8192)
+	for id := int32(1); id <= 512; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 2, 1700000000+id)
+		seedSourceFile(t, src, id, fatPath+".a", 1)
+		seedSourceFile(t, src, id, fatPath+".b", 1)
+	}
+
+	// Batch 256 at ~16 KiB of paths per torrent fills the 1 MiB window
+	// budget (the minimum) after ~64 torrents, forcing several truncated
+	// windows across the run.
+	err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt,
+		BatchSize:        256,
+		MaxInflightBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	snap := snapshotTarget(t, tgt)
+	p := snap.progress
+	if p.Phase != state.PhaseImportComplete {
+		t.Fatalf("phase = %s, want import_complete (no missing_files losses)", p.Phase)
+	}
+	if p.ScannedCount != 512 || p.SuccessCount != 512 || p.ErrorCount != 0 {
+		t.Fatalf("progress = %+v, want all 512 valid torrents imported with zero errors", p)
+	}
+	if snap.torrents != 512 {
+		t.Fatalf("torrents = %d, want 512", snap.torrents)
+	}
+}
