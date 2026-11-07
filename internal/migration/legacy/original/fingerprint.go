@@ -76,3 +76,20 @@ func (s *Source) Fingerprint(ctx context.Context) (Fingerprint, error) {
 	}
 	return fp, nil
 }
+
+// Equivalent reports whether two fingerprints describe the same source for
+// resume purposes. Transport-dependent fields (ServerAddress/ServerPort) are
+// deliberately excluded — resuming over a different connection path is legal;
+// the authoritative same-database decision is pgidentity's.
+func (a Fingerprint) Equivalent(b Fingerprint) bool {
+	return a.PostmasterStart.Equal(b.PostmasterStart) &&
+		a.Database == b.Database &&
+		a.Torrents == b.Torrents &&
+		a.MinID == b.MinID &&
+		a.MaxID == b.MaxID &&
+		a.AnchorMinInfoHash == b.AnchorMinInfoHash &&
+		a.AnchorMaxInfoHash == b.AnchorMaxInfoHash &&
+		a.FileRows == b.FileRows &&
+		a.NullOwnerFiles == b.NullOwnerFiles &&
+		a.OrphanFiles == b.OrphanFiles
+}
