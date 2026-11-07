@@ -346,8 +346,14 @@ func TestRunnerInterruptedThenResumes(t *testing.T) {
 		t.Fatalf("torrents %d != success_count %d", snap.torrents, p.SuccessCount)
 	}
 
-	// Resume completes the import.
-	if err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt}); err != nil {
+	// Resume completes the import. The Progress snapshots must stay
+	// cumulative across the resume: a fresh mirror starting at zero would
+	// report only the second session's records (regression: resumed reports
+	// lost the first session's counters while the DB totals stayed right).
+	var resumedLast Progress
+	if err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt,
+		Progress: func(p Progress) { resumedLast = p },
+	}); err != nil {
 		t.Fatalf("resume error = %v", err)
 	}
 	snap = snapshotTarget(t, tgt)
@@ -355,6 +361,16 @@ func TestRunnerInterruptedThenResumes(t *testing.T) {
 	if p.Phase != state.PhaseImportComplete || p.LastProcessedID != 40 ||
 		p.ScannedCount != 40 || p.SuccessCount != 40 || p.ErrorCount != 0 || p.BlobCount != 40 {
 		t.Fatalf("resumed progress = %+v", p)
+	}
+	if resumedLast != (Progress{
+		Phase:         state.PhaseImportComplete,
+		Checkpoint:    40,
+		Scanned:       40,
+		Successes:     40,
+		Blobs:         40,
+		ExpectedTotal: 40,
+	}) {
+		t.Fatalf("resumed final Progress report = %+v, want cumulative totals", resumedLast)
 	}
 	if snap.torrents != 40 || snap.blobs != 40 {
 		t.Fatalf("resumed snapshot = %+v", snap)

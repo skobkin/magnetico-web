@@ -270,6 +270,14 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 			runID:    pf.Progress.RunID,
 			phase:    prog.Phase,
 			expected: prog.LastProcessedID,
+			// Counter mirrors resume CUMULATIVE: the target writer stores
+			// per-batch deltas against the persisted totals, so the mirrors
+			// must start from the stored totals or the Progress reports
+			// under-count everything the previous session settled.
+			scanned:   prog.ScannedCount,
+			successes: prog.SuccessCount,
+			errors:    prog.ErrorCount,
+			blobs:     prog.BlobCount,
 		}
 		rc.onBatch = func() {
 			prog.LastProcessedID = rc.expected
