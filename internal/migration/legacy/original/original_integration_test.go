@@ -172,7 +172,7 @@ func TestProbeAndRefusalLeaveSourceUntouched(t *testing.T) {
 	if _, err := src.Fingerprint(context.Background()); err != nil {
 		t.Fatalf("Fingerprint() error = %v", err)
 	}
-	if _, err := src.Window(context.Background(), 0, 10, 250000); err != nil {
+	if _, err := src.Window(context.Background(), 0, 10, defaultWindowLimits()); err != nil {
 		t.Fatalf("Window() error = %v", err)
 	}
 	src.Close()

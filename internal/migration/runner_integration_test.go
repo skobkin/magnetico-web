@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1005,5 +1006,40 @@ func TestRunnerLockLossDuringFinalization(t *testing.T) {
 	snap := snapshotTarget(t, tgt)
 	if snap.progress.Phase.Complete() {
 		t.Fatalf("phase = %s, want a non-completion phase after lock loss", snap.progress.Phase)
+	}
+}
+
+// A torrent whose aggregate path bytes exceed the codec's aggregate cap is
+// rejected at the read stage as a per-record codec_limit error (limit
+// "path_bytes"), and the run completes as import_complete_with_errors with
+// complete accounting — the byte cap mirrors production codec limits, it is
+// not a migration-only rejection rule.
+func TestRunnerPathByteOverflowIsPerRecordError(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	seedSourceTorrent(t, src, 1, "fat", 2, 1700000001)
+	seedSourceFile(t, src, 1, strings.Repeat("x", 20)+".a", 1)
+	seedSourceFile(t, src, 1, strings.Repeat("x", 20)+".b", 1) // 42 bytes > 32
+	seedSourceTorrent(t, src, 2, "ok", 1, 1700000002)
+	seedSourceFile(t, src, 2, "ok.bin", 1)
+
+	if err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt,
+		Limits: &codec.Limits{
+			MaxStoredBytes:        1 << 20,
+			MaxUncompressedBytes:  1 << 20,
+			MaxFiles:              100,
+			MaxPathBytes:          64,
+			MaxAggregatePathBytes: 32,
+			MaxTrieDepth:          32,
+		},
+	}); err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	snap := snapshotTarget(t, tgt)
+	p := snap.progress
+	if p.Phase != state.PhaseCompleteWithErrors || p.ErrorCount != 1 || p.SuccessCount != 1 || p.ScannedCount != 2 {
+		t.Fatalf("progress = %+v, want with_errors with 1 success and 1 codec_limit failure", p)
 	}
 }

@@ -300,8 +300,17 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 			VerifyDecode:     true,
 		}
 
+		// Reader retention bounds: per-torrent caps come from the production
+		// codec limits (identical to what encode would enforce); the window
+		// byte budget is the same --max-inflight-bytes the pipeline
+		// semaphore enforces post-dispatch, applied earlier at read time.
+		wlimits := original.WindowLimits{
+			MaxFiles:       limits.MaxFiles,
+			MaxPathBytes:   limits.MaxAggregatePathBytes,
+			WindowMaxBytes: in.MaxInflightBytes,
+		}
 		const maxReplays = 3
-		ws := newWindowSource(src, prog.LastProcessedID, in.BatchSize, limits.MaxFiles)
+		ws := newWindowSource(src, prog.LastProcessedID, in.BatchSize, wlimits)
 		for attempt := 0; ; attempt++ {
 			_, perr := pipeline.Run(runCtx, ws, pcfg, rc)
 			prog.LastProcessedID = rc.expected
@@ -340,7 +349,7 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "write",
 						rc.expected, ce.LastSourceID, fmt.Errorf("%w (after %d replays)", perr, attempt))
 				}
-				ws = newWindowSource(src, rc.expected, in.BatchSize, limits.MaxFiles)
+				ws = newWindowSource(src, rc.expected, in.BatchSize, wlimits)
 				continue
 			}
 

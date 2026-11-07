@@ -3,6 +3,7 @@ package original
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -42,7 +43,7 @@ func TestReaderWindowsPreserveDuplicatesAndGaps(t *testing.T) {
 	totalOrphans := int64(0)
 	after := int64(0)
 	for {
-		w, err := src.Window(ctx, after, 2, 250000)
+		w, err := src.Window(ctx, after, 2, defaultWindowLimits())
 		if err != nil {
 			t.Fatalf("Window(after=%d) error = %v", after, err)
 		}
@@ -69,7 +70,7 @@ func TestReaderWindowsPreserveDuplicatesAndGaps(t *testing.T) {
 	}
 
 	// File grouping: duplicates preserved, NULL-owner rows never attached.
-	w, err := src.Window(ctx, 0, 10, 250000)
+	w, err := src.Window(ctx, 0, 10, defaultWindowLimits())
 	if err != nil {
 		t.Fatalf("Window() error = %v", err)
 	}
@@ -122,7 +123,7 @@ func TestReaderCountsOrphansWithoutAttaching(t *testing.T) {
 		t.Fatalf("fingerprint orphans = %d, want 1", fp.OrphanFiles)
 	}
 
-	w, err := src.Window(context.Background(), 0, 10, 250000)
+	w, err := src.Window(context.Background(), 0, 10, defaultWindowLimits())
 	if err != nil {
 		t.Fatalf("Window() error = %v", err)
 	}
@@ -157,7 +158,7 @@ func TestReaderDrainsOversizedTorrentWithoutRetention(t *testing.T) {
 	seedFile(t, dsn, 20, &owner3, "a3", 1)
 
 	src := openSource(t, dsn)
-	w, err := src.Window(context.Background(), 0, 10, 5) // maxFiles=5: torrent 2 overflows
+	w, err := src.Window(context.Background(), 0, 10, WindowLimits{MaxFiles: 5, MaxPathBytes: 1 << 20}) // MaxFiles=5: torrent 2 overflows
 	if err != nil {
 		t.Fatalf("Window() error = %v", err)
 	}
@@ -167,19 +168,122 @@ func TestReaderDrainsOversizedTorrentWithoutRetention(t *testing.T) {
 	if kept := len(w.Files[2]); kept != 0 {
 		t.Fatalf("oversized torrent retained %d rows, want 0 (uncontrolled slice)", kept)
 	}
-	if w.Overflow[2] != 10 {
-		t.Fatalf("overflow accounting = %d, want 10", w.Overflow[2])
+	if ov := w.Overflow[2]; ov.Observed != 10 || ov.Reason != OverflowFileCount {
+		t.Fatalf("overflow accounting = %+v, want 10 rows of %q", ov, OverflowFileCount)
 	}
 	if len(w.Files[1]) != 3 || len(w.Files[3]) != 1 {
 		t.Fatalf("normal torrents lost rows: alpha=%d after=%d", len(w.Files[1]), len(w.Files[3]))
 	}
 
 	// maxFiles above the row count retains everything, no overflow.
-	w2, err := src.Window(context.Background(), 0, 10, 250000)
+	w2, err := src.Window(context.Background(), 0, 10, defaultWindowLimits())
 	if err != nil {
 		t.Fatalf("Window() error = %v", err)
 	}
 	if len(w2.Files[2]) != 10 || len(w2.Overflow) != 0 {
 		t.Fatalf("under-limit window misbehaved: kept=%d overflow=%v", len(w2.Files[2]), w2.Overflow)
+	}
+}
+
+// defaultWindowLimits mirrors the runner's production-derived reader bounds
+// for tests that don't exercise the caps themselves.
+func defaultWindowLimits() WindowLimits {
+	return WindowLimits{MaxFiles: 250000, MaxPathBytes: 1 << 26, WindowMaxBytes: 1 << 26}
+}
+
+// The window byte budget truncates the window under backpressure: the
+// window stops after the budget fills, the caller's cursor stays at the
+// last kept torrent, and iterating windows still reads EVERY torrent
+// exactly once — the budget bounds buffering, never coverage.
+func TestReaderWindowByteBudgetTruncatesWithoutLoss(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	// 8 torrents, each with two 200-byte paths (400 bytes retained each).
+	long := strings.Repeat("p", 200)
+	for id := int32(1); id <= 8; id++ {
+		seedTorrent(t, dsn, id, fmt.Sprintf("%040x", id), fmt.Sprintf("t%d", id), 2, 1700000000+int32(id))
+		for i := 0; i < 2; i++ {
+			seedFile(t, dsn, 100*int32(id)+int32(i), &id, fmt.Sprintf("%s.%d", long, i), 1)
+		}
+	}
+
+	// Budget of 500 bytes: the window stops at the first group boundary
+	// after the budget trips — the torrent in flight completes (the bound
+	// is budget plus one full group, itself capped by MaxPathBytes), the
+	// rest moves to the next window.
+	pathLen := int64(len(long) + 2) // "%s.%d" over a 200-byte string
+	perGroup := 2 * pathLen
+	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: 500}
+	var got []TorrentRow
+	totalOrphans := int64(0)
+	after := int64(0)
+	windows := 0
+	for {
+		w, err := src.Window(ctx, after, 4, limits)
+		if err != nil {
+			t.Fatalf("Window(after=%d) error = %v", after, err)
+		}
+		windows++
+		if w.RetainedBytes > 500+perGroup {
+			t.Fatalf("window retained %d bytes, want at most the budget plus one full group (%d)", w.RetainedBytes, 500+perGroup)
+		}
+		got = append(got, w.Torrents...)
+		totalOrphans += w.OrphanFiles
+		if len(w.Torrents) == 0 {
+			break
+		}
+		after = int64(w.Torrents[len(w.Torrents)-1].ID)
+		if windows > 16 {
+			t.Fatal("window iteration did not terminate")
+		}
+	}
+	if len(got) != 8 {
+		t.Fatalf("read %d torrents across %d windows, want all 8 with no loss", len(got), windows)
+	}
+	if totalOrphans != 0 {
+		t.Fatalf("orphans = %d, want 0", totalOrphans)
+	}
+}
+
+// A torrent whose aggregate path bytes exceed MaxPathBytes is drained and
+// recorded as a path_bytes overflow — the read-side mirror of the codec's
+// own aggregate cap, never a migration-only limit.
+func TestReaderPathByteOverflowDrainedWithoutRetention(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	long := strings.Repeat("x", 40)
+	seedTorrent(t, dsn, 1, fmt.Sprintf("%040x", 1), "fat", 3, 1700000001)
+	seedTorrent(t, dsn, 2, fmt.Sprintf("%040x", 2), "slim", 1, 1700000002)
+	for i := 0; i < 3; i++ { // 3 × 40 = 120 bytes > 100-byte cap
+		owner := int32(1)
+		seedFile(t, dsn, 10+int32(i), &owner, fmt.Sprintf("%s.%d", long, i), 1)
+	}
+	owner2 := int32(2)
+	seedFile(t, dsn, 20, &owner2, "ok.bin", 1)
+
+	w, err := src.Window(ctx, 0, 10, WindowLimits{MaxFiles: 100, MaxPathBytes: 100})
+	if err != nil {
+		t.Fatalf("Window() error = %v", err)
+	}
+	ov, has := w.Overflow[1]
+	if !has || ov.Reason != OverflowPathBytes {
+		t.Fatalf("Overflow[1] = %+v, want a path_bytes overflow", ov)
+	}
+	if ov.Observed < 120 {
+		t.Fatalf("observed = %d, want the overrun byte total (≥120)", ov.Observed)
+	}
+	if rows := w.Files[1]; len(rows) != 0 {
+		t.Fatalf("drained torrent kept %d rows, want none", len(rows))
+	}
+	if rows := w.Files[2]; len(rows) != 1 {
+		t.Fatalf("healthy torrent kept %d rows, want 1", len(rows))
 	}
 }

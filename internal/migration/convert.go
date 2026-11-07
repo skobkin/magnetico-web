@@ -17,10 +17,10 @@ import (
 // Not safe for concurrent use; pipeline.Run calls Next from its feed
 // goroutine only.
 type windowSource struct {
-	src      *original.Source
-	afterID  int64
-	window   int
-	maxFiles int
+	src     *original.Source
+	afterID int64
+	window  int
+	limits  original.WindowLimits
 
 	// observedOrphans accumulates per-window orphan file-row counts; the
 	// runner compares the total with the fingerprint at the end.
@@ -30,14 +30,16 @@ type windowSource struct {
 // newWindowSource starts keyset iteration strictly above afterID. The
 // cursor stays int64 end to end: it is initialized to source_min_id-1, which
 // underflows int32 when the minimum source ID is MinInt32.
-func newWindowSource(src *original.Source, afterID int64, window, maxFiles int) *windowSource {
-	return &windowSource{src: src, afterID: afterID, window: window, maxFiles: maxFiles}
+func newWindowSource(src *original.Source, afterID int64, window int, limits original.WindowLimits) *windowSource {
+	return &windowSource{src: src, afterID: afterID, window: window, limits: limits}
 }
 
 // Next reads the next keyset window and converts it to jobs in strictly
-// increasing source-ID order.
+// increasing source-ID order. Windows truncated by the byte budget simply
+// end early; the next call continues from the last converted ID, so no
+// source row is skipped — the budget only bounds read-side buffering.
 func (w *windowSource) Next(ctx context.Context) ([]pipeline.Job, bool, error) {
-	win, err := w.src.Window(ctx, w.afterID, w.window, w.maxFiles)
+	win, err := w.src.Window(ctx, w.afterID, w.window, w.limits)
 	if err != nil {
 		return nil, false, err
 	}
@@ -61,16 +63,22 @@ func (w *windowSource) Next(ctx context.Context) ([]pipeline.Job, bool, error) {
 				Details:  map[string]any{"reason": "source ID out of the supported positive range"},
 			}})
 		case w.overflowed(win, t.ID):
-			observed := win.Overflow[t.ID]
+			ov := win.Overflow[t.ID]
+			code, limitName, allowed := pipeline.CodeFileCountExceeded, original.OverflowFileCount, int64(w.limits.MaxFiles)
+			if ov.Reason == original.OverflowPathBytes {
+				// The codec rejects over-cap aggregates itself; the read
+				// stage already knows the outcome, so report it directly.
+				code, limitName, allowed = pipeline.CodeCodecLimit, original.OverflowPathBytes, int64(w.limits.MaxPathBytes)
+			}
 			jobs = append(jobs, pipeline.Job{Failure: &pipeline.Failure{
 				SourceID: int64(t.ID),
 				InfoHash: t.InfoHash,
 				Stage:    pipeline.StageRead,
-				Code:     pipeline.CodeFileCountExceeded,
+				Code:     code,
 				Details: map[string]any{
-					"limit":   "files",
-					"actual":  observed,
-					"allowed": int64(w.maxFiles),
+					"limit":   limitName,
+					"actual":  ov.Observed,
+					"allowed": allowed,
 				},
 			}})
 		case len(win.Files[t.ID]) == 0:
