@@ -14,10 +14,21 @@ const (
 	envPrefix        = "MAGNETICO_CRAWL_"
 	migrateEnvPrefix = "MAGNETICO_MIGRATE_"
 
-	// migrateDatabaseYamlKey and migrateDatabaseEnvName configure
-	// `migrate schema-init`'s DSN outside the command line.
+	// migrationEnvPrefix configures `migrate torrents` outside the command
+	// line — most importantly the source DSN, which has no CLI flag so it
+	// can never appear in `ps` output.
+	migrationEnvPrefix = "MAGNETICO_MIGRATION_"
+
+	// migrateDatabaseYamlKey and migrateDatabaseEnvName configure the
+	// target DSN of the migrate subcommands outside the command line.
 	migrateDatabaseYamlKey = "migrateDatabaseURL"
 	migrateDatabaseEnvName = migrateEnvPrefix + "DATABASE"
+
+	// migrateSourceDatabaseYamlKey and migrationSourceEnvName configure the
+	// `migrate torrents` source DSN outside the command line (env over
+	// file; there is no flag, so no explicit-map entry exists).
+	migrateSourceDatabaseYamlKey = "migrateSourceDatabaseURL"
+	migrationSourceEnvName       = migrationEnvPrefix + "SOURCE_DSN"
 )
 
 // crawlSetting describes one configurable crawl option: its CLI long name,
@@ -163,8 +174,9 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 	}
 
 	var file struct {
-		CrawlOptions       `yaml:",inline"`
-		MigrateDatabaseURL string `yaml:"migrateDatabaseURL"`
+		CrawlOptions             `yaml:",inline"`
+		MigrateDatabaseURL       string `yaml:"migrateDatabaseURL"`
+		MigrateSourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
 	}
 	if err := yaml.UnmarshalWithOptions(data, &file, yaml.Strict()); err != nil {
 		return fmt.Errorf("config file: %w", err)
@@ -180,8 +192,16 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		s.copyFrom(&o.Crawl, &file.CrawlOptions)
 	}
 
+	// The migrate target DSN key feeds whichever migrate subcommand runs.
 	if _, found := present[migrateDatabaseYamlKey]; found && !explicit["database"] {
 		o.Migrate.SchemaInit.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Torrents.DatabaseURL = file.MigrateDatabaseURL
+	}
+
+	// The migration source DSN has no CLI flag, so there is no explicit
+	// guard: the file value always applies (env overrides it later).
+	if _, found := present[migrateSourceDatabaseYamlKey]; found {
+		o.Migrate.Torrents.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 	}
 
 	return nil
@@ -228,10 +248,12 @@ func (o *OpFlags) applyEnvConfig(explicit map[string]bool) error {
 
 // applyEnvMigrateConfig applies MAGNETICO_MIGRATE_* variables and rejects
 // unknown ones, with the same empty-means-unset rule as the crawl variables.
+// The target DSN feeds whichever migrate subcommand runs.
 func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 	if !explicit["database"] {
 		if value, ok := os.LookupEnv(migrateDatabaseEnvName); ok && value != "" {
 			o.Migrate.SchemaInit.DatabaseURL = value
+			o.Migrate.Torrents.DatabaseURL = value
 		}
 	}
 
@@ -243,6 +265,29 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 		return fmt.Errorf(
 			"unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s",
 			name, migrateDatabaseEnvName,
+		)
+	}
+
+	return nil
+}
+
+// applyEnvTorrentsConfig applies MAGNETICO_MIGRATION_* variables for
+// `migrate torrents` and rejects unknown ones, with the same
+// empty-means-unset rule as the other namespaces. The source DSN has no CLI
+// flag, so the env value always applies (env over file, no explicit entry).
+func (o *OpFlags) applyEnvTorrentsConfig() error {
+	if value, ok := os.LookupEnv(migrationSourceEnvName); ok && value != "" {
+		o.Migrate.Torrents.SourceDatabaseURL = value
+	}
+
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, migrationEnvPrefix) || name == migrationSourceEnvName {
+			continue
+		}
+		return fmt.Errorf(
+			"unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s",
+			name, migrationSourceEnvName,
 		)
 	}
 

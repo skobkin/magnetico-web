@@ -42,10 +42,16 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		}
 	case "migrate":
 		if active.Active == nil {
-			return "", errors.New("migrate: expected a subcommand; expected: schema-init (see --help)")
+			return "", errors.New("migrate: expected a subcommand; expected: schema-init, torrents (see --help)")
 		}
+		o.Migrate.Subcommand = active.Active.Name
 		if err := o.applyConfig(explicitOptions(parser.Command), command); err != nil {
 			return "", err
+		}
+		if o.Migrate.Subcommand == "torrents" {
+			if err := o.applyEnvTorrentsConfig(); err != nil {
+				return "", err
+			}
 		}
 	}
 

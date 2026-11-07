@@ -73,6 +73,13 @@ func (e *FatalError) Error() string {
 
 func (e *FatalError) Unwrap() error { return e.Err }
 
+// ConfigError reports an invalid import tunable. Its text is static (a fixed
+// message plus the offending number) and carries no secrets, so the CLI
+// prints it verbatim.
+type ConfigError struct{ msg string }
+
+func (e *ConfigError) Error() string { return e.msg }
+
 // Progress is a cumulative, resume-honest snapshot for reporting.
 type Progress struct {
 	Phase         state.Phase
@@ -126,19 +133,19 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 		in.Workers = DefaultWorkers
 	}
 	if in.Workers > MaxWorkers {
-		return fmt.Errorf("--workers must be 1..%d, got %d", MaxWorkers, in.Workers)
+		return &ConfigError{msg: fmt.Sprintf("--workers must be 1..%d, got %d", MaxWorkers, in.Workers)}
 	}
 	if in.BatchSize <= 0 {
 		in.BatchSize = DefaultBatchSize
 	}
 	if in.BatchSize > MaxBatchSize {
-		return fmt.Errorf("--batch-size must be 1..%d, got %d", MaxBatchSize, in.BatchSize)
+		return &ConfigError{msg: fmt.Sprintf("--batch-size must be 1..%d, got %d", MaxBatchSize, in.BatchSize)}
 	}
 	if in.MaxInflightBytes <= 0 {
 		in.MaxInflightBytes = DefaultMaxInflightBytes
 	}
 	if in.MaxInflightBytes < 1<<20 {
-		return fmt.Errorf("--max-inflight-bytes must be at least 1 MiB, got %d", in.MaxInflightBytes)
+		return &ConfigError{msg: fmt.Sprintf("--max-inflight-bytes must be at least 1 MiB, got %d", in.MaxInflightBytes)}
 	}
 	limits := codec.DefaultLimits()
 	if in.Limits != nil {

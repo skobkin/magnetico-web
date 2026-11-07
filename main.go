@@ -17,6 +17,9 @@ import (
 
 	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/dht/mainline"
+	"github.com/skobkin/magnetico-web/internal/migration"
+	"github.com/skobkin/magnetico-web/internal/migration/state"
+	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/opflags"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -38,7 +41,15 @@ func main() {
 		notImplemented("web",
 			"the authenticated web UI will be designed from the historical PHP application in a later phase")
 	case "migrate":
-		runMigrateSchemaInit(&opFlags.Migrate.SchemaInit)
+		switch opFlags.Migrate.Subcommand {
+		case "schema-init":
+			runMigrateSchemaInit(&opFlags.Migrate.SchemaInit)
+		case "torrents":
+			runMigrateTorrents(&opFlags.Migrate.Torrents)
+		default:
+			// parseArgs guarantees a subcommand; this is defense in depth.
+			log.Fatalln("migrate: expected a subcommand; expected: schema-init, torrents (see --help)")
+		}
 	}
 }
 
@@ -85,6 +96,24 @@ func controlledErrorDetail(err error) string {
 		return persistence.ErrInvalidMetadata.Error()
 	case errors.Is(err, persistence.ErrStorageIO):
 		return persistence.ErrStorageIO.Error()
+	case errors.Is(err, target.ErrSourceRequired):
+		return target.ErrSourceRequired.Error()
+	case errors.Is(err, target.ErrSameDatabase):
+		return target.ErrSameDatabase.Error()
+	case errors.Is(err, target.ErrTargetIdentityUnknown):
+		return target.ErrTargetIdentityUnknown.Error()
+	case errors.Is(err, target.ErrTargetNotEmpty):
+		return target.ErrTargetNotEmpty.Error()
+	case errors.Is(err, target.ErrIdentityExhausted):
+		return target.ErrIdentityExhausted.Error()
+	case errors.Is(err, state.ErrLockBusy):
+		return state.ErrLockBusy.Error()
+	case errors.Is(err, state.ErrNoRunState):
+		return state.ErrNoRunState.Error()
+	case errors.Is(err, state.ErrRunStateCorrupt):
+		return state.ErrRunStateCorrupt.Error()
+	case errors.Is(err, migration.ErrSourceIDRange):
+		return migration.ErrSourceIDRange.Error()
 	}
 	return fmt.Sprintf("unexpected error (%T)", err)
 }
@@ -98,19 +127,24 @@ const (
 )
 
 // schemaStateDetails returns a bounded, quoted copy of the catalog-object
-// list carried by a SchemaStateError, or nil for any other error. The
-// details are schema-qualified object names built from catalog data — never
-// driver error text and never credentials — and each is quoted so the log
-// line stays single-line and printable whatever an object is named.
+// list carried by a SchemaStateError, or nil for any other error.
 func schemaStateDetails(err error) []string {
 	var stateErr *persistence.SchemaStateError
 	if !errors.As(err, &stateErr) {
 		return nil
 	}
-	out := make([]string, 0, min(len(stateErr.Details), schemaStateDetailMaxItems+1))
-	for i, d := range stateErr.Details {
+	return boundedQuotedDetails(stateErr.Details)
+}
+
+// boundedQuotedDetails quotes and bounds a catalog-object detail list —
+// schema-qualified names built from catalog data, never driver error text
+// and never credentials — so the log line stays single-line and printable
+// whatever an object is named.
+func boundedQuotedDetails(details []string) []string {
+	out := make([]string, 0, min(len(details), schemaStateDetailMaxItems+1))
+	for i, d := range details {
 		if i == schemaStateDetailMaxItems {
-			out = append(out, fmt.Sprintf("(+%d more)", len(stateErr.Details)-i))
+			out = append(out, fmt.Sprintf("(+%d more)", len(details)-i))
 			break
 		}
 		if len(d) > schemaStateDetailMaxBytes {
@@ -119,6 +153,16 @@ func schemaStateDetails(err error) []string {
 		out = append(out, strconv.Quote(d))
 	}
 	return out
+}
+
+// appendBoundedDetails appends a bounded, quoted detail list to a failure
+// message; an empty list contributes nothing.
+func appendBoundedDetails(msg string, details []string) string {
+	quoted := boundedQuotedDetails(details)
+	if len(quoted) == 0 {
+		return msg
+	}
+	return msg + " " + strings.Join(quoted, " ")
 }
 
 // appendSchemaStateDetails appends the bounded catalog-object list of a
@@ -160,6 +204,66 @@ func runMigrateSchemaInit(opFlags *opflags.SchemaInitOptions) {
 	// The redacted URL carries no credentials by construction.
 	log.Printf("the database schema on %s is ready (created now or already up to date)",
 		redactDatabaseURL(opFlags.DatabaseURL))
+}
+
+// runMigrateTorrents implements `magnetico migrate torrents`: the offline
+// import of an original magnetico v0.12.0 database. Exit codes: 0 only for
+// a completed migration (import_complete or import_complete_with_errors —
+// neither means the data is verified), 2 for an interrupted run (the settled
+// prefix is committed; a re-run resumes), 1 for any fatal failure.
+func runMigrateTorrents(opFlags *opflags.TorrentsOptions) {
+	// SIGINT/SIGTERM interrupt the run gracefully: in-flight records settle,
+	// the last committed checkpoint stands, and the next run resumes.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var lastProgress migration.Progress
+	err := migration.ImportTorrents(ctx, migration.TorrentsInput{
+		SourceDSN:        opFlags.SourceDatabaseURL,
+		TargetDSN:        opFlags.DatabaseURL,
+		DeferIndexes:     opFlags.DeferSecondaryIndexes,
+		Workers:          int(opFlags.Workers),
+		BatchSize:        int(opFlags.BatchSize),
+		MaxInflightBytes: opFlags.MaxInflightBytes,
+		Progress:         func(p migration.Progress) { lastProgress = p },
+	})
+	switch {
+	case err == nil:
+		// The redacted URL carries no credentials by construction.
+		log.Printf("torrent migration on %s finished in phase %s "+
+			"(%d scanned, %d migrated, %d record errors, %d unresolved integrity incidents); "+
+			"neither completion phase means the data is verified — run verification before cutover",
+			redactDatabaseURL(opFlags.DatabaseURL), lastProgress.Phase,
+			lastProgress.Scanned, lastProgress.Successes, lastProgress.Errors, lastProgress.RunErrors)
+	case errors.Is(err, migration.ErrInterrupted):
+		log.Printf("torrent migration interrupted before completion; " +
+			"the settled prefix is committed — re-run to resume from the checkpoint")
+		os.Exit(2)
+	default:
+		log.Fatalln(migrationFailureMessage(err)) // exit 1
+	}
+}
+
+// migrationFailureMessage composes the `migrate torrents` failure log line
+// from controlled content only: a FatalError's text is sanitized at
+// construction (stage, attempted ID range, checkpoint, SQLSTATE — credential
+// material redacted); migration config errors carry static text; typed
+// migration/state refusals contribute their fixed sentinel text with
+// bounded catalog details; anything else contributes only its Go type.
+func migrationFailureMessage(err error) string {
+	var fatal *migration.FatalError
+	if errors.As(err, &fatal) {
+		return fatal.Error()
+	}
+	var configErr *migration.ConfigError
+	if errors.As(err, &configErr) {
+		return configErr.Error()
+	}
+	var stateErr *state.StateError
+	if errors.As(err, &stateErr) {
+		return appendBoundedDetails("migration refused: "+stateErr.Err.Error(), stateErr.Details)
+	}
+	return appendSchemaStateDetails("migration refused: "+controlledErrorDetail(err), err)
 }
 
 // torrentFromMetadata converts a drained metadata record into a persistence

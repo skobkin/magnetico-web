@@ -22,6 +22,31 @@ type OpFlags struct {
 // MigrateOptions carries the subcommands of `migrate`.
 type MigrateOptions struct {
 	SchemaInit SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
+	Torrents   TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)."`
+
+	// Subcommand records the selected migrate subcommand for main's
+	// dispatch; it is never user-settable, and yaml:"-" keeps strict config
+	// decoding from accepting a key for it.
+	Subcommand string `yaml:"-"`
+}
+
+// TorrentsOptions carries the options of `migrate torrents`. The target DSN
+// follows the same flag/env/file precedence as `migrate schema-init`. The
+// SOURCE DSN deliberately has no CLI flag: it can only come from the config
+// file or MAGNETICO_MIGRATION_SOURCE_DSN, so it can never appear in `ps`
+// output.
+type TorrentsOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to import into." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	Workers               uint  `long:"workers" description:"Number of parallel record processors (1-64)." default:"4"`
+	BatchSize             uint  `long:"batch-size" description:"Maximum processed records (successes and errors alike) per committed batch (1-10000)." default:"256"`
+	MaxInflightBytes      int64 `long:"max-inflight-bytes" description:"Upper bound on decoded in-flight record bytes." default:"67108864"`
+	DeferSecondaryIndexes bool  `long:"defer-secondary-indexes" description:"Drop the three secondary indexes for the import and rebuild them at finalization (authorized only at the start of an empty run)."`
+
+	// SourceDatabaseURL is the read-only v0.12.0 source database.
+	// Config file and MAGNETICO_MIGRATION_SOURCE_DSN only — no flag, no
+	// default, and it never falls back to the target DSN.
+	SourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
 }
 
 // SchemaInitOptions carries the options of `migrate schema-init`. The DSN is
