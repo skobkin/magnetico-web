@@ -1,12 +1,13 @@
 # Task 04A implementation report — offline import of original Magnetico v0.12.0 torrents
 
 Branch `refactor/0.8.0-unify-and-new-storage`, commits 1–9 of the approved plan
-(base `c69253ba`) plus the post-implementation review-fix series (below). Normative contract:
+(base `c69253ba`) plus two post-implementation review-fix series (below). Normative contract:
 [`docs/specs/legacy-torrent-migration-v1.md`](../specs/legacy-torrent-migration-v1.md);
 assignment: [`docs/wip/04A-core-migrator.md`](04A-core-migrator.md). No spec file was
 edited. No schema DDL, wire format or crawler code was changed. No production database
 was contacted — every integration test ran against disposable per-test databases from
-the Docker harness. Commits stay local; nothing is pushed.
+the Docker harness. The branch was pushed once on owner command after the first review
+round; the second round below is local until the owner says otherwise.
 
 ## What shipped
 
@@ -79,6 +80,24 @@ test.
 | — | infra — every `go test` process leaked one disposable postgres container (138 piled up over the sessions, ~all RAM) | Valid | `153acab6` — `pgtest.RunTests` stops the process's cluster on exit; verified a package run leaves no container |
 | 2 | #1 P1 — regression from the #1 fix: the early-stop cleared its flag before breaking, so truncated windows shipped unread torrents as `missing_files` errors past the checkpoint | Valid (reproduced by review: 2 of 4 valid torrents corrupted) | `5aee0fb4` — truncation only on an actual early break; reader test asserts complete file lists per returned torrent; runner test drives 512 valid torrents through truncated windows requiring zero errors |
 | 3 | — | No actionable findings; fix verified with an independent reproduction, `-race` on the affected packages | — |
+
+## Second review round (external reviewer agent, after push)
+
+The pushed branch was reviewed by another agent; each finding was re-validated
+against the code, the plan and the contract before fixing; each fix landed as
+its own commit with regression tests.
+
+| Finding | Verdict | Fix |
+|---|---|---|
+| #1 — preflight skipped target-state reconciliation for completed phases: deleting a torrent/blob row or trimming the error registry *after* completion made a re-run report success | Valid (the plan's resume reconciliation has no completed-phase exemption; `Reconcile` is phase-agnostic) | `740c6119` — every resume reconciles; completion is trust in the recorded counts, not an exemption. Regressions: deleted-torrent, missing-blob and trimmed-registry refusals plus the pristine idempotent control |
+| #2 — the memory model counted only string bytes: a torrent of 250k one-byte paths weighed ~250 KB by the old `Weight()` but ~16 MB in reality, so the 64 MiB semaphore could admit gigabytes of in-flight records; the reader window budget had the same under-count | Valid (arithmetic confirmed) | `54fd978e` — both budgets charge the same documented model: per-record base + per-row structural overhead (FileEntry/FileRow structs, slice growth, codec decode-side rows, blob framing) on top of path/name bytes. The per-torrent `MaxPathBytes` overflow stays pure path bytes (codec mirror — no artificial rejections); heavier-than-budget records still take the solo slot. Regressions: exact weight accounting, a 250k-duplicate-path record admitted solo and imported validly, structural-weight window truncation with complete duplicate-preserving lists, an end-to-end dense duplicate-path run at the minimum budget |
+| #3 — the planned operator progress reporting existed only as a final summary | Valid (spec §5 `progress/` package and plan work package C promised it; the report had deferred it as an ergonomics item) | `83ee0fba` — `internal/migration/progress`: rolling TTY line renderer and periodic non-TTY logs (30 s + immediate on phase change), cumulative resume-honest counters, rate/ETA from the session delta only, secondary-index rebuild progress (`n/total` + index name) surfaced through a `BuildSecondaryIndexes` callback. Display-only by construction (non-blocking update, own goroutine — a stalled sink cannot stall the import); TTY detection via the character-device heuristic, no new dependencies. Unit tests for both sinks, rate math, never-block guarantee, TTY detection; binary smoke exercises the non-TTY path |
+| — infra — `TestCancelSettlesContiguousPrefix` flaked in the full suite: a fast machine can settle all 100 records before the first commit observes the cancel, and committing them is correct settling behavior | Valid (pre-existing timing race, exposed once) | `fdfa2ddd` — the source releases its second chunk only when the cancellation opens the gate; the test now pins exactly the first batch committed, the dropped remainder and `ErrInterrupted`, deterministically |
+| — infra — the new TTY rendering test raced on its `bytes.Buffer` (`-race`) | Valid (my own test bug) | `48424c6f` — mutex-guarded sink |
+
+Verification on the final tree: build/vet/gofmt clean, `golangci-lint run` 0
+issues, full `go test ./...` green, `go test -race ./internal/... . ./persistence/
+./opflags/` green.
 
 ## Owner directives implemented (all test-backed)
 
@@ -170,7 +189,7 @@ disposable per-test databases):
 - `golangci-lint run` — pass (see final battery below)
 
 Verbose census of the migration area (`go test -v ./internal/... .`), rerun on the
-final tree after the review fixes: **127 test functions pass, 1 skips** —
+final tree after both review rounds: **142 tests pass, 1 skips** —
 `TestIdentitySameDatabaseViaSocketAndTCP`, because the
 Docker-cached-cluster harness exposes no Unix socket (the initdb bootstrap path does;
 the test skips and documents itself when absent, exactly as planned). Everything else
@@ -182,12 +201,6 @@ go test ./internal/... .` (the harness can also bootstrap a cached Docker
 
 ## Known limitations / deviations
 
-- **Progress display is minimal:** the runner emits cumulative snapshots through the
-  `Progress` callback after every committed batch and at start/end; the binary prints
-  the final cumulative summary. The planned periodic non-TTY logs / rolling ETA / TTY
-  line renderer is **not** wired yet — an operator-ergonomics hand-off item for 04D,
-  not a correctness gap (all counters the renderer would show are already authoritative
-  DB state).
 - `--dry-run` was deferred by owner decision; preflight always runs and prints its
   findings before any import instead.
 - No `verify-decode`, `verify-content`, `retry-errors`, export or cleanup commands —
@@ -207,5 +220,6 @@ go test ./internal/... .` (the harness can also bootstrap a cached Docker
   preserved in the registry details for forensic export; `import_complete_with_errors`
   runs are the cleanup candidates.
 - 04D: the binary smoke (`TestMigrateTorrentsBinarySmoke`) is the template for the
-  full-scale run; progress renderer and tunable sizing (workers/batch/inflight) are the
-  operator-facing knobs to exercise at scale.
+  full-scale run; the progress renderer ships with 04A (TTY line / periodic logs, rate
+  and ETA from the session delta), so tunable sizing (workers/batch/inflight) is the
+  remaining operator-facing knob to exercise at scale.
