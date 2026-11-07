@@ -36,14 +36,31 @@ type FileRow struct {
 //     and the record is rejected with a categorized error instead of
 //     pretending a complete list was read.
 //   - WindowMaxBytes (the runner's --max-inflight-bytes): the window stops
-//     early once its retained path bytes reach this budget — the torrents
+//     early once its retained WEIGHT reaches this budget — the torrents
 //     beyond the cut simply arrive in the next keyset window, so read-side
-//     buffering stays bounded by the budget plus one capped torrent.
+//     buffering stays bounded by the budget plus one capped torrent. The
+//     weight mirrors the pipeline's memory model (path/name bytes plus the
+//     structural overhead below), because the buffered rows, not their
+//     string bytes, dominate real memory for torrents of many short paths.
 type WindowLimits struct {
 	MaxFiles       int
 	MaxPathBytes   int
 	WindowMaxBytes int64
 }
+
+// Retention-weight constants mirroring the pipeline's memory model
+// (pipeline.RecordWeightBase/FileWeightOverhead): the window budget bounds
+// the same retained data the in-flight semaphore bounds post-dispatch, so
+// both budgets charge structure, not just string bytes.
+const (
+	// retainedTorrentOverhead covers one retained TorrentRow: the struct,
+	// the info-hash slice (header + 20-byte hash), the name header and its
+	// share of the window's map/bookkeeping.
+	retainedTorrentOverhead = 128
+	// retainedFileOverhead covers one retained FileRow: the struct (32 B)
+	// plus slice-append growth slack.
+	retainedFileOverhead = 64
+)
 
 // Overflow reason codes for Window.Overflow.
 const (
@@ -82,8 +99,10 @@ type Window struct {
 	// it read a complete list.
 	Overflow map[int32]Overflow
 
-	// RetainedBytes is the aggregate path-byte weight the window kept; the
-	// window truncates early once it reaches WindowLimits.WindowMaxBytes.
+	// RetainedBytes is the retention WEIGHT the window kept: path and name
+	// bytes plus the structural overhead of every retained row (see the
+	// WindowLimits budget discussion). The window truncates early once it
+	// reaches WindowLimits.WindowMaxBytes.
 	RetainedBytes int64
 
 	truncated bool
@@ -149,6 +168,11 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 	scanned := make(map[int32]bool, len(w.Torrents))
 	for _, t := range w.Torrents {
 		scanned[t.ID] = true
+		// The retained weight starts with the torrent rows themselves: name
+		// bytes plus per-torrent structure. Dropped (truncated) torrents'
+		// base weight stays counted — a deliberate conservative overcount
+		// that can only make the budget trip sooner.
+		w.RetainedBytes += retainedTorrentOverhead + int64(len(t.Name))
 	}
 
 	// One bounded, set-oriented files query for the whole window; NULL
@@ -216,8 +240,12 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 		}
 		currentKnown = true
 		currentCount++
+		// currentBytes stays PURE path bytes: it mirrors the codec's own
+		// aggregate cap and must never reject a torrent the codec would
+		// accept. The retention WEIGHT below is the only place structural
+		// overhead is charged, and it only shapes the window budget.
 		currentBytes += int64(len(f.Path))
-		w.RetainedBytes += int64(len(f.Path))
+		w.RetainedBytes += int64(len(f.Path)) + retainedFileOverhead
 		switch {
 		case currentCount > int64(limits.MaxFiles):
 			// Drain without retention: stop keeping rows for this torrent.

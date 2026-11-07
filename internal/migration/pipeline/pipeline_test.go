@@ -217,9 +217,10 @@ func TestBatchCapCoversAllProcessedRecords(t *testing.T) {
 func TestOversizedRecordsAdmitWithoutDeadlock(t *testing.T) {
 	t.Parallel()
 
-	// Capacity 8 bytes: two records with ~100-byte paths are oversized and
-	// must proceed through the solo slot while small records flow through
-	// the semaphore — the run must complete, never deadlock.
+	// Capacity 256 bytes: the two ~300-byte-weight records (100-byte paths
+	// plus structural overhead) are oversized and proceed through the solo
+	// slot while the ~200-byte-weight small records flow through the
+	// semaphore — the run must complete, never deadlock.
 	oversized1 := mkRec(100, [2]int{100, 1})
 	oversized2 := mkRec(101, [2]int{100, 1})
 	chunk := []Job{{Record: oversized1}, {Record: oversized2}}
@@ -233,7 +234,7 @@ func TestOversizedRecordsAdmitWithoutDeadlock(t *testing.T) {
 	go func() {
 		defer close(done)
 		res, err = Run(context.Background(), &fakeSource{chunks: [][]Job{chunk}},
-			testConfig(4, 5, 8), &recordingCommitter{})
+			testConfig(4, 5, 256), &recordingCommitter{})
 	}()
 	select {
 	case <-done:
@@ -245,6 +246,66 @@ func TestOversizedRecordsAdmitWithoutDeadlock(t *testing.T) {
 	}
 	if res.Scanned != 42 || res.Successes != 42 {
 		t.Fatalf("counters = %+v, want 42/42", res)
+	}
+}
+
+// --- memory model -----------------------------------------------------------
+
+// The weight must charge structural overhead, not just string bytes: a
+// torrent of many very short (duplicate) paths costs real memory per row
+// that a bytes-only model would not see, and the semaphore would admit far
+// more in-flight records than the budget names.
+func TestRecordWeightChargesStructuralOverhead(t *testing.T) {
+	t.Parallel()
+
+	rec := &Record{SourceID: 1, InfoHash: mkInfoHash(1), Name: "n", Files: []FileEntry{
+		{Path: "ab", Size: 1}, {Path: "ab", Size: 1}, {Path: "ab", Size: 1}, // duplicates retained
+	}}
+	want := int64(RecordWeightBase+len("n")) + 3*FileWeightOverhead + 3*int64(len("ab"))
+	if got := rec.Weight(); got != want {
+		t.Fatalf("Weight() = %d, want %d (base + name + per-row structure + path bytes)", got, want)
+	}
+
+	// The dense-retention extreme: 250k one-byte paths hold ~250 KB of path
+	// bytes but ~16 MB of real retained weight — the structural charge must
+	// dominate, not collapse to the string-byte total.
+	fat := &Record{SourceID: 2, InfoHash: mkInfoHash(2), Name: "fat"}
+	for i := 0; i < 250_000; i++ {
+		fat.Files = append(fat.Files, FileEntry{Path: "a", Size: 1})
+	}
+	if got := fat.Weight(); got < int64(250_000)*(FileWeightOverhead+1) {
+		t.Fatalf("Weight() = %d for 250k one-byte paths, want at least the per-row structural cost", got)
+	}
+}
+
+// A record of many very short duplicate paths heavier than the whole budget
+// must proceed through the solo slot and settle as a valid import: the
+// structural overhead may shape admission, never turn a codec-valid torrent
+// into an artificial rejection — and it must not deadlock.
+func TestSoloAdmitsShortDuplicatePathRecord(t *testing.T) {
+	t.Parallel()
+
+	rec := &Record{SourceID: 1, InfoHash: mkInfoHash(1), Name: "fat",
+		TotalSize: 250_000, DiscoveredOn: 1700000000}
+	for i := 0; i < 250_000; i++ {
+		rec.Files = append(rec.Files, FileEntry{Path: "a", Size: 1})
+	}
+	if rec.Weight() < 1<<20 {
+		t.Fatalf("fixture weight %d must exceed the 1 MiB budget to exercise the solo slot", rec.Weight())
+	}
+
+	rc := &recordingCommitter{}
+	res, err := Run(context.Background(), &fakeSource{chunks: [][]Job{{{Record: rec}}}},
+		testConfig(2, 4, 1<<20), rc)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.Scanned != 1 || res.Successes != 1 || res.Errors != 0 {
+		t.Fatalf("counters = %+v, want one success and no artificial errors", res)
+	}
+	batches := rc.all()
+	if len(batches) != 1 || len(batches[0].Successes) != 1 || batches[0].Successes[0].Blob == nil {
+		t.Fatalf("batches = %+v, want one success carrying a blob", batches)
 	}
 }
 

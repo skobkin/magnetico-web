@@ -27,10 +27,32 @@ type FileEntry struct {
 	SourceFileID int32
 }
 
+// Memory-model constants shared with the reader's window budget
+// (internal/migration/legacy/original): the in-flight budget must charge
+// the structural cost of retained data, not just string bytes — string
+// lengths alone under-count by an order of magnitude for torrents of many
+// short paths, admitting far more in-flight records than the budget names.
+const (
+	// RecordWeightBase covers a record's fixed structural share: the Record
+	// struct, the info-hash slice (header + 20-byte hash), and its share of
+	// the pipeline's bookkeeping (job/outcome envelope, batch slice slot).
+	RecordWeightBase = 128
+	// FileWeightOverhead covers one retained file row's structural cost
+	// across its lifetimes: the pipeline's FileEntry (32 B), the codec's
+	// decoded File row during verification (32 B), slice-append growth
+	// slack, and the per-file framing stored inside the encoded blob.
+	// String bytes are charged separately.
+	FileWeightOverhead = 64
+)
+
 // Weight is the in-flight memory the record charges against the byte
-// semaphore: its decoded path bytes plus the torrent name.
+// semaphore: its decoded path bytes and torrent name, plus a fixed
+// per-record base and a structural overhead per retained file row (see the
+// constants above). Weight only shapes admission and scheduling — it never
+// rejects a record: anything heavier than the whole budget still proceeds
+// through the oversized solo slot.
 func (r *Record) Weight() int64 {
-	w := int64(len(r.Name))
+	w := RecordWeightBase + int64(len(r.Name)) + int64(len(r.Files))*FileWeightOverhead
 	for _, f := range r.Files {
 		w += int64(len(f.Path))
 	}

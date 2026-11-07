@@ -216,7 +216,9 @@ func TestReaderWindowByteBudgetTruncatesWithoutLoss(t *testing.T) {
 	// is budget plus one full group, itself capped by MaxPathBytes), the
 	// rest moves to the next window.
 	pathLen := int64(len(long) + 2) // "%s.%d" over a 200-byte string
-	perGroup := 2 * pathLen
+	// One full group under the weight model: the torrent row's structure
+	// and name plus both file rows (path bytes + per-row overhead).
+	perGroup := retainedTorrentOverhead + 3 + 2*(pathLen+retainedFileOverhead)
 	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: 500}
 	var got []TorrentRow
 	totalOrphans := int64(0)
@@ -256,6 +258,68 @@ func TestReaderWindowByteBudgetTruncatesWithoutLoss(t *testing.T) {
 	}
 	if totalOrphans != 0 {
 		t.Fatalf("orphans = %d, want 0", totalOrphans)
+	}
+}
+
+// The budget must charge structural weight, not just path bytes: a torrent
+// of many very short DUPLICATE paths costs ~65 B of real memory per row
+// while its path-byte total stays tiny. Under a small budget each torrent
+// overflows the budget alone, the window stops at the first group boundary,
+// and iterating windows still reads every torrent with its complete,
+// duplicate-preserving file list.
+func TestReaderWindowShortDuplicatePathsChargedStructurally(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	// 3 torrents × 100 identical one-byte paths: ~250 B of path bytes per
+	// torrent, ~6.6 KB of real retained weight.
+	for id := int32(1); id <= 3; id++ {
+		seedTorrent(t, dsn, id, fmt.Sprintf("%040x", id), fmt.Sprintf("t%d", id), 100, 1700000000+id)
+		for i := int32(1); i <= 100; i++ {
+			seedFile(t, dsn, 100*id+i, &id, "a", 1)
+		}
+	}
+
+	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: 200}
+	var got []TorrentRow
+	after := int64(0)
+	windows := 0
+	for {
+		w, err := src.Window(ctx, after, 4, limits)
+		if err != nil {
+			t.Fatalf("Window(after=%d) error = %v", after, err)
+		}
+		windows++
+		if len(w.Torrents) > 1 {
+			t.Fatalf("window returned %d torrents; a 200-byte budget charged structurally must cut at the first torrent's group", len(w.Torrents))
+		}
+		for _, tr := range w.Torrents {
+			rows := w.Files[tr.ID]
+			if len(rows) != 100 {
+				t.Fatalf("torrent %d kept %d file rows, want its complete list of 100", tr.ID, len(rows))
+			}
+			if rows[0].Path != "a" || rows[0].Size != 1 || rows[99].Path != "a" || rows[99].Size != 1 {
+				t.Fatalf("duplicate rows corrupted: first %+v last %+v", rows[0], rows[99])
+			}
+			want := int64(retainedTorrentOverhead+len(fmt.Sprintf("t%d", tr.ID))) + 100*(1+retainedFileOverhead)
+			if w.RetainedBytes < want {
+				t.Fatalf("window retained %d bytes, want at least %d (per-row structural charging)", w.RetainedBytes, want)
+			}
+		}
+		got = append(got, w.Torrents...)
+		if len(w.Torrents) == 0 {
+			break
+		}
+		after = int64(w.Torrents[len(w.Torrents)-1].ID)
+		if windows > 8 {
+			t.Fatal("window iteration did not terminate")
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("read %d torrents across %d windows, want all 3 with complete lists", len(got), windows)
 	}
 }
 

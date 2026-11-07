@@ -1084,3 +1084,35 @@ func TestRunnerByteBudgetTruncationKeepsValidTorrents(t *testing.T) {
 		t.Fatalf("torrents = %d, want 512", snap.torrents)
 	}
 }
+
+// Very short DUPLICATE paths under a small in-flight budget: the structural
+// memory model must not turn dense small-path torrents into errors or
+// deadlocks — every record imports cleanly even at the minimum
+// --max-inflight-bytes, and the error registry stays empty (a byte-count
+// model would have admitted dozens of these at once; the structural charge
+// keeps the true footprint bounded without rejecting anything).
+func TestRunnerShortDuplicatePathsImportCleanly(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	for id := int32(1); id <= 20; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 40, 1700000000+id)
+		for i := 0; i < 40; i++ {
+			seedSourceFile(t, src, id, "a", 1)
+		}
+	}
+
+	err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt,
+		Workers:          4,
+		BatchSize:        16,
+		MaxInflightBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("run error = %v", err)
+	}
+	p := snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseImportComplete || p.SuccessCount != 20 || p.ErrorCount != 0 {
+		t.Fatalf("progress = %+v, want import_complete with 20 successes and no errors", p)
+	}
+}
