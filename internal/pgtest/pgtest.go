@@ -84,6 +84,23 @@ func IntegrationCluster(t *testing.T) *Cluster {
 	return cluster
 }
 
+// RunTests is the TestMain body for packages that use the PostgreSQL
+// integration harness: it runs the package tests, then stops this process's
+// bootstrapped cluster (external servers are never stopped). Without it,
+// every `go test ./...` package process leaked one disposable PostgreSQL
+// container for the lifetime of the Docker host — dozens of idle servers
+// across a full battery. The cluster is bootstrapped lazily, so packages
+// that end up touching no database pay nothing and leave nothing behind.
+func RunTests(m *testing.M) int {
+	code := m.Run()
+	// m.Run has returned: no test goroutines remain, so the once-guarded
+	// cluster needs no synchronization here.
+	if cluster != nil && cluster.Stop != nil {
+		cluster.Stop()
+	}
+	return code
+}
+
 func bootstrapCluster() (*Cluster, error) {
 	if raw := os.Getenv("MAGNETICO_TEST_POSTGRES_DSN"); raw != "" {
 		parsed, err := url.Parse(raw)
