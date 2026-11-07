@@ -443,10 +443,16 @@ func TestEqualCanonicalWithDuplicates(t *testing.T) {
 func TestCancelSettlesContiguousPrefix(t *testing.T) {
 	t.Parallel()
 
-	chunk := make([]Job, 0, 100)
+	records := make([]Job, 0, 100)
 	for id := int32(1); id <= 100; id++ {
-		chunk = append(chunk, Job{Record: mkRec(id, [2]int{4, 1})})
+		records = append(records, Job{Record: mkRec(id, [2]int{4, 1})})
 	}
+	// The second chunk is released only by the cancellation itself, so the
+	// cancel deterministically lands while records remain undispatched —
+	// "not everything committed" then tests the settling semantics rather
+	// than a scheduling race (a fast machine could otherwise settle all 100
+	// before the first commit observed the cancel; committing them is
+	// correct settling behavior that flaked the old assertion).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -457,7 +463,8 @@ func TestCancelSettlesContiguousPrefix(t *testing.T) {
 		}
 	}
 
-	res, err := Run(ctx, &fakeSource{chunks: [][]Job{chunk}}, testConfig(4, 10, 1<<20), rc)
+	src := &gatedSource{chunks: [][]Job{records[:10], records[10:]}, gate: ctx.Done()}
+	res, err := Run(ctx, src, testConfig(4, 10, 1<<20), rc)
 	if !errors.Is(err, ErrInterrupted) {
 		t.Fatalf("Run() error = %v, want ErrInterrupted", err)
 	}
@@ -480,9 +487,34 @@ func TestCancelSettlesContiguousPrefix(t *testing.T) {
 	if res.LastSourceID != lastID || res.Scanned != int64(committed) {
 		t.Fatalf("result = %+v, but committed %d records through %d", res, committed, lastID)
 	}
-	if committed >= 100 {
-		t.Fatalf("run committed everything (%d) despite cancellation", committed)
+	if committed != 10 {
+		t.Fatalf("committed %d records, want exactly the first batch of 10 (the rest undispatched)", committed)
 	}
+}
+
+// gatedSource serves its chunks in order; every chunk after the first
+// waits for gate to close (or the run context to cancel) before being
+// served — a deterministic mid-run cancellation point.
+type gatedSource struct {
+	chunks [][]Job
+	gate   <-chan struct{}
+	i      int
+}
+
+func (f *gatedSource) Next(ctx context.Context) ([]Job, bool, error) {
+	if f.i > 0 {
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
+	if f.i >= len(f.chunks) {
+		return nil, false, nil
+	}
+	c := f.chunks[f.i]
+	f.i++
+	return c, true, nil
 }
 
 func TestCommitFailureSurfacesCommitError(t *testing.T) {
