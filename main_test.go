@@ -13,11 +13,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
@@ -206,5 +208,40 @@ func TestMigrateTorrentsBinarySmoke(t *testing.T) {
 	code = runMigrateTorrentsBinary(t, bin, src, tgt, 0)
 	if code != 0 {
 		t.Fatalf("completed-run re-run exit code = %d, want 0", code)
+	}
+}
+
+// Source-schema refusals must reach the operator as their fixed sentinel
+// plus a bounded, quoted catalog-detail list — never as an opaque
+// "unexpected error (*original.SourceStateError)" that hides whether the
+// source is a v1 fork or has an unexpected layout. (Review finding:
+// Codex pass 1, #6.)
+func TestMigrationFailureMessageRendersSourceStateRefusals(t *testing.T) {
+	v1Fork := &original.SourceStateError{
+		Err:     original.ErrSourceV1Fork,
+		Details: []string{`relation "magneticod.files_p0"`, `migrations schema_version 1`},
+	}
+	got := migrationFailureMessage(v1Fork)
+	if !strings.Contains(got, original.ErrSourceV1Fork.Error()) ||
+		!strings.Contains(got, "magneticod.files_p0") {
+		t.Fatalf("migrationFailureMessage() = %q, want the v1-fork sentinel and the catalog details", got)
+	}
+	if strings.Contains(got, "unexpected error") {
+		t.Fatalf("migrationFailureMessage() = %q, want the typed refusal, not %T", got, v1Fork)
+	}
+
+	// Detail bounding: many/long catalog names are quoted and cut at the
+	// bounded list size, never echoed raw and unbounded.
+	var longDetails []string
+	for i := 0; i < 20; i++ {
+		longDetails = append(longDetails, strings.Repeat("n", 300)+fmt.Sprint(i))
+	}
+	overlong := &original.SourceStateError{Err: original.ErrSourceUnsupported, Details: longDetails}
+	got = migrationFailureMessage(overlong)
+	if len(got) > 4096 {
+		t.Fatalf("failure message is %d bytes, want a bounded diagnostic", len(got))
+	}
+	if strings.Contains(got, strings.Repeat("n", 300)) {
+		t.Fatalf("failure message echoes an unbounded detail verbatim: %q", got)
 	}
 }

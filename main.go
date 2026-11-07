@@ -18,6 +18,7 @@ import (
 	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/dht/mainline"
 	"github.com/skobkin/magnetico-web/internal/migration"
+	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/metadata"
@@ -262,6 +263,15 @@ func migrationFailureMessage(err error) string {
 	var stateErr *state.StateError
 	if errors.As(err, &stateErr) {
 		return appendBoundedDetails("migration refused: "+stateErr.Err.Error(), stateErr.Details)
+	}
+	var srcStateErr *original.SourceStateError
+	if errors.As(err, &srcStateErr) {
+		// Source-schema refusals name the detected catalog objects (same
+		// trust class as target SchemaStateError details: schema-qualified
+		// identifiers, never driver text). Render the fixed sentinel plus a
+		// bounded, quoted detail list instead of the raw Error(), whose
+		// detail length is unbounded.
+		return appendBoundedDetails("migration refused: "+srcStateErr.Err.Error(), srcStateErr.Details)
 	}
 	return appendSchemaStateDetails("migration refused: "+controlledErrorDetail(err), err)
 }
