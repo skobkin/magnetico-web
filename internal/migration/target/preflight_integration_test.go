@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/skobkin/magnetico-web/internal/migration/pgidentity"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -143,6 +144,128 @@ func TestPreflightCompletedRunIsIdempotent(t *testing.T) {
 	defer again.Lock.Release(context.Background())
 	if again.Progress.Phase != state.PhaseImportComplete {
 		t.Fatalf("completed phase = %s", again.Progress.Phase)
+	}
+}
+
+// A completed run's resume must still reconcile the target against the
+// persisted state: the completion phase is trust in the recorded counts,
+// not an exemption from reconciliation. Post-completion tampering (a
+// deleted torrent or blob row, a trimmed error registry) must refuse as
+// corrupt state, while a pristine completed target stays an idempotent
+// success.
+func TestPreflightCompletedRunReconcilesTarget(t *testing.T) {
+	t.Parallel()
+
+	// completeRun drives a fresh target through the legal transitions to a
+	// completion phase over one torrent (id 1) and, optionally, one blob and
+	// one record error (source id 2).
+	completeRun := func(t *testing.T, dsn string, identity pgidentity.Identity, withBlob, withRecordError bool) {
+		t.Helper()
+		first, err := Preflight(context.Background(), preflightInput(dsn, identity))
+		if err != nil {
+			t.Fatalf("first Preflight() error = %v", err)
+		}
+		runID := first.Progress.RunID
+		first.Lock.Release(context.Background())
+
+		seedImportedTorrent(t, dsn, 1, "1111111111111111111111111111111111111111", 1, withBlob)
+		if withRecordError {
+			err := pgxBeginFunc(t, dsn, func(tx pgx.Tx) error {
+				return state.InsertErrorRecords(context.Background(), tx, runID, []state.ErrorRecord{{
+					Scope: state.ScopeRecord, SourceID: ptrInt64(2),
+					Stage: "validate", Category: state.CategoryIntegrity, Code: "invalid_metadata",
+				}})
+			})
+			if err != nil {
+				t.Fatalf("insert error record: %v", err)
+			}
+		}
+
+		firstBatch := state.AdvanceInput{RunID: runID, ExpectedPhase: state.PhaseImporting, NewPhase: state.PhaseImporting,
+			ExpectedLastID: 0, NewLastID: 1, ScannedDelta: 1, SuccessDelta: 1}
+		if withBlob {
+			firstBatch.BlobDelta = 1
+		}
+		steps := []state.AdvanceInput{firstBatch}
+		if withRecordError {
+			steps = append(steps, state.AdvanceInput{RunID: runID, ExpectedPhase: state.PhaseImporting, NewPhase: state.PhaseImporting,
+				ExpectedLastID: 1, NewLastID: 2, ScannedDelta: 1, ErrorDelta: 1})
+		}
+		final := state.PhaseImportComplete
+		if withRecordError {
+			final = state.PhaseCompleteWithErrors
+		}
+		lastID := int64(1)
+		if withRecordError {
+			lastID = 2
+		}
+		steps = append(steps,
+			state.AdvanceInput{RunID: runID, ExpectedPhase: state.PhaseImporting, NewPhase: state.PhaseDataLoaded,
+				ExpectedLastID: lastID, NewLastID: lastID},
+			state.AdvanceInput{RunID: runID, ExpectedPhase: state.PhaseDataLoaded, NewPhase: state.PhaseBuildingIndexes,
+				ExpectedLastID: lastID, NewLastID: lastID},
+			state.AdvanceInput{RunID: runID, ExpectedPhase: state.PhaseBuildingIndexes, NewPhase: final,
+				ExpectedLastID: lastID, NewLastID: lastID},
+		)
+		for _, in := range steps {
+			if !advanceRun(t, dsn, first.Progress, in) {
+				t.Fatalf("advance to %s did not apply", in.NewPhase)
+			}
+		}
+	}
+
+	tests := []struct {
+		name          string
+		withBlob      bool
+		withRecordErr bool
+		tamper        func(t *testing.T, dsn string)
+	}{
+		{
+			name:          "pristine completed run stays an idempotent success",
+			withBlob:      true,
+			withRecordErr: true,
+		},
+		{
+			name:   "torrent deleted after completion refuses",
+			tamper: func(t *testing.T, dsn string) { execTarget(t, dsn, `DELETE FROM magneticod.torrents`) },
+		},
+		{
+			name:     "blob deleted after completion refuses",
+			withBlob: true,
+			tamper:   func(t *testing.T, dsn string) { execTarget(t, dsn, `DELETE FROM magneticod.torrent_file_blobs`) },
+		},
+		{
+			name:          "error registry trimmed after completion refuses",
+			withRecordErr: true,
+			tamper:        func(t *testing.T, dsn string) { execTarget(t, dsn, `DELETE FROM magnetico_migration.errors`) },
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dsn := createTarget(t)
+			otherDB := pgtest.IntegrationCluster(t).TestDatabase(t)
+			sourceIdentity := identityOf(t, otherDB)
+			completeRun(t, dsn, sourceIdentity, tc.withBlob, tc.withRecordErr)
+
+			if tc.tamper == nil {
+				res, err := Preflight(context.Background(), preflightInput(dsn, sourceIdentity))
+				if err != nil {
+					t.Fatalf("pristine completed-run Preflight() error = %v", err)
+				}
+				defer res.Lock.Release(context.Background())
+				if res.Fresh {
+					t.Fatal("completed run must resume, not re-initialize")
+				}
+				return
+			}
+			tc.tamper(t, dsn)
+			_, err := Preflight(context.Background(), preflightInput(dsn, sourceIdentity))
+			if !errors.Is(err, state.ErrRunStateCorrupt) {
+				t.Fatalf("Preflight() after tampering error = %v, want ErrRunStateCorrupt", err)
+			}
+		})
 	}
 }
 

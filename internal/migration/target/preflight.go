@@ -161,15 +161,17 @@ func preflightLocked(ctx context.Context, pool *pgxpool.Pool, in Input) (*Result
 		return nil, err
 	}
 
-	// Completed runs reconcile (idempotent re-report) and stop there.
-	if !existing.Phase.Complete() {
-		facts, err := TargetFacts(ctx, pool, existing.LastProcessedID, existing.RunID)
-		if err != nil {
-			return nil, err
-		}
-		if err := state.Reconcile(existing, facts); err != nil {
-			return nil, err
-		}
+	// Every resume reconciles the target against the persisted state —
+	// including a completed run's idempotent re-invocation. The completion
+	// phase is trust in the recorded counts, not an exemption: silent
+	// divergence after completion (a deleted torrent or blob row, a tampered
+	// error registry) must refuse as corrupt state, never report success.
+	facts, err := TargetFacts(ctx, pool, existing.LastProcessedID, existing.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if err := state.Reconcile(existing, facts); err != nil {
+		return nil, err
 	}
 	return &Result{Progress: existing, Fresh: false}, nil
 }
