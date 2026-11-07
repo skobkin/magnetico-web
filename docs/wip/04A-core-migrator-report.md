@@ -1,7 +1,7 @@
 # Task 04A implementation report — offline import of original Magnetico v0.12.0 torrents
 
 Branch `refactor/0.8.0-unify-and-new-storage`, commits 1–9 of the approved plan
-(base `c69253ba`). Normative contract:
+(base `c69253ba`) plus the post-implementation review-fix series (below). Normative contract:
 [`docs/specs/legacy-torrent-migration-v1.md`](../specs/legacy-torrent-migration-v1.md);
 assignment: [`docs/wip/04A-core-migrator.md`](04A-core-migrator.md). No spec file was
 edited. No schema DDL, wire format or crawler code was changed. No production database
@@ -24,7 +24,8 @@ the Docker harness. Commits stay local; nothing is pushed.
 | `style: golangci-lint clean across the 04A tree` | gci import grouping, tagged switch, ineffectual assignment, documented feeder-drain suppression — `golangci-lint run`: 0 issues |
 | `docs: 04A migrator implementation report; update wip README task sequence` | This report |
 
-Net diff over the task: 50 files, ≈9.3k insertions, ≈750 deletions. New packages:
+Net diff over the task (including the review-fix series): 58 files, ≈10.2k
+insertions, ≈750 deletions. New packages:
 `internal/pgtest`, `internal/migration` (runner/convert/incidents),
 `internal/migration/legacy/original`, `…/pipeline`, `…/state`, `…/target`, `…/pgidentity`.
 Touched existing packages: `persistence` (seam + test bootstrap delegation only),
@@ -59,6 +60,25 @@ Touched existing packages: `persistence` (seam + test bootstrap delegation only)
   `MAGNETICO_MIGRATION_*` variables are rejected; empty resolution refuses with
   `ErrSourceRequired` (never a target fallback). All rendered URLs go through
   `redactDatabaseURL`; incident/error text is sanitized defensively at construction.
+
+## Post-implementation review (independent Codex review, 3 passes)
+
+After commit 9 the whole 04A branch was reviewed by a separate Codex agent
+(`/review` in a side pane). Every finding was re-validated against the code and
+the contract before fixing; each fix landed as its own commit with a regression
+test.
+
+| Pass | Finding | Verdict | Fix |
+|---|---|---|---|
+| 1 | #1 P1 — reader buffered whole pages checking only file count; a probe retained 4 MiB against a 1 MiB budget | Valid (plan required per-torrent byte caps + bounded read buffers) | `a8946b70` — per-torrent caps from codec limits (files + aggregate path bytes) and a window byte budget (`--max-inflight-bytes`) that truncates the window under backpressure without loss |
+| 1 | #2 P1 — finalization ran on the parent context/pool; terminating the lock backend mid-finalization still produced `import_complete` | Valid (violated the fail-closed lock directive) | `bb94d755` — completion CAS moved onto the lock-owning connection, finalization on the run context, `lock.Lost()` reported as the fatal it is |
+| 1 | #3 P2 — resume refused after a source PostgreSQL restart (postmaster start time in the resume equality) | Valid (spec requires revalidating identity and bounds, not restart-time equality) | `089f9408` — resume equality compares content anchors only; start time stays recorded and still gates source-vs-target distinctness fail-closed |
+| 1 | #4 P2 — a source whose minimum ID is `MinInt32` wrapped the int32 keyset cursor: the whole source scanned as empty, run "completed" | Valid | `b6e970c4` — int64 cursor end to end (`$1::bigint`), plus a complete-accounting gate (scanned must equal the fingerprint total) before any completion phase |
+| 1 | #5 P2 — resumed Progress reports restarted counters at zero while the DB accumulated deltas (reported 9 migrated, DB held 12) | Valid | `62939a7b` — committer mirrors initialized from the stored progress row |
+| 1 | #6 P2 — CLI hid source-schema refusals behind "unexpected error (\*original.SourceStateError)" | Valid | `fdc8c3a3` — source refusals render their sentinel plus the bounded quoted catalog details |
+| — | infra — every `go test` process leaked one disposable postgres container (138 piled up over the sessions, ~all RAM) | Valid | `153acab6` — `pgtest.RunTests` stops the process's cluster on exit; verified a package run leaves no container |
+| 2 | #1 P1 — regression from the #1 fix: the early-stop cleared its flag before breaking, so truncated windows shipped unread torrents as `missing_files` errors past the checkpoint | Valid (reproduced by review: 2 of 4 valid torrents corrupted) | `5aee0fb4` — truncation only on an actual early break; reader test asserts complete file lists per returned torrent; runner test drives 512 valid torrents through truncated windows requiring zero errors |
+| 3 | — | No actionable findings; fix verified with an independent reproduction, `-race` on the affected packages | — |
 
 ## Owner directives implemented (all test-backed)
 
@@ -149,8 +169,9 @@ disposable per-test databases):
 - `go test -race ./internal/... ./persistence/ ./opflags/ .` — pass
 - `golangci-lint run` — pass (see final battery below)
 
-Verbose census of the migration area (`go test -v ./internal/... .`): **114 test
-functions pass, 1 skips** — `TestIdentitySameDatabaseViaSocketAndTCP`, because the
+Verbose census of the migration area (`go test -v ./internal/... .`), rerun on the
+final tree after the review fixes: **127 test functions pass, 1 skips** —
+`TestIdentitySameDatabaseViaSocketAndTCP`, because the
 Docker-cached-cluster harness exposes no Unix socket (the initdb bootstrap path does;
 the test skips and documents itself when absent, exactly as planned). Everything else
 in the task-doc §E matrix ran, including all PostgreSQL-backed suites.
