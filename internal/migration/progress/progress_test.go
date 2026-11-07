@@ -98,7 +98,8 @@ func TestSessionRateUsesSessionDelta(t *testing.T) {
 func TestTTYLineRendersPhaseIndexAndClears(t *testing.T) {
 	t.Parallel()
 
-	out := &bytes.Buffer{}
+	// syncBuffer: the renderer goroutine writes while this goroutine polls.
+	out := &syncBuffer{}
 	r := New(true, out, nil)
 	go r.Run()
 	r.Update(Snapshot{Phase: "building_indexes", Scanned: 1000, ExpectedTotal: 1000,
@@ -160,6 +161,25 @@ func (w *blockingWriter) Write(p []byte) (int, error) {
 	// every receive returns immediately.
 	<-w.release
 	return len(p), nil
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer: the renderer goroutine writes
+// while the test goroutine polls.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (w *syncBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *syncBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
 }
 
 func TestIsTTY(t *testing.T) {
