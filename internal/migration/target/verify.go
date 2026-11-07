@@ -12,6 +12,9 @@ package target
 //   - building_indexes: per index absent (crash recovery) or present and
 //     definition-identical
 // Any other deviation is refused with the offending catalog objects named.
+// A deferred run whose drop has not happened yet (indexes_deferred=false,
+// before the first batch and on a resume that must perform the drop) is
+// still verified strictly — the indexes must all be present.
 
 import (
 	"context"
@@ -42,10 +45,13 @@ var secondaryIndexDefinitions = map[string]string{
 }
 
 // VerifySchema verifies the target schema for the run's phase. Strict cases
-// delegate to persistence.MakeDatabase (production verification).
+// delegate to persistence.MakeDatabase (production verification): no
+// deferral, a completed run (deferred indexes are rebuilt by then), or a
+// deferred run whose drop has not been performed yet.
 func VerifySchema(ctx context.Context, dsn string, in verifyInput) error {
-	if !in.deferRequested || in.phase.Complete() {
-		// No deferral, or a completed run: the application's strict state.
+	strict := !in.deferRequested || in.phase.Complete() || !in.indexesDeferred
+	if strict {
+		// The application's strict state: all three secondary indexes present.
 		store, err := persistence.MakeDatabase(ctx, dsn)
 		if err != nil {
 			return err

@@ -211,9 +211,14 @@ func TestRunnerRecordSemantics(t *testing.T) {
 
 	snap := snapshotTarget(t, tgt)
 	p := snap.progress
-	if p.Phase != state.PhaseDataLoaded {
-		t.Fatalf("phase = %s, want data_loaded", p.Phase)
+	// Record-level errors force import_complete_with_errors (never plain).
+	if p.Phase != state.PhaseCompleteWithErrors {
+		t.Fatalf("phase = %s, want import_complete_with_errors", p.Phase)
 	}
+	// A non-deferred run keeps all three indexes maintained throughout.
+	wantSecondaryIndexes(t, tgt, map[string]bool{
+		"idx_torrents_total_size": true, "idx_torrents_discovered_on": true, "idx_torrents_name_gin_trgm": true,
+	})
 	if p.LastProcessedID != 6 || p.ScannedCount != 6 || p.SuccessCount != 3 ||
 		p.ErrorCount != 3 || p.BlobCount != 2 || p.RunErrorCount != 0 {
 		t.Fatalf("progress = %+v", p)
@@ -285,8 +290,23 @@ func TestRunnerEmptySourceCompletes(t *testing.T) {
 		t.Fatalf("ImportTorrents() error = %v", err)
 	}
 	p := snapshotTarget(t, tgt).progress
-	if p.Phase != state.PhaseDataLoaded || p.LastProcessedID != -1 || p.ScannedCount != 0 {
+	if p.Phase != state.PhaseImportComplete || p.LastProcessedID != -1 || p.ScannedCount != 0 {
 		t.Fatalf("empty-source progress = %+v", p)
+	}
+	// Documented empty-import behavior: the identity sequence is left at its
+	// initial state (next generated ID would be 1).
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	pool := poolForRunner(t, tgt)
+	defer pool.Close()
+	var lastValue int64
+	var isCalled bool
+	if err := pool.QueryRow(ctx,
+		`SELECT last_value, is_called FROM magneticod.torrents_id_seq`).Scan(&lastValue, &isCalled); err != nil {
+		t.Fatalf("read identity sequence: %v", err)
+	}
+	if lastValue != 1 || isCalled {
+		t.Fatalf("identity sequence = (%d, %v), want initial state (1, false)", lastValue, isCalled)
 	}
 }
 
@@ -333,7 +353,7 @@ func TestRunnerInterruptedThenResumes(t *testing.T) {
 	}
 	snap = snapshotTarget(t, tgt)
 	p = snap.progress
-	if p.Phase != state.PhaseDataLoaded || p.LastProcessedID != 40 ||
+	if p.Phase != state.PhaseImportComplete || p.LastProcessedID != 40 ||
 		p.ScannedCount != 40 || p.SuccessCount != 40 || p.ErrorCount != 0 || p.BlobCount != 40 {
 		t.Fatalf("resumed progress = %+v", p)
 	}
@@ -429,7 +449,7 @@ func TestRunnerAmbiguousCommitReconciles(t *testing.T) {
 
 	snap := snapshotTarget(t, tgt)
 	p := snap.progress
-	if p.Phase != state.PhaseDataLoaded || p.SuccessCount != 20 || p.ScannedCount != 20 {
+	if p.Phase != state.PhaseImportComplete || p.SuccessCount != 20 || p.ScannedCount != 20 {
 		t.Fatalf("progress = %+v", p)
 	}
 	if snap.torrents != 20 {
@@ -473,8 +493,10 @@ func TestRunnerOrphansExcludedAndRecorded(t *testing.T) {
 
 	snap := snapshotTarget(t, tgt)
 	p := snap.progress
-	if p.Phase != state.PhaseDataLoaded {
-		t.Fatalf("phase = %s, want data_loaded (orphans are never fatal)", p.Phase)
+	// Unresolved integrity run-scope errors (the orphan incident) force
+	// import_complete_with_errors even with zero record errors.
+	if p.Phase != state.PhaseCompleteWithErrors {
+		t.Fatalf("phase = %s, want import_complete_with_errors (orphans are integrity errors)", p.Phase)
 	}
 	if p.RunErrorCount != 1 || snap.runErrors != 1 {
 		t.Fatalf("run_error_count = %d / integrity rows = %d, want 1/1", p.RunErrorCount, snap.runErrors)
@@ -519,6 +541,270 @@ func TestRunnerOrphansExcludedAndRecorded(t *testing.T) {
 	}
 	if len(files) != 2 || files[0].Path != "a" || files[1].Path != "b" {
 		t.Fatalf("decoded files = %+v, want exactly a and b (orphans excluded)", files)
+	}
+}
+
+// --- suite ⑦: index deferral and finalization -------------------------------
+
+// secondaryIndexPresence reads which of the three droppable indexes exist.
+func secondaryIndexPresence(t *testing.T, dsn string) map[string]bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	pool := poolForRunner(t, dsn)
+	defer pool.Close()
+	rows, err := pool.Query(ctx, `SELECT i.relname FROM pg_index x
+        JOIN pg_class i ON i.oid = x.indexrelid
+        JOIN pg_class t ON t.oid = x.indrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        WHERE n.nspname = 'magneticod'
+          AND NOT EXISTS (SELECT 1 FROM pg_constraint con WHERE con.conindid = i.oid)`)
+	if err != nil {
+		t.Fatalf("index inventory: %v", err)
+	}
+	defer rows.Close()
+	present := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		present[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	return present
+}
+
+// wantSecondaryIndexes asserts the exact presence set of the three droppable
+// indexes.
+func wantSecondaryIndexes(t *testing.T, dsn string, want map[string]bool) {
+	t.Helper()
+	got := secondaryIndexPresence(t, dsn)
+	for _, name := range []string{
+		"idx_torrents_total_size", "idx_torrents_discovered_on", "idx_torrents_name_gin_trgm",
+	} {
+		if got[name] != want[name] {
+			t.Fatalf("index %s present = %v, want %v (inventory %v)", name, got[name], want[name], got)
+		}
+	}
+}
+
+// integrityConstraintsIntact counts PK/UNIQUE/FK constraints on the data
+// tables: torrents PK + UNIQUE(info_hash), blobs PK + FK, schema_version PK.
+func integrityConstraintsIntact(t *testing.T, dsn string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	pool := poolForRunner(t, dsn)
+	defer pool.Close()
+	var n int64
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM pg_constraint con
+        JOIN pg_class c ON c.oid = con.conrelid
+        JOIN pg_namespace ns ON ns.oid = con.connamespace
+        WHERE ns.nspname = 'magneticod' AND con.contype IN ('p','u','f')`).Scan(&n); err != nil {
+		t.Fatalf("constraint count: %v", err)
+	}
+	if n != 5 {
+		t.Fatalf("integrity constraints = %d, want 5 (2×torrents PK+UNIQUE, 2×blobs PK+FK, schema_version PK)", n)
+	}
+}
+
+func TestRunnerDeferredIndexesInterruptedResume(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	for id := int32(1); id <= 12; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 2, 1700000000+int32(id))
+		seedSourceFile(t, src, id, fmt.Sprintf("f%d.bin", id), 2)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reports int
+	err := runTorrents(t, ctx, TorrentsInput{
+		SourceDSN: src, TargetDSN: tgt, DeferIndexes: true,
+		Progress: func(Progress) {
+			reports++
+			if reports == 2 {
+				cancel() // after the drop+mark and the first committed batch
+			}
+		},
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("interrupted deferred run error = %v, want ErrInterrupted", err)
+	}
+
+	// The authorized index-less state mid-import: drop applied, marker set,
+	// the application's strict verification refuses it.
+	p := snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseImporting || !p.IndexesDeferred || !p.DeferIndexes {
+		t.Fatalf("interrupted deferred progress = %+v", p)
+	}
+	wantSecondaryIndexes(t, tgt, map[string]bool{
+		"idx_torrents_total_size": false, "idx_torrents_discovered_on": false, "idx_torrents_name_gin_trgm": false,
+	})
+	integrityConstraintsIntact(t, tgt)
+	ctxNC, cancelNC := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancelNC()
+	if _, err := persistence.MakeDatabase(ctxNC, tgt); err == nil {
+		t.Fatal("MakeDatabase accepted the index-less mid-import state")
+	}
+
+	// Resume rebuilds the indexes at finalization and completes.
+	if err := runTorrents(t, context.Background(), TorrentsInput{
+		SourceDSN: src, TargetDSN: tgt, DeferIndexes: true,
+	}); err != nil {
+		t.Fatalf("resume error = %v", err)
+	}
+	p = snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseImportComplete || p.SuccessCount != 12 {
+		t.Fatalf("resumed progress = %+v", p)
+	}
+	if !p.IndexesDeferred {
+		t.Fatal("indexes_deferred must stay true after the rebuild")
+	}
+	wantSecondaryIndexes(t, tgt, map[string]bool{
+		"idx_torrents_total_size": true, "idx_torrents_discovered_on": true, "idx_torrents_name_gin_trgm": true,
+	})
+	integrityConstraintsIntact(t, tgt)
+	// The rebuilt state is application-strict-valid again.
+	if _, err := persistence.MakeDatabase(ctxNC, tgt); err != nil {
+		t.Fatalf("MakeDatabase() after rebuild error = %v", err)
+	}
+}
+
+func TestRunnerDeferredDropPerformedOnResume(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	for id := int32(1); id <= 6; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 2, 1700000000+int32(id))
+		seedSourceFile(t, src, id, fmt.Sprintf("f%d.bin", id), 2)
+	}
+
+	// Crash simulation: cancellation lands after preflight created the run
+	// state but before the atomic drop (the first progress report fires
+	// exactly in that window). The exact error taxonomy of this narrow
+	// window varies; the resumable state is what matters: run state exists,
+	// importing, drop not yet performed, indexes intact.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := runTorrents(t, ctx, TorrentsInput{
+		SourceDSN: src, TargetDSN: tgt, DeferIndexes: true,
+		Progress: func(Progress) {
+			cancel() // the initial report fires between preflight and the drop
+		},
+	})
+	if err == nil {
+		t.Fatal("first run must fail on the cancelled context")
+	}
+	p := snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseImporting || p.IndexesDeferred {
+		t.Fatalf("pre-drop crash progress = %+v, want importing with the drop pending", p)
+	}
+	wantSecondaryIndexes(t, tgt, map[string]bool{
+		"idx_torrents_total_size": true, "idx_torrents_discovered_on": true, "idx_torrents_name_gin_trgm": true,
+	})
+
+	// Resume performs the drop (strict verification passed with the indexes
+	// still present), then imports index-less and rebuilds at finalization.
+	if err := runTorrents(t, context.Background(), TorrentsInput{
+		SourceDSN: src, TargetDSN: tgt, DeferIndexes: true,
+	}); err != nil {
+		t.Fatalf("resume error = %v", err)
+	}
+	p = snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseImportComplete || p.SuccessCount != 6 || !p.IndexesDeferred {
+		t.Fatalf("resumed progress = %+v", p)
+	}
+	wantSecondaryIndexes(t, tgt, map[string]bool{
+		"idx_torrents_total_size": true, "idx_torrents_discovered_on": true, "idx_torrents_name_gin_trgm": true,
+	})
+}
+
+// deadCommitter simulates transport loss BEFORE the commit: nothing lands,
+// reconciliation classifies the failure as replayable, and a persistent
+// failure exhausts the replays into a fatal (which records an operational
+// incident).
+type deadCommitter struct {
+	inner     batchCommitter
+	mu        sync.Mutex
+	failsLeft int
+}
+
+func (d *deadCommitter) CommitBatch(ctx context.Context, b target.Batch) error {
+	d.mu.Lock()
+	fail := d.failsLeft > 0
+	if fail {
+		d.failsLeft--
+	}
+	d.mu.Unlock()
+	if fail {
+		return errors.New("connection reset before commit (simulated)")
+	}
+	return d.inner.CommitBatch(ctx, b)
+}
+
+func TestRunnerOperationalIncidentThenComplete(t *testing.T) {
+	t.Parallel()
+
+	src := runnerSource(t)
+	tgt := createTargetForRunner(t)
+	for id := int32(1); id <= 20; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d", id), 1, 1700000000+int32(id))
+		seedSourceFile(t, src, id, fmt.Sprintf("t%d.bin", id), 1)
+	}
+
+	// Run 1: every commit attempt dies before COMMIT; after the three
+	// replays the run stops fatally and records an operational incident.
+	pool := poolForRunner(t, tgt)
+	dead := &deadCommitter{inner: target.NewBatchCommitter(pool), failsLeft: 99}
+	err := runTorrents(t, context.Background(), TorrentsInput{
+		SourceDSN: src, TargetDSN: tgt, committer: dead,
+	})
+	var fatal *FatalError
+	if !errors.As(err, &fatal) {
+		t.Fatalf("first run error = %v (%T), want FatalError", err, err)
+	}
+
+	// The incident is history: operational category, run_error_count 0,
+	// nothing landed.
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	var category, code string
+	var runErrors int64
+	if err := pool.QueryRow(ctx, `SELECT category, code FROM magnetico_migration.errors
+        WHERE scope = 'run' AND code = 'fatal_incident' LIMIT 1`).Scan(&category, &code); err != nil {
+		t.Fatalf("read incident: %v", err)
+	}
+	if category != state.CategoryOperational {
+		t.Fatalf("incident category = %s, want operational", category)
+	}
+	p := snapshotTarget(t, tgt).progress
+	if p.RunErrorCount != 0 || p.SuccessCount != 0 || p.Phase != state.PhaseImporting {
+		t.Fatalf("post-fatal progress = %+v", p)
+	}
+
+	// Run 2 recovers and completes as plain import_complete — the transient
+	// incident must NOT force import_complete_with_errors — and the
+	// incident row survives as history.
+	if err := runTorrents(t, context.Background(), TorrentsInput{SourceDSN: src, TargetDSN: tgt}); err != nil {
+		t.Fatalf("resume error = %v", err)
+	}
+	p = snapshotTarget(t, tgt).progress
+	if p.Phase != state.PhaseImportComplete || p.SuccessCount != 20 || p.RunErrorCount != 0 {
+		t.Fatalf("recovered progress = %+v, want plain import_complete", p)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM magnetico_migration.errors
+        WHERE scope = 'run' AND code = 'fatal_incident' AND category = 'operational'`).Scan(&runErrors); err != nil {
+		t.Fatalf("count incidents: %v", err)
+	}
+	if runErrors != 1 {
+		t.Fatalf("operational incident rows = %d, want 1 (preserved history)", runErrors)
 	}
 }
 

@@ -114,9 +114,10 @@ type batchCommitter interface {
 }
 
 // ImportTorrents runs one full migrate-torrents pass: preflight, import
-// pipeline with checkpointed batches, and (once all data is loaded) the
-// data_loaded transition. Refusals are typed; the error taxonomy is:
-// typed preflight refusals, *FatalError (exit 1), ErrInterrupted (exit 2).
+// pipeline with checkpointed batches, and finalization (deferred-index
+// drop/rebuild, identity reseed, statistics, completion phase). Refusals are
+// typed; the error taxonomy is: typed preflight refusals, *FatalError
+// (exit 1), ErrInterrupted (exit 2).
 func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 	if in.SourceDSN == "" {
 		return target.ErrSourceRequired
@@ -233,72 +234,127 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 		prog.RunErrorCount++
 	}
 
-	if prog.Phase == state.PhaseDataLoaded {
-		// All data loaded; finalization (indexes, reseed, completion
-		// phases) is the next stage of the migration task.
-		return nil
-	}
-
-	// Import loop. Commit failures that reconcile as uncommitted replay
-	// from the authoritative checkpoint with a fresh reader; committed
-	// ambiguity continues transparently.
-	rc := &runCommitter{
-		inner:    in.committer,
-		pool:     pool,
-		runID:    pf.Progress.RunID,
-		phase:    prog.Phase,
-		expected: prog.LastProcessedID,
-	}
-	rc.onBatch = func() {
-		prog.LastProcessedID = rc.expected
-		prog.ScannedCount = rc.scanned
-		prog.SuccessCount = rc.successes
-		prog.ErrorCount = rc.errors
-		prog.BlobCount = rc.blobs
-		report()
-	}
-	if rc.inner == nil {
-		rc.inner = target.NewBatchCommitter(pool)
-	}
-
-	pcfg := pipeline.Config{
-		Workers:          in.Workers,
-		BatchSize:        in.BatchSize,
-		MaxInflightBytes: in.MaxInflightBytes,
-		Profile:          codec.DefaultProfile(),
-		Limits:           limits,
-		VerifyDecode:     true,
-	}
-
-	const maxReplays = 3
-	ws := newWindowSource(src, int32(prog.LastProcessedID), in.BatchSize, limits.MaxFiles)
-	for attempt := 0; ; attempt++ {
-		_, perr := pipeline.Run(runCtx, ws, pcfg, rc)
-		prog.LastProcessedID = rc.expected
-		prog.ScannedCount = rc.scanned
-		prog.SuccessCount = rc.successes
-		prog.ErrorCount = rc.errors
-		prog.BlobCount = rc.blobs
-
-		if perr == nil {
-			break
-		}
-		if errors.Is(perr, pipeline.ErrInterrupted) {
-			if cause := fatalCause(runCtx); cause != nil {
-				return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
-					rc.expected, 0, cause)
+	if prog.Phase == state.PhaseImporting {
+		// Deferred runs: the authorized index-less state is created by an
+		// atomic drop+mark on the lock connection before the first batch.
+		// Interruption before the transaction leaves the strict state (the
+		// resume performs the drop); interruption after leaves the
+		// authorized index-less state.
+		if in.DeferIndexes && !prog.IndexesDeferred {
+			if err := target.DropSecondaryIndexes(runCtx, pf.Lock, pf.Progress.RunID); err != nil {
+				if cause := fatalCause(runCtx); cause != nil {
+					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+						prog.LastProcessedID, 0, cause)
+				}
+				if runCtx.Err() != nil {
+					return ErrInterrupted
+				}
+				return fatalWithIncident(ctx, pool, pf.Progress.RunID, "write",
+					prog.LastProcessedID, 0, err)
 			}
-			return ErrInterrupted
+			prog.IndexesDeferred = true
 		}
 
-		var ce *pipeline.CommitError
-		if errors.As(perr, &ce) {
-			if errors.Is(perr, target.ErrCheckpointConflict) {
-				return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "checkpoint",
-					rc.expected, ce.LastSourceID, perr)
+		// Import loop. Commit failures that reconcile as uncommitted replay
+		// from the authoritative checkpoint with a fresh reader; committed
+		// ambiguity continues transparently.
+		rc := &runCommitter{
+			inner:    in.committer,
+			pool:     pool,
+			runID:    pf.Progress.RunID,
+			phase:    prog.Phase,
+			expected: prog.LastProcessedID,
+		}
+		rc.onBatch = func() {
+			prog.LastProcessedID = rc.expected
+			prog.ScannedCount = rc.scanned
+			prog.SuccessCount = rc.successes
+			prog.ErrorCount = rc.errors
+			prog.BlobCount = rc.blobs
+			report()
+		}
+		if rc.inner == nil {
+			rc.inner = target.NewBatchCommitter(pool)
+		}
+
+		pcfg := pipeline.Config{
+			Workers:          in.Workers,
+			BatchSize:        in.BatchSize,
+			MaxInflightBytes: in.MaxInflightBytes,
+			Profile:          codec.DefaultProfile(),
+			Limits:           limits,
+			VerifyDecode:     true,
+		}
+
+		const maxReplays = 3
+		ws := newWindowSource(src, int32(prog.LastProcessedID), in.BatchSize, limits.MaxFiles)
+		for attempt := 0; ; attempt++ {
+			_, perr := pipeline.Run(runCtx, ws, pcfg, rc)
+			prog.LastProcessedID = rc.expected
+			prog.ScannedCount = rc.scanned
+			prog.SuccessCount = rc.successes
+			prog.ErrorCount = rc.errors
+			prog.BlobCount = rc.blobs
+
+			if perr == nil {
+				break
 			}
-			// The batch did not land (reconciled inside Commit): replay from
-			// the authoritative checkpoint unless the run was cancelled.
+			if errors.Is(perr, pipeline.ErrInterrupted) {
+				if cause := fatalCause(runCtx); cause != nil {
+					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+						rc.expected, 0, cause)
+				}
+				return ErrInterrupted
+			}
+
+			var ce *pipeline.CommitError
+			if errors.As(perr, &ce) {
+				if errors.Is(perr, target.ErrCheckpointConflict) {
+					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "checkpoint",
+						rc.expected, ce.LastSourceID, perr)
+				}
+				// The batch did not land (reconciled inside Commit): replay from
+				// the authoritative checkpoint unless the run was cancelled.
+				if cause := fatalCause(runCtx); cause != nil {
+					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+						rc.expected, 0, cause)
+				}
+				if runCtx.Err() != nil {
+					return ErrInterrupted
+				}
+				if attempt >= maxReplays {
+					return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "write",
+						rc.expected, ce.LastSourceID, fmt.Errorf("%w (after %d replays)", perr, attempt))
+				}
+				ws = newWindowSource(src, int32(rc.expected), in.BatchSize, limits.MaxFiles)
+				continue
+			}
+
+			// Source read failure: fatal, the settled prefix stays committed.
+			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "read",
+				rc.expected, rc.expected, fmt.Errorf("%w (settled through checkpoint %d)", perr, rc.expected))
+		}
+
+		// Observed orphans may be fewer than the fingerprint's global anti-join
+		// count (windows only see orphans whose torrent_id falls inside the
+		// scanned ID ranges) — but never more: an excess means the source grew
+		// orphans mid-run, which the frozen fingerprint forbids.
+		if ws.observedOrphans > fp.OrphanFiles {
+			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "read",
+				rc.expected, rc.expected, fmt.Errorf(
+					"read %d orphaned file rows but the fingerprint counted %d (source changed during import)",
+					ws.observedOrphans, fp.OrphanFiles))
+		}
+
+		// All source data processed: importing → data_loaded (compare-and-swap).
+		prog.Phase = state.PhaseDataLoaded
+		if err := target.TransitionPhase(ctx, pool, pf.Progress.RunID, state.AdvanceInput{
+			RunID:          pf.Progress.RunID,
+			ExpectedLastID: rc.expected,
+			ExpectedPhase:  state.PhaseImporting,
+			NewLastID:      rc.expected,
+			NewPhase:       state.PhaseDataLoaded,
+		}); err != nil {
 			if cause := fatalCause(runCtx); cause != nil {
 				return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
 					rc.expected, 0, cause)
@@ -306,45 +362,79 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 			if runCtx.Err() != nil {
 				return ErrInterrupted
 			}
-			if attempt >= maxReplays {
-				return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "write",
-					rc.expected, ce.LastSourceID, fmt.Errorf("%w (after %d replays)", perr, attempt))
-			}
-			ws = newWindowSource(src, int32(rc.expected), in.BatchSize, limits.MaxFiles)
-			continue
+			return fatalWithIncident(ctx, pool, pf.Progress.RunID, "checkpoint",
+				rc.expected, rc.expected, err)
 		}
-
-		// Source read failure: fatal, the settled prefix stays committed.
-		return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "read",
-			rc.expected, rc.expected, fmt.Errorf("%w (settled through checkpoint %d)", perr, rc.expected))
+		report()
 	}
 
-	// Observed orphans may be fewer than the fingerprint's global anti-join
-	// count (windows only see orphans whose torrent_id falls inside the
-	// scanned ID ranges) — but never more: an excess means the source grew
-	// orphans mid-run, which the frozen fingerprint forbids.
-	if ws.observedOrphans > fp.OrphanFiles {
-		return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "read",
-			rc.expected, rc.expected, fmt.Errorf(
-				"read %d orphaned file rows but the fingerprint counted %d (source changed during import)",
-				ws.observedOrphans, fp.OrphanFiles))
+	if prog.Phase == state.PhaseDataLoaded {
+		// Explicit building_indexes transition BEFORE any index creation
+		// (own transaction, committed before the first CREATE INDEX): a
+		// crash after the first CREATE can never leave data_loaded, whose
+		// preflight requires all three deferred indexes absent.
+		if err := target.TransitionPhase(ctx, pool, pf.Progress.RunID, state.AdvanceInput{
+			RunID:          pf.Progress.RunID,
+			ExpectedLastID: prog.LastProcessedID,
+			ExpectedPhase:  state.PhaseDataLoaded,
+			NewLastID:      prog.LastProcessedID,
+			NewPhase:       state.PhaseBuildingIndexes,
+		}); err != nil {
+			if cause := fatalCause(runCtx); cause != nil {
+				return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+					prog.LastProcessedID, 0, cause)
+			}
+			if runCtx.Err() != nil {
+				return ErrInterrupted
+			}
+			return fatalWithIncident(ctx, pool, pf.Progress.RunID, "checkpoint",
+				prog.LastProcessedID, prog.LastProcessedID, err)
+		}
+		prog.Phase = state.PhaseBuildingIndexes
+		report()
 	}
 
-	// All source data processed: importing → data_loaded (compare-and-swap;
-	// index finalization follows in the next migration stage).
-	prog.Phase = state.PhaseDataLoaded
-	if err := target.TransitionPhase(ctx, pool, pf.Progress.RunID, state.AdvanceInput{
-		RunID:          pf.Progress.RunID,
-		ExpectedLastID: rc.expected,
-		ExpectedPhase:  state.PhaseImporting,
-		NewLastID:      rc.expected,
-		NewPhase:       state.PhaseDataLoaded,
-	}); err != nil {
-		return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "checkpoint",
-			rc.expected, rc.expected, err)
+	// building_indexes: rebuild missing deferred indexes (lock connection),
+	// reseed the identity sequence, refresh statistics, commit the
+	// completion phase. Partial index progress on resume is reconciled
+	// against the catalog.
+	fin, err := finalizeImport(ctx, pf.Lock, pool, pf.Progress.RunID, prog.LastProcessedID, prog.IndexesDeferred)
+	if err != nil {
+		if cause := fatalCause(runCtx); cause != nil {
+			return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+				prog.LastProcessedID, 0, cause)
+		}
+		if runCtx.Err() != nil {
+			return ErrInterrupted
+		}
+		stage := "write"
+		if errors.Is(err, target.ErrCheckpointConflict) {
+			stage = "checkpoint"
+		}
+		return fatalWithIncident(ctx, pool, pf.Progress.RunID, stage,
+			prog.LastProcessedID, prog.LastProcessedID, err)
 	}
+	prog.Phase = fin
 	report()
 	return nil
+}
+
+// finalizeImport completes a data-loaded run. The caller has already
+// transitioned into building_indexes; deferred=false runs keep their indexes
+// maintained throughout and skip the rebuild.
+func finalizeImport(ctx context.Context, lock *state.RunLock, pool *pgxpool.Pool, runID string, checkpoint int64, deferred bool) (state.Phase, error) {
+	if deferred {
+		if err := target.BuildSecondaryIndexes(ctx, lock); err != nil {
+			return "", err
+		}
+	}
+	if _, err := target.ReseedIdentity(ctx, pool); err != nil {
+		return "", err
+	}
+	if err := target.AnalyzeTarget(ctx, pool); err != nil {
+		return "", err
+	}
+	return target.CompleteImport(ctx, pool, runID, checkpoint)
 }
 
 // fatalCause distinguishes an operator interrupt (nil, or plain
