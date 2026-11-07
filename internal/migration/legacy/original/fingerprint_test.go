@@ -32,8 +32,18 @@ func TestFingerprintEquivalent(t *testing.T) {
 		t.Fatal("transport-only difference must stay equivalent")
 	}
 
+	// A source PostgreSQL restart between sessions changes only the
+	// postmaster start time; the data is untouched, so the run stays
+	// resumable. (Start-time equality still gates source-vs-target
+	// distinctness at preflight, fail-closed — it is a temporal fact, not a
+	// content anchor.)
+	restarted := base
+	restarted.PostmasterStart = time.Unix(1700000001, 0)
+	if !base.Equivalent(restarted) {
+		t.Fatal("a postmaster restart with unchanged content must stay equivalent")
+	}
+
 	change := []func(*Fingerprint){
-		func(f *Fingerprint) { f.PostmasterStart = time.Unix(1700000001, 0) },
 		func(f *Fingerprint) { f.Database = "other" },
 		func(f *Fingerprint) { f.Torrents++ },
 		func(f *Fingerprint) { f.MinID-- },

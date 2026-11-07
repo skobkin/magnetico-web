@@ -85,12 +85,26 @@ func (s *Source) Fingerprint(ctx context.Context) (Fingerprint, error) {
 }
 
 // Equivalent reports whether two fingerprints describe the same source for
-// resume purposes. Transport-dependent fields (ServerAddress/ServerPort) are
-// deliberately excluded — resuming over a different connection path is legal;
-// the authoritative same-database decision is pgidentity's.
+// resume purposes.
+//
+// Deliberately NOT compared:
+//
+//   - ServerAddress/ServerPort: transport-dependent — resuming over a
+//     different connection path is legal; the authoritative same-database
+//     decision is pgidentity's (fail-closed, re-run on every resume).
+//   - PostmasterStart: a temporal fact, not a content fact. A source
+//     PostgreSQL restart between sessions changes it while the data stays
+//     untouched; gating resume on it would let a server reboot defeat the
+//     documented crash/resume recovery. It stays recorded for diagnostics,
+//     and source-vs-target distinctness still uses it fail-closed at
+//     preflight.
+//
+// What remains is the content anchor set: database name, counts, ID bounds,
+// anchor info-hashes and the orphan/NULL-owner bookkeeping — the documented
+// weak anchors; they never prove immutability (verify-content, 04B, is the
+// equality gate).
 func (a Fingerprint) Equivalent(b Fingerprint) bool {
-	return a.PostmasterStart.Equal(b.PostmasterStart) &&
-		a.Database == b.Database &&
+	return a.Database == b.Database &&
 		a.Torrents == b.Torrents &&
 		a.MinID == b.MinID &&
 		a.MaxID == b.MaxID &&
