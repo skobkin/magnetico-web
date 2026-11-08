@@ -252,8 +252,36 @@ regression net is self-consistent as of HEAD.
 - **04D**: the binary smoke `TestMigrateVerifyRetryBinarySmoke` is the small-scale
   template for the owner's real-data experiment; the operational procedure (restore
   once, `/usr/bin/time -v`, honest SIGKILL/OOM cleanup) is the approved plan's
-  directive ⑥ — not yet executed; it runs only after the owner's Codex review loop
-  converges.
+  directive ⑥.
+
+### Real-data experiment (directive ⑥): first attempt FAILED at restore — stopped, owner input required
+
+The full battery (including the race suite) and the Codex review loop (closed at the
+5-iteration cap) were green before the attempt; no other suite ran concurrently; the
+host had 208 GB free against an estimated 30–50 GB footprint. The restore was executed
+exactly once, per the directive:
+
+```
+set -o pipefail; gzip -dc magneticod-sample.sql.gz \
+  | docker exec -i <pinned container> psql -U postgres -v ON_ERROR_STOP=1 -q \
+    -d magnetico_04b_sample_src
+```
+
+It aborted after 11 seconds: the dump's preamble (line 28) runs
+`ALTER SCHEMA magneticod OWNER TO magneticod;` — the dump expects a cluster role
+`magneticod` that the pinned disposable container does not have, so `ON_ERROR_STOP`
+fired before any table data was copied (the partial database contained an empty
+`magneticod` schema and zero tables). Per the directive — an incomplete restore fails
+the experiment; no partial-data run; no automatic repetition — the attempt was stopped
+and NOT retried. Both disposable databases (`magnetico_04b_sample_src`,
+`magnetico_04b_sample_tgt`) were dropped `WITH (FORCE)`; the dump file was never
+modified (size and mtime verified after the attempt). Timings, the disk-before capture
+and the raw restore log are preserved under the experiment's scratch directory.
+
+**A single corrected attempt needs exactly one prerequisite**: `CREATE ROLE magneticod;`
+(NOLOGIN) in the container before the restore, so the dump's ownership statements
+resolve. That is a procedure change beyond the approved directive, so it waits for the
+owner's explicit go-ahead; the export/import procedure itself is unchanged.
 
 ## Deviations from the plan
 
