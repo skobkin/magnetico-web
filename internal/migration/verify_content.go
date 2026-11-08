@@ -39,7 +39,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -422,7 +421,7 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			// at a time as the merge walks the page ascending — never
 			// page-wide (the inflight budget bounds raw blob bytes, not the
 			// decoded file lists, so a whole decoded page is unbounded).
-			content := newPageContent(runCtx, pool, tp, limits, in.Workers, in.MaxInflightBytes)
+			content := newPageContent(runCtx, pool, tp, limits, in.MaxInflightBytes)
 
 			unit := &contentUnitResult{issues: []state.VerificationIssue{}}
 			lastSrc := int64(0)
@@ -862,37 +861,41 @@ type tpContent struct {
 // pageContent lazily fetches and decodes one target page's blob rows in
 // ascending row order. Rows that resolve without content (NULL data,
 // over-limit blobs) are precomputed as broken findings; blob-backed rows
-// load one budget-bounded chunk at a time and only the CURRENT chunk's
-// decoded lists stay live — the inflight budget bounds raw blob bytes, not
-// decoded file lists, so a whole decoded page held at once would be
-// unbounded (Codex review iteration 1, finding 5). The merge accesses rows
-// strictly ascending, which the chunk window follows; a no-fetch row whose
-// index falls between chunks resolves to nil without disturbing the window.
+// are served one SEGMENT at a time and only the CURRENT segment's decoded
+// lists stay live. A segment is bounded on BOTH sides: fetched within the
+// inflight budget in stored bytes, and cut so the retained decoded file
+// lists never exceed the same budget — the stored bound alone cannot cap
+// decoded content, because wire-format-v1 payloads are compressed (a 1 KB
+// stored blob can legitimately decompress to megabytes; Codex review
+// iteration 1, finding 5, and iteration 2, finding 1). A row whose decoded
+// list alone exceeds the budget is served solo, bounded by the codec's own
+// MaxUncompressedBytes — the read-side analogue of the pipeline's solo
+// slot. The merge accesses rows strictly ascending, which the segment
+// window follows; a no-fetch row whose index falls between segments
+// resolves to nil without disturbing the window.
 type pageContent struct {
 	ctx         context.Context
 	pool        *pgxpool.Pool
 	tp          *decodePage
 	limits      codec.Limits
-	workers     int
 	maxInflight int64
 
 	broken  map[int64]*tpContent // content-independent resolutions, by row id
 	entries []blobEntry          // fetch+decode rows, ascending page index
-	chunks  [][]blobEntry        // precomputed budget-bounded chunks
-	next    int                  // next chunk to load
-	cur     map[int64]*tpContent // decoded contents of the loaded chunk, by row id
+	next    int                  // next entry position (first of the next segment)
+	cur     map[int64]*tpContent // decoded contents of the loaded segment, by row id
 	curLo   int                  // inclusive page-index bound of cur
 	curHi   int                  // exclusive page-index bound of cur
 }
 
 // newPageContent probes the page's blob rows by octet_length (never
-// materializing content) and precomputes the chunk plan. No database I/O
-// beyond the length probe happens here — content loads on demand.
-func newPageContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePage, limits codec.Limits, workers int, maxInflight int64) *pageContent {
+// materializing content) and records the fetch+decode order. No database
+// I/O beyond the length probe happens here — content loads on demand.
+func newPageContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePage, limits codec.Limits, maxInflight int64) *pageContent {
 	pc := &pageContent{
 		ctx: ctx, pool: pool, tp: tp, limits: limits,
-		workers: workers, maxInflight: maxInflight,
-		broken: map[int64]*tpContent{},
+		maxInflight: maxInflight,
+		broken:      map[int64]*tpContent{},
 	}
 	for i := range tp.rows {
 		r := &tp.rows[i]
@@ -921,13 +924,13 @@ func newPageContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePage, lim
 			pc.entries = append(pc.entries, blobEntry{idx: i, length: *r.blobLen})
 		}
 	}
-	pc.chunks = packChunks(pc.entries, maxInflight)
 	return pc
 }
 
 // get returns the decoded content for the page row at index idx (nil for
-// no-blob rows). Each access past the loaded window loads the next chunk,
-// releasing the previous one's decoded lists for garbage collection.
+// no-blob rows). Each access past the loaded window loads the next serving
+// segment, releasing the previous one's decoded lists for garbage
+// collection.
 func (pc *pageContent) get(idx int) (*tpContent, error) {
 	if c, ok := pc.broken[pc.tp.rows[idx].id]; ok {
 		return c, nil
@@ -935,106 +938,133 @@ func (pc *pageContent) get(idx int) (*tpContent, error) {
 	if pc.cur != nil && idx >= pc.curLo && idx < pc.curHi {
 		return pc.cur[pc.tp.rows[idx].id], nil
 	}
-	for pc.next < len(pc.chunks) {
-		ch := pc.chunks[pc.next]
-		lo, hi := ch[0].idx, ch[len(ch)-1].idx+1
-		if hi <= idx {
-			// Stale chunk (only reachable on non-ascending access).
+	for pc.next < len(pc.entries) {
+		e := pc.entries[pc.next]
+		if e.idx < idx {
+			// Stale entry (only reachable on non-ascending access).
 			pc.next++
 			continue
 		}
-		if lo > idx {
+		if e.idx > idx {
 			return nil, nil // no fetch entry at or before idx: not blob-backed
 		}
-		cur, err := pc.load(ch)
-		if err != nil {
+		if err := pc.loadSegment(); err != nil {
 			return nil, err
 		}
-		pc.next++
-		pc.cur, pc.curLo, pc.curHi = cur, lo, hi
 		return pc.cur[pc.tp.rows[idx].id], nil
 	}
 	pc.cur = nil
 	return nil, nil
 }
 
-// load fetches one chunk's blob contents (one snapshot transaction,
-// bounded by construction) and decodes its rows in parallel. Worker results
-// land in a pre-sized slice indexed by the chunk position (each index
-// written by exactly one worker — no shared map, no locks); the id-keyed
-// map is merged single-threaded.
-func (pc *pageContent) load(chunk []blobEntry) (map[int64]*tpContent, error) {
-	ids := make([]int64, len(chunk))
-	for i, e := range chunk {
-		ids[i] = pc.tp.rows[e.idx].id
+// loadSegment fetches and decodes the next serving segment, replacing the
+// previous one's decoded lists. The segment is bounded in two steps:
+//
+// fetch — entries are taken while their cumulative STORED length fits the
+// inflight budget; a row whose own length exceeds it starts a solo segment
+// (never skipped for scheduling reasons);
+//
+// decode — the fetched rows are decoded in ascending order and the segment
+// is closed BEFORE a row whose decoded list would push the retained DECODED
+// bytes past the same budget, so a segment's decoded content stays within
+// the budget and a single over-budget row is served solo, bounded by the
+// codec's MaxUncompressedBytes. Rows fetched but left undecoded by this
+// cut are re-fetched (within the same budget) by the next segment — wasted
+// work only when compression makes decoded content far exceed stored
+// bytes, never a correctness or retention problem.
+//
+// Decoding is sequential on purpose: the decoded-side cut needs each row's
+// decoded size before admitting the next, and admitting rows concurrently
+// would recreate the unbounded retention this segment design exists to
+// prevent.
+func (pc *pageContent) loadSegment() error {
+	start := pc.next
+	end := start + 1
+	stored := pc.entries[start].length
+	for end < len(pc.entries) {
+		e := pc.entries[end]
+		if e.length > pc.maxInflight || stored+e.length > pc.maxInflight {
+			break
+		}
+		stored += e.length
+		end++
+	}
+	ids := make([]int64, end-start)
+	for i := start; i < end; i++ {
+		ids[i-start] = pc.tp.rows[pc.entries[i].idx].id
 	}
 	tx, err := pc.pool.BeginTx(pc.ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(pc.ctx)) }()
 	rows, err := tx.Query(pc.ctx, `SELECT torrent_id, data FROM magneticod.torrent_file_blobs
         WHERE torrent_id = ANY($1::bigint[])`, ids)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	blobs := make(map[int64][]byte, len(chunk))
+	blobs := make(map[int64][]byte, end-start)
 	for rows.Next() {
 		var id int64
 		var data []byte
 		if err := rows.Scan(&id, &data); err != nil {
-			return nil, err
+			return err
 		}
 		blobs[id] = data
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
 
-	decoded := make([]*tpContent, len(chunk))
-	jobs := make(chan int)
-	var wg sync.WaitGroup
-	workers := pc.workers
-	if workers <= 0 {
-		workers = 1
-	}
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := range jobs {
-				e := chunk[i]
-				r := &pc.tp.rows[e.idx]
-				blob, ok := blobs[r.id]
-				if !ok {
-					// The blob row vanished between the length probe and the
-					// content fetch: the operator-immutability assumption is
-					// broken — fail the row, never guess.
-					decoded[i] = &tpContent{missing: true}
-					continue
-				}
-				files, derr := codec.Decode(blob, pc.limits)
-				if derr != nil {
-					decoded[i] = &tpContent{err: derr}
-					continue
-				}
-				decoded[i] = &tpContent{files: files}
-			}
-		}()
-	}
-	for i := range chunk {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
-
-	out := make(map[int64]*tpContent, len(chunk))
-	for i, c := range decoded {
-		if c != nil {
-			out[pc.tp.rows[chunk[i].idx].id] = c
+	cur := make(map[int64]*tpContent, end-start)
+	var decoded int64
+	i := start
+	for ; i < end; i++ {
+		e := &pc.entries[i]
+		c := pc.decodeEntry(e, blobs)
+		d := decodedBytes(c)
+		if len(cur) > 0 && decoded+d > pc.maxInflight {
+			break // the segment ends here; this row opens the next one
 		}
+		cur[pc.tp.rows[e.idx].id] = c
+		decoded += d
 	}
-	return out, nil
+	pc.next = i
+	pc.cur = cur
+	pc.curLo = pc.entries[start].idx
+	pc.curHi = pc.entries[i-1].idx + 1
+	return nil
+}
+
+// decodeEntry resolves one fetched blob row: a vanished blob row (broken
+// operator-immutability assumption) fails the row, never guesses.
+func (pc *pageContent) decodeEntry(e *blobEntry, blobs map[int64][]byte) *tpContent {
+	r := &pc.tp.rows[e.idx]
+	blob, ok := blobs[r.id]
+	if !ok {
+		return &tpContent{missing: true}
+	}
+	files, err := codec.Decode(blob, pc.limits)
+	if err != nil {
+		return &tpContent{err: err}
+	}
+	return &tpContent{files: files}
+}
+
+// decodedBytes estimates one decoded row's live memory: its decoded file
+// lists' path bytes plus a small per-file constant for slice and size
+// bookkeeping. It is the retention currency of a serving segment — the
+// inflight budget bounds raw (compressed) blob bytes, which do not cap
+// decoded content.
+func decodedBytes(c *tpContent) int64 {
+	if c == nil || c.files == nil {
+		return 0
+	}
+	var n int64
+	for _, f := range c.files {
+		n += int64(len(f.Path)) + 16
+	}
+	return n
 }
 
 // classifyMatched compares one matched (source, target) pair: structural

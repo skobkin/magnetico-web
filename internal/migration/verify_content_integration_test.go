@@ -931,3 +931,69 @@ func verifyContentErrOnly(t *testing.T, tgt string) error {
 	_, err := VerifyContent(context.Background(), in)
 	return err
 }
+
+// TestPageContentRetentionStaysWithinDecodedBudget pins the segment
+// serving bound directly (Codex review iteration 2, findings 1 and 5):
+// wire-format-v1 payloads are compressed, so a stored-bounds chunk can
+// legitimately retain megabytes of decoded file lists — the earlier
+// chunk-at-a-time window passed outcome-level tests while still holding a
+// whole compressed page's decoded content. After every get(), the loaded
+// window's decoded content must fit the budget.
+func TestPageContentRetentionStaysWithinDecodedBudget(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	const rows = 12
+	for id := int32(1); id <= rows; id++ {
+		// 12 near-identical ~50 KB paths per row: ~600 KB of decoded path
+		// bytes per torrent that compress to almost nothing, so the whole
+		// page packs into ONE stored-bounds chunk while two rows already
+		// exceed the 1 MiB decoded budget.
+		seedSourceTorrent(t, src, id, fmt.Sprintf("compressible%d", id), 78, 1700000002)
+		for i := 0; i < 12; i++ {
+			seedSourceFile(t, src, id, fmt.Sprintf("d%d/%s", i, strings.Repeat("a", 50_000)), int64(1+i))
+		}
+	}
+	importAll(t, src, tgt)
+
+	pool := poolForRunner(t, tgt)
+	defer pool.Close()
+	ctx := context.Background()
+	tp, err := readDecodePage(ctx, pool, 0, rows*2)
+	if err != nil {
+		t.Fatalf("readDecodePage() error = %v", err)
+	}
+	if len(tp.rows) != rows {
+		t.Fatalf("page rows = %d, want %d", len(tp.rows), rows)
+	}
+	pc := newPageContent(ctx, pool, tp, codec.DefaultLimits(), 1<<20)
+	if len(pc.entries) != rows {
+		t.Fatalf("blob-backed entries = %d, want %d", len(pc.entries), rows)
+	}
+
+	segments, prevLo, prevHi := 0, -1, -1
+	for idx := 0; idx < len(tp.rows); idx++ {
+		tc, err := pc.get(idx)
+		if err != nil {
+			t.Fatalf("get(%d) error = %v", idx, err)
+		}
+		if tc == nil || tc.files == nil {
+			t.Fatalf("get(%d) returned no decoded content (%+v)", idx, tc)
+		}
+		var retained int64
+		for _, c := range pc.cur {
+			retained += decodedBytes(c)
+		}
+		if retained > 1<<20 {
+			t.Fatalf("get(%d): retained decoded bytes = %d, budget %d — the serving window leaked",
+				idx, retained, int64(1<<20))
+		}
+		if pc.curLo != prevLo || pc.curHi != prevHi {
+			segments++
+			prevLo, prevHi = pc.curLo, pc.curHi
+		}
+	}
+	if segments < 2 {
+		t.Fatalf("serving used %d segments, want >= 2 (12 rows x ~600KB decoded vs a 1MiB budget)", segments)
+	}
+}
