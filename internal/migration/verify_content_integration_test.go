@@ -1065,3 +1065,51 @@ func TestVerifyContentVanishedRegistryEntryDoesNotPoisonLaterRows(t *testing.T) 
 		}
 	}
 }
+
+// TestVerifyContentExtrasResumeKeepsOrphanCount: the content pass has the
+// same extras-phase resume rule as decode — the orphan count must come
+// back from the durable issue on resume, not reset to zero (Codex review
+// iteration 2, finding 4).
+func TestVerifyContentExtrasResumeKeepsOrphanCount(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+	seedDecodeOrphanBlob(t, tgt)
+
+	// Interrupt right after the extras phase commits.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.Progress = func(p VerifyProgress) {
+			if p.Phase == state.VerificationPhaseExtras {
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	pool := poolForRunner(t, tgt)
+	interrupted, err := state.LatestVerification(context.Background(), pool, state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.State != state.VerificationInterrupted || interrupted.Phase != state.VerificationPhaseExtras {
+		t.Fatalf("interrupted run = %s/%s, want interrupted/extras", interrupted.State, interrupted.Phase)
+	}
+	seq1 := interrupted.Seq
+
+	res2, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("resume error = %v, want ErrVerificationFindings", err)
+	}
+	if !res2.Resumed || res2.Seq != seq1 {
+		t.Fatalf("resumed = %v seq %d, want the adopted run (seq %d)", res2.Resumed, res2.Seq, seq1)
+	}
+	if res2.OrphanTargetBlobs != 1 {
+		t.Fatalf("resumed orphan count = %d, want 1 (restored from the durable issue)", res2.OrphanTargetBlobs)
+	}
+}

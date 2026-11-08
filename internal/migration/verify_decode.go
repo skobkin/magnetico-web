@@ -175,6 +175,25 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 	}
 	report()
 
+	// A run already past its scan (adopted with phase extras) committed its
+	// orphan finding durably — restore the result field from the persisted
+	// issue so the summary matches history (Codex review iteration 2,
+	// finding 4).
+	if run.Phase == state.VerificationPhaseExtras {
+		orphans, err := state.OrphanBlobIssueCount(runCtx, pool, run.VerificationID)
+		if err != nil {
+			if cause := fatalCause(runCtx); cause != nil {
+				return nil, cause
+			}
+			if runCtx.Err() != nil {
+				return nil, ErrInterrupted
+			}
+			return nil, verificationFatal("extras", checkpoint, err)
+		}
+		result.OrphanTargetBlobs = orphans
+		report()
+	}
+
 	if run.Phase == state.VerificationPhaseScanning {
 		// Scanning loop: contiguous page-by-page frontier. The checkpoint
 		// only ever moves at committed page boundaries, so an interrupted

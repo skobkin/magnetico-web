@@ -735,3 +735,66 @@ func TestVerifyDecodeRowClassifiers(t *testing.T) {
 		t.Fatalf("malformed single verdict = %+v, want invalid_metadata", v)
 	}
 }
+
+// seedDecodeOrphanBlob installs one orphan blob in the target: drop the
+// FK (exactly the tamper the extras phase exists to detect), insert a
+// blob with no owning torrent, and keep the preflight green — Reconcile
+// counts raw blob rows.
+func seedDecodeOrphanBlob(t *testing.T, tgt string) {
+	t.Helper()
+	execTargetSQL(t, tgt, `ALTER TABLE magneticod.torrent_file_blobs
+        DROP CONSTRAINT torrent_file_blobs_torrent_id_fkey`)
+	execTargetSQL(t, tgt,
+		`INSERT INTO magneticod.torrent_file_blobs (torrent_id, data) VALUES (999999, '\x78da')`)
+	execTargetSQL(t, tgt, `UPDATE magnetico_migration.progress SET blob_count = blob_count + 1`)
+}
+
+// TestVerifyDecodeExtrasResumeKeepsOrphanCount: a pass interrupted right
+// after the extras checkpoint must still report the orphan count on
+// resume — the durable issue is the history, and the summary must match
+// it (Codex review iteration 2, finding 4).
+func TestVerifyDecodeExtrasResumeKeepsOrphanCount(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+	seedDecodeOrphanBlob(t, tgt)
+
+	// Interrupt right after the extras phase commits.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyDecoded(t, ctx, tgt, func(in *VerifyDecodeInput) {
+		in.Progress = func(p VerifyProgress) {
+			if p.Phase == state.VerificationPhaseExtras {
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	pool := poolForRunner(t, tgt)
+	interrupted, err := state.LatestVerification(context.Background(), pool, state.VerificationKindDecode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.State != state.VerificationInterrupted || interrupted.Phase != state.VerificationPhaseExtras {
+		t.Fatalf("interrupted run = %s/%s, want interrupted/extras", interrupted.State, interrupted.Phase)
+	}
+	seq1 := interrupted.Seq
+
+	// Resume: the extras scan is not re-run; the orphan count is restored
+	// from the durable issue.
+	res2, err := verifyDecoded(t, context.Background(), tgt, nil)
+	if !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("resume error = %v, want ErrVerificationFindings", err)
+	}
+	if !res2.Resumed || res2.Seq != seq1 {
+		t.Fatalf("resumed = %v seq %d, want the adopted run (seq %d)", res2.Resumed, res2.Seq, seq1)
+	}
+	if res2.OrphanTargetBlobs != 1 {
+		t.Fatalf("resumed orphan count = %d, want 1 (restored from the durable issue)", res2.OrphanTargetBlobs)
+	}
+}

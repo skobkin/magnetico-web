@@ -186,3 +186,15 @@ func UncoveredUnresolvedRecords(ctx context.Context, q queryer, runID, verificat
             AND vi.source_id = e.source_id)`, runID, verificationID).Scan(&count, &minID, &maxID)
 	return count, minID, maxID, err
 }
+
+// OrphanBlobIssueCount returns the orphan-blob count recorded by a
+// verification run's extras phase (0 when the run committed no orphan
+// finding). Resumed passes re-derive their result field from the durable
+// issue so the summary always matches history.
+func OrphanBlobIssueCount(ctx context.Context, q queryer, verificationID string) (int64, error) {
+	var count int64
+	err := q.QueryRow(ctx, `SELECT COALESCE(MAX((details->>'count')::bigint), 0)
+    FROM magnetico_migration.verification_issues
+    WHERE verification_id = $1::uuid AND code = 'orphan_target_blobs'`, verificationID).Scan(&count)
+	return count, err
+}

@@ -276,6 +276,25 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	}
 	report()
 
+	// A run already past its scan (adopted with phase extras) committed its
+	// orphan finding durably — restore the result field from the persisted
+	// issue so the summary matches history (Codex review iteration 2,
+	// finding 4).
+	if run.Phase == state.VerificationPhaseExtras {
+		orphans, err := state.OrphanBlobIssueCount(runCtx, pool, run.VerificationID)
+		if err != nil {
+			if cause := fatalCause(runCtx); cause != nil {
+				return nil, cause
+			}
+			if runCtx.Err() != nil {
+				return nil, interruptScan(runCtx, pool, run)
+			}
+			return nil, verificationFatal("extras", derefInt64(run.SourceCheckpoint), err)
+		}
+		result.OrphanTargetBlobs = orphans
+		report()
+	}
+
 	// The unresolved-registry iterator: keyset pages of unresolved
 	// record-scope IDs, walked alongside the merge. It starts at the same
 	// cursor the merge resumes from — every registry entry at or below the
