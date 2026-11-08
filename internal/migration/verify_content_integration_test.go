@@ -509,6 +509,117 @@ func TestVerifyContentVanishedSourceRecordFailsCoverage(t *testing.T) {
 	}
 }
 
+// TestVerifyContentBoundedUnitsFlushMidPageAndMidWindow: with a small
+// BatchSize, source-only stretches are committed in bounded units — mid-page
+// (target checkpoint at the last classified target row, source-only prefix
+// flushes keep it certified) and mid-drain-window (source checkpoint moves,
+// target checkpoint stays) — instead of piling a whole sparse-target prefix
+// or drain window into one commit. Resume across a mid-page flush boundary
+// must neither re-classify nor double-count (Codex review iteration 1,
+// finding 7).
+func TestVerifyContentBoundedUnitsFlushMidPageAndMidWindow(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Rows 1 and 10 import; rows 2..9 are rejected into the registry — a
+	// dense source-only stretch between two far-apart target rows. One
+	// target page [1,10]; the prefix of row 10 spans registry rows 2..9.
+	seedSourceTorrent(t, src, 1, "ok1.bin", 40, 1700000001)
+	seedSourceFile(t, src, 1, "ok1.bin", 40)
+	seedSourceTorrent(t, src, 10, "ok10.bin", 50, 1700000010)
+	seedSourceFile(t, src, 10, "ok10.bin", 50)
+	for id := int32(2); id <= 9; id++ {
+		execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+            VALUES ($1, decode($2, 'hex'), 'bad', 9, 1700000000 + $1)`, id, fmt.Sprintf("%02dAA", id%100))
+	}
+	importAll(t, src, tgt)
+
+	// Post-import source growth: rows 11 and 12 drain as missing_target_row
+	// (never in the registry). Seeding after the import makes the recorded
+	// import fingerprint stale — expected drift provenance (info).
+	seedSourceTorrent(t, src, 11, "late11.bin", 60, 1700000011)
+	seedSourceFile(t, src, 11, "late11.bin", 60)
+	seedSourceTorrent(t, src, 12, "late12.bin", 60, 1700000012)
+	seedSourceFile(t, src, 12, "late12.bin", 60)
+
+	// Phase A — interrupt exactly at the first mid-page flush: it must carry
+	// the last classified target row (1) as its target checkpoint while the
+	// source checkpoint already covers the classified prefix (rows 1..3 —
+	// row 1 matched, rows 2 and 3 source-only).
+	canceled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.BatchSize = 2
+		in.Progress = func(p VerifyProgress) {
+			if !canceled && p.Checkpoint == 1 && p.SourceObserved == 3 {
+				canceled = true
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	interrupted, err := state.LatestVerification(context.Background(), poolForRunner(t, tgt), state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.State != state.VerificationInterrupted ||
+		interrupted.TargetCheckpoint == nil || *interrupted.TargetCheckpoint != 1 ||
+		interrupted.SourceCheckpoint == nil || *interrupted.SourceCheckpoint != 3 {
+		t.Fatalf("run = %s checkpoints src %v tgt %v, want interrupted at src 3 tgt 1",
+			interrupted.State, interrupted.SourceCheckpoint, interrupted.TargetCheckpoint)
+	}
+
+	// Phase B — resume and finish. BatchSize 2 keeps the drain flush
+	// mid-window: rows 11 and 12 flush inside their window (source
+	// checkpoint 12) while the target checkpoint stays at the page max 10.
+	sawDrainFlush := false
+	res, err := verifyContent(t, context.Background(), src, tgt, func(in *VerifyContentInput) {
+		in.BatchSize = 2
+		in.Progress = func(p VerifyProgress) {
+			if p.Checkpoint == 10 && p.SourceObserved == 12 {
+				sawDrainFlush = true
+			}
+		}
+	})
+	if err == nil || !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("resume error = %v, want ErrVerificationFindings", err)
+	}
+	if !res.Resumed || res.VerificationID != interrupted.VerificationID {
+		t.Fatalf("resume = %v/%s, want adopted run %s", res.Resumed, res.VerificationID, interrupted.VerificationID)
+	}
+	if !sawDrainFlush {
+		t.Fatal("no mid-window drain flush observed (source checkpoint moved without the target)")
+	}
+	if res.Verified != 2 || res.Mismatched != 0 || res.SourceObserved != 12 || res.ObservedTargets != 2 {
+		t.Fatalf("result = %d/%d/%d/%d, want 2/0/12/2",
+			res.Verified, res.Mismatched, res.SourceObserved, res.ObservedTargets)
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedFail {
+		t.Fatalf("run state = %s, want completed_fail", run.State)
+	}
+	codes := issueCodes(issues)
+	// Exactly one issue per classified anomaly across BOTH phases — no
+	// re-classification, no double-counting of rows 1/10 on resume.
+	if codes[IssueCodeUnresolvedRecord] != 8 || codes[IssueCodeMissingTargetRow] != 2 ||
+		codes[IssueCodeSourceDrift] != 1 || len(issues) != 11 {
+		t.Fatalf("issues = %+v, want 8 unresolved + 2 missing + 1 drift", issues)
+	}
+	if codes[IssueCodeExtraTargetRow] != 0 || codes[IssueCodeCoverage] != 0 {
+		t.Fatalf("issues = %+v, want no extra_target_row (no resume double-count) and no coverage gap", issues)
+	}
+	if run.VerifiedCount != 2 || run.MismatchCount != 0 ||
+		run.ObservedSourceIDs == nil || *run.ObservedSourceIDs != 12 ||
+		run.ObservedTargetIDs == nil || *run.ObservedTargetIDs != 2 {
+		t.Fatalf("durable = verified %d mismatch %d src %v tgt %v, want 2/0/12/2",
+			run.VerifiedCount, run.MismatchCount, run.ObservedSourceIDs, run.ObservedTargetIDs)
+	}
+}
+
 func TestVerifyContentDriftAsInfoPass(t *testing.T) {
 	t.Parallel()
 

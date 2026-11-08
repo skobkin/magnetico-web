@@ -287,6 +287,67 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	// commits.
 	reg := &registryIter{pool: pool, runID: prog.RunID, afterID: srcReadCursor}
 
+	// commitUnit commits one accumulated unit atomically: its issues,
+	// counter deltas, both compare-and-swap checkpoints and the cumulative
+	// coverage mirrors. newTarget/newSource are the post-commit checkpoint
+	// values; passing the current expected pointer keeps that side
+	// unchanged (nil-safe: a side never committed stays NULL). Every
+	// merge/drain commit goes through here, including the bounded mid-page
+	// and mid-window flushes — one commit shape, one reconciliation path.
+	commitUnit := func(unit *contentUnitResult, newTarget, newSource *int64) error {
+		unit.issues = withDrift(unit.issues)
+		candSource := m.sourceObserved + unit.sourceObserved
+		candTarget := m.observed() + unit.verified + unit.mismatch + unit.unverifiable + unit.assumed
+		committed, err := state.CommitVerificationPage(runCtx, pool, state.VerificationPageCommit{
+			VerificationID: run.VerificationID,
+			Issues:         unit.issues,
+			VerifiedDelta:  unit.verified, MismatchDelta: unit.mismatch,
+			UnverifiableDelta:   unit.unverifiable,
+			AssumedSingleDelta:  unit.assumed,
+			SourceCheckpoint:    expectedSource,
+			TargetCheckpoint:    expectedTarget,
+			NewSourceCheckpoint: newSource, NewTargetCheckpoint: newTarget,
+			NewObservedSourceIDs: &candSource,
+			NewObservedTargetIDs: &candTarget,
+		})
+		if err != nil {
+			return err
+		}
+		if !committed {
+			// Under the exclusive lock a lost CAS means our own commit
+			// landed but the acknowledgement was lost (ambiguous COMMIT).
+			freshRow, gerr := state.GetVerification(runCtx, pool, run.VerificationID)
+			if gerr != nil {
+				return gerr
+			}
+			if !pageCommitted(freshRow, newSource, newTarget) {
+				return fmt.Errorf(
+					"verification checkpoint moved underneath the scan (run %s)", run.VerificationID)
+			}
+			m.resync(freshRow)
+		} else {
+			m.applyContent(*unit)
+		}
+		targetAfter = derefInt64(newTarget)
+		expectedTarget = newTarget
+		expectedSource = newSource
+		result.ObservedTargets = m.observed()
+		report()
+		return nil
+	}
+	// scanFatal wraps a commitUnit error with the standard fatal/interrupt
+	// handling: a lock-loss cause wins, a cancelled context interrupts
+	// (resumable), everything else is infrastructure failure.
+	scanFatal := func(stage string, err error) (*VerificationResult, error) {
+		if cause := fatalCause(runCtx); cause != nil {
+			return nil, cause
+		}
+		if runCtx.Err() != nil {
+			return nil, interruptScan(runCtx, pool, run)
+		}
+		return nil, verificationFatal(stage, targetAfter, err)
+	}
+
 	if run.Phase == state.VerificationPhaseScanning {
 		// Merge-scan state: one buffered source window (bounded by the
 		// window byte budget), read-on-demand by the merge; buf rows are
@@ -371,6 +432,43 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			unit := &contentUnitResult{issues: []state.VerificationIssue{}}
 			lastSrc := int64(0)
 			haveSrc := false
+			// flushUnit commits the unit accumulated so far. boundary is the
+			// target checkpoint after the commit — the certification point a
+			// resumed pass re-reads the target from (keyset pagination). It
+			// must only ever advance past CLASSIFIED target rows:
+			//   - after-tr flushes: the row just classified;
+			//   - source-only prefix flushes: the last classified target row
+			//     of this page, or the unchanged checkpoint when none yet —
+			//     moving an unclassified target row forward would make the
+			//     resume re-compare it against a source cursor that has
+			//     already moved past its match;
+			//   - the page end: the page max (every page row classified).
+			flushUnit := func(boundary *int64) error {
+				newSource := expectedSource
+				if haveSrc {
+					// Copy: commitUnit stores this pointer as the CAS
+					// expectation for the NEXT flush, so it must never alias
+					// the mutable lastSrc (later classifications in the same
+					// page would corrupt the expected checkpoint).
+					src := lastSrc
+					newSource = &src
+				}
+				if err := commitUnit(unit, boundary, newSource); err != nil {
+					return err
+				}
+				*unit = contentUnitResult{issues: []state.VerificationIssue{}}
+				return nil
+			}
+			// Bounded units: a sparse target over a dense source would
+			// otherwise pile the whole source-only prefix into one commit.
+			flushAt := func(boundary *int64) error {
+				if len(unit.issues) < in.BatchSize {
+					return nil
+				}
+				return flushUnit(boundary)
+			}
+			lastTr := int64(0)
+			haveTr := false
 			for _, tr := range tp.rows {
 				// Source rows strictly below the target row: source-only
 				// classification (pull windows on demand while the buffer
@@ -407,6 +505,17 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 					delete(bufFiles, buf[0].ID)
 					delete(bufOverflow, buf[0].ID)
 					buf = buf[1:]
+					// Prefix flush: certify up to the last classified target
+					// row (this page's rows live in the same atomic commit),
+					// or hold the checkpoint when none classified yet.
+					if haveTr {
+						b := lastTr
+						if err := flushAt(&b); err != nil {
+							return scanFatal("scan", err)
+						}
+					} else if err := flushAt(expectedTarget); err != nil {
+						return scanFatal("scan", err)
+					}
 				}
 
 				// Matched pair or target-only row.
@@ -420,15 +529,21 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 					lastSrc = int64(srcRow.ID)
 					haveSrc = true
 					classifyMatched(&srcRow, files, ov, overflowing, &tr, content[tr.id], unit)
-					continue
+				} else {
+					// Target-only row (the source has no such ID).
+					unit.mismatch++
+					unit.issues = append(unit.issues, state.VerificationIssue{
+						SourceID: i64ptr(tr.id), InfoHash: tr.infoHash,
+						Code: IssueCodeExtraTargetRow, Stage: IssueStageContent, Severity: state.IssueMismatch,
+						Details: map[string]any{"reason": "target row has no source torrent"},
+					})
 				}
-				// Target-only row (the source has no such ID).
-				unit.mismatch++
-				unit.issues = append(unit.issues, state.VerificationIssue{
-					SourceID: i64ptr(tr.id), InfoHash: tr.infoHash,
-					Code: IssueCodeExtraTargetRow, Stage: IssueStageContent, Severity: state.IssueMismatch,
-					Details: map[string]any{"reason": "target row has no source torrent"},
-				})
+				lastTr = tr.id
+				haveTr = true
+				b := tr.id
+				if err := flushAt(&b); err != nil {
+					return scanFatal("scan", err)
+				}
 			}
 			// Registry infrastructure failure: never commit past it.
 			if reg.err != nil {
@@ -445,63 +560,18 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 				return nil, interruptScan(runCtx, pool, run)
 			}
 
-			// Commit the unit: both checkpoints (the target side always
-			// moves to the page boundary; the source side only when source
-			// rows were classified) and the cumulative classified counts.
-			unit.issues = withDrift(unit.issues)
-			newTarget := pageMax
-			newSource := expectedSource
-			if haveSrc {
-				newSource = &lastSrc
+			// Close the page: the target checkpoint always moves to the
+			// page boundary; the source side only when source rows were
+			// classified since the last flush. A flush that already fired
+			// at the last row makes this a harmless checkpoint no-op.
+			if err := flushUnit(&pageMax); err != nil {
+				return scanFatal("scan", err)
 			}
-			candSource := m.sourceObserved + unit.sourceObserved
-			candTarget := m.observed() + unit.verified + unit.mismatch + unit.unverifiable + unit.assumed
-			committed, err := state.CommitVerificationPage(runCtx, pool, state.VerificationPageCommit{
-				VerificationID: run.VerificationID,
-				Issues:         unit.issues,
-				VerifiedDelta:  unit.verified, MismatchDelta: unit.mismatch,
-				UnverifiableDelta:    unit.unverifiable,
-				AssumedSingleDelta:   unit.assumed,
-				SourceCheckpoint:     expectedSource,
-				TargetCheckpoint:     expectedTarget,
-				NewSourceCheckpoint:  newSource,
-				NewTargetCheckpoint:  &newTarget,
-				NewObservedSourceIDs: &candSource,
-				NewObservedTargetIDs: &candTarget,
-			})
-			if err != nil {
-				if cause := fatalCause(runCtx); cause != nil {
-					return nil, cause
-				}
-				if runCtx.Err() != nil {
-					return nil, interruptScan(runCtx, pool, run)
-				}
-				return nil, verificationFatal("scan", targetAfter, err)
-			}
-			if !committed {
-				// Under the exclusive lock a lost CAS means our own commit
-				// landed but the acknowledgement was lost (ambiguous COMMIT).
-				freshRow, gerr := state.GetVerification(runCtx, pool, run.VerificationID)
-				if gerr != nil {
-					return nil, verificationFatal("scan", targetAfter, gerr)
-				}
-				if !pageCommitted(freshRow, newSource, &newTarget) {
-					return nil, verificationFatal("scan", targetAfter, fmt.Errorf(
-						"verification checkpoint moved underneath the scan (run %s)", run.VerificationID))
-				}
-				m.resync(freshRow)
-			} else {
-				m.applyContent(*unit)
-			}
-			targetAfter = newTarget
-			expectedTarget = &newTarget
-			expectedSource = newSource
-			result.ObservedTargets = m.observed()
-			report()
 		}
 
-		// Drain phase: source IDs beyond the last target row. One window per
-		// committed unit; every row classifies source-only.
+		// Drain phase: source IDs beyond the last target row. Windows are
+		// absorbed one at a time and committed in bounded units; every row
+		// classifies source-only.
 		for !sourceDone {
 			if runCtx.Err() != nil {
 				return nil, interruptScan(runCtx, pool, run)
@@ -522,6 +592,16 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			}
 			unit := &contentUnitResult{issues: []state.VerificationIssue{}}
 			windowLast := int64(buf[len(buf)-1].ID)
+			// flushDrain commits the unit accumulated so far. The target
+			// checkpoint never moves during the drain; the source checkpoint
+			// moves to the last classified row.
+			flushDrain := func(boundary int64) error {
+				if err := commitUnit(unit, expectedTarget, &boundary); err != nil {
+					return err
+				}
+				*unit = contentUnitResult{issues: []state.VerificationIssue{}}
+				return nil
+			}
 			for len(buf) > 0 {
 				if err := classifySourceOnly(runCtx, &buf[0], unit, reg); err != nil {
 					if cause := fatalCause(runCtx); cause != nil {
@@ -532,9 +612,15 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 					}
 					return nil, verificationFatal("scan", targetAfter, err)
 				}
+				rowID := int64(buf[0].ID)
 				delete(bufFiles, buf[0].ID)
 				delete(bufOverflow, buf[0].ID)
 				buf = buf[1:]
+				if len(unit.issues) >= in.BatchSize {
+					if err := flushDrain(rowID); err != nil {
+						return scanFatal("scan", err)
+					}
+				}
 			}
 			if reg.err != nil {
 				if cause := fatalCause(runCtx); cause != nil {
@@ -545,44 +631,10 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 				}
 				return nil, verificationFatal("scan", targetAfter, reg.err)
 			}
-			lastSrc := windowLast
-			unit.issues = withDrift(unit.issues)
-			candSource := m.sourceObserved + unit.sourceObserved
-			candTarget := m.observed()
-			committed, err := state.CommitVerificationPage(runCtx, pool, state.VerificationPageCommit{
-				VerificationID:       run.VerificationID,
-				Issues:               unit.issues,
-				SourceCheckpoint:     expectedSource,
-				TargetCheckpoint:     expectedTarget,
-				NewSourceCheckpoint:  &lastSrc,
-				NewTargetCheckpoint:  expectedTarget,
-				NewObservedSourceIDs: &candSource,
-				NewObservedTargetIDs: &candTarget,
-			})
-			if err != nil {
-				if cause := fatalCause(runCtx); cause != nil {
-					return nil, cause
-				}
-				if runCtx.Err() != nil {
-					return nil, interruptScan(runCtx, pool, run)
-				}
-				return nil, verificationFatal("scan", targetAfter, err)
+			// Close the window (a flush at the last row makes this a no-op).
+			if err := flushDrain(windowLast); err != nil {
+				return scanFatal("scan", err)
 			}
-			if !committed {
-				freshRow, gerr := state.GetVerification(runCtx, pool, run.VerificationID)
-				if gerr != nil {
-					return nil, verificationFatal("scan", targetAfter, gerr)
-				}
-				if !pageCommitted(freshRow, &lastSrc, expectedTarget) {
-					return nil, verificationFatal("scan", targetAfter, fmt.Errorf(
-						"verification checkpoint moved underneath the scan (run %s)", run.VerificationID))
-				}
-				m.resync(freshRow)
-			} else {
-				m.applyContent(*unit)
-			}
-			expectedSource = &lastSrc
-			srcReadCursor = lastSrc
 			buf = nil
 			bufFiles, bufOverflow = nil, nil
 			result.SourceObserved = m.sourceObserved
