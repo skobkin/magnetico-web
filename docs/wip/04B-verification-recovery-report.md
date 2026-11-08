@@ -132,6 +132,16 @@ All green on this tree (pinned disposable `postgres:17`, per-test databases):
   `TestIdentitySameDatabaseViaSocketAndTCP`, because the Docker-cached-cluster harness
   exposes no Unix socket (the test documents its skip condition, exactly as in 04A).
 
+Post-loop final battery (the tree of this report, all 23 validated review findings
+fixed): `go build ./...`, `go vet ./...`, `gofmt -l .` (no output), `golangci-lint run`
+0 issues; `go test ./... -p 2 -count=1` — all 21 non-empty packages pass (the
+`internal/migration` package was re-enqueued once after a teardown-only
+DROP-DATABASE timeout burst under peak create/drop churn — the same documented
+one-container artifact as above; it passes standalone in 64 s with zero assertion
+failures); `go test -race ./internal/migration/... ./opflags/...` green. The review
+loop added 23 regression tests; the census above is from the pre-loop battery, so the
+loop-inclusive total is **438 tests pass, 1 skips**.
+
 Test families delivered per the assignment (all integration unless noted):
 decode clean/failures/structural/complete-after-findings, oversized-corrupted-blob (no
 materialization), collectively-oversized page split, solo oversized admission, malformed
@@ -195,7 +205,35 @@ path) — and all fixed as individual commits:
 | 2 (P2) | decodedBytes charged only path bytes: each codec.File is a 24-byte Go value and slice capacity can exceed length — 30,000 one-byte-path rows charged ~510 KiB while the real arrays hold ~740 KiB, so a "budget" segment over-retained | `d3a3b7f0` — estimator charges `cap(files)*24 + sum(len(path))` | `TestPageContentAccountingCoversFileArrays` (pre-fix admits rows [0,2) into one window) |
 | 3 (P1) | The round-2 seam extraction gave the retry fetch closure its own error mapping whose graceful-interruption branch returned the bare ErrInterrupted sentinel — a cancel surfacing at the next-window FetchByIDs left `retry_runs.state='running'` behind an exit 2 | `35300b5f` — the closure returns interruptRetry() like every other interrupt path | `TestRetryErrorsInterruptDuringWindowFetchPersists` (fixture rows ~1.1 MiB each under a 1 MiB budget so the batch genuinely splits; verified failing with state 'running' against the bare sentinel) |
 
-Iterations are capped at 5; the loop continues until a round returns nothing validated.
+**Iteration 4** first re-validated all three round-3 fixes by reversal (each regression
+test failed on the pre-fix tree, passed at HEAD), then returned 4 findings — all
+reproduced — and all fixed as individual commits:
+
+| # | Finding (validated) | Fix commit | Regression test |
+|---|---|---|---|
+| 1 (P1) | Two further conninfo shapes pgx accepts leaked verbatim: backslash-escaped quotes inside single-quoted values (`password='HEAD\' SECRET_TAIL'`) and escaped spaces in bare values (`password=HEAD\ SECRET_TAIL`). Bonus: the `pwd` key branch had been dead since it was written (it spelled p-u-d) — `pwd=secret` was never redacted in any round | `f2f186ce` — escape-aware value classes (quoted `\\.` allowed; bare values are runs of plain/escaped characters ending at unescaped whitespace) + repaired the middle-letter class; a premise test pins both shapes as valid pgx conninfo | `TestRedactSecrets` (3 new cases) + `TestKeyValueDSNEscapeShapesAcceptedByPgx` |
+| 2 (P2) | FetchByIDs' metadata weight never charged infohash bytes — the legacy schema has no hash-length constraint, so 32 distinct 65,538-byte hashes rode in one 1 MiB window (2.1 MB retained, ~4 KiB charged) | `8dda8770` — the metadata weight includes the hash bytea; the two pinned-weight metadata tests updated for the exact arithmetic | `TestFetchByIDsBudgetChargesInfohashBytes` (32 rows split under a 1 MiB budget) |
+| 3 (P2) | Both verifiers mapped an error from the extras-phase `CommitVerificationPage` to verificationFatal unconditionally: cancellation while that UPDATE waits produced exit 1, unlike every scanning branch (exit 2 + durable interrupt mark) | `d72bb45e` — both branches apply the standard mapping (fatal cause → durable interrupt → fatal) | `TestVerify{Decode,Content}ExtrasCommitCancelPersists` (row-locked run + pg_stat_activity proof the extras UPDATE is blocked before cancelling) |
+| 4 (P2) | The reported severity split counted finalize issues on top of the pre-commit recount, but storage deduplicates re-proposed issues — the drift provenance (recomputed against the import fingerprint on every resume) reported 2 info findings with 1 durable | `820c0da5` — the severity split is recounted from the durable issue table after the finalize commit (the dedupe is authoritative); the pass decision keeps its pre-commit basis + finalize-severity gate | `TestVerifyContentExtrasResumeDoesNotDoubleCountDrift` (info = 1, durable = 1) |
+
+**Iteration 5** (the final round of the cap) re-validated all four round-4 fixes by
+reversal (each regression test failed on the pre-fix tree, passed at HEAD) and returned
+2 findings — both reproduced — fixed as individual commits:
+
+| # | Finding (validated) | Fix commit | Regression test |
+|---|---|---|---|
+| 1 (P1) | A YAML double-quoted value re-encodes conninfo escapes on top of the DSN's own (`\\ ` spells an escaped space): the raw excerpt line cannot be value-parsed, and the masked-prefix left the tail leaking (`password=HEAD\\ REVIEWTAIL…` masked only `HEAD\\`) | `252b37ac` — redactSecrets gains a structural second layer: any quoted configuration line whose content may carry a credential (loose detector: password/pwd spellings, percent-encoded keys, URLs with userinfo) is dropped whole — line number survives, content does not; in-place masking stays for error text and inline DSNs | excerpt-drop unit cases + the live yaml-dq syntax-error diagnostic asserting the tail absent |
+| 2 (P2) | Two post-finalize REPORT-ONLY statements still ran on the run context (the post-commit severity recount; decode's 04A registry count report): a cancellation landing there aborted a run that is already completed_pass/completed_fail and can never resume, misreported as interrupted (exit 2) or fatal (exit 1) | `ecb21531` — both run on a context detached from the run's cancellation, like the durable-mark paths | `TestVerifyDecodeFinalizedRunNotInterruptedByCancel` (100k probe issues widen the post-commit window; cancel fires the moment the run row turns terminal; the pass still returns its completed verdict) |
+
+**Loop outcome: converged at the 5-iteration cap.** 23 validated findings across five
+rounds (9 + 5 + 3 + 4 + 2), every one fixed as an individual commit with a regression
+test proven to fail on its pre-fix tree. The finding classes stabilized around two
+themes: interruption/cancellation semantics at every durable-state boundary (extras
+commits, post-commit reporting, the retry fetch seam) and credential-redaction
+soundness in configuration diagnostics — the latter resolved structurally (drop
+credential-bearing lines) after three rounds of value-shape hardening kept finding new
+escape layers. Round 5 validated all round-4 fixes by reversal before hunting, so the
+regression net is self-consistent as of HEAD.
 
 ## Hand-off requirements for 04C/04D
 
