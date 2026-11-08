@@ -165,3 +165,24 @@ type queryer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
+
+// UncoveredUnresolvedRecords counts the unresolved record-scope registry
+// entries of the import run that carry NO per-row unresolved_record_error
+// issue for the given verification run. A merge scan emits that issue only
+// when it classifies the entry's source row — an entry whose source row has
+// vanished is never seen, so the content pass closes the gap with this
+// aggregate check at finalize: the equality gate must never pass while an
+// unresolved record is unaccounted for. Returns the count and the min/max
+// source IDs of the uncovered entries (0/0/0 when fully covered).
+func UncoveredUnresolvedRecords(ctx context.Context, q queryer, runID, verificationID string) (count, minID, maxID int64, err error) {
+	err = q.QueryRow(ctx, `SELECT
+        COUNT(*), COALESCE(MIN(e.source_id), 0), COALESCE(MAX(e.source_id), 0)
+    FROM magnetico_migration.errors e
+    WHERE e.run_id = $1::uuid AND e.scope = 'record' AND NOT e.resolved
+      AND NOT EXISTS (
+          SELECT 1 FROM magnetico_migration.verification_issues vi
+          WHERE vi.verification_id = $2::uuid
+            AND vi.code = 'unresolved_record_error'
+            AND vi.source_id = e.source_id)`, runID, verificationID).Scan(&count, &minID, &maxID)
+	return count, minID, maxID, err
+}

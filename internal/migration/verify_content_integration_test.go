@@ -446,6 +446,69 @@ func TestVerifyContentSourceOnlyRowsStayOutOfTargetCounters(t *testing.T) {
 	}
 }
 
+// TestVerifyContentVanishedSourceRecordFailsCoverage: an unresolved
+// record-scope registry entry whose source row has vanished is never seen
+// by the merge, so it gets no per-row unresolved_record_error issue — the
+// finalize aggregate check must emit a coverage finding for it instead of
+// letting full equality elsewhere pass the scan (Codex review iteration 1,
+// finding 1).
+func TestVerifyContentVanishedSourceRecordFailsCoverage(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Row 1 invalid → the registry holds entry 1; rows 2 and 3 import.
+	execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (1, decode('AA','hex'), 'bad1', 9, 1700000001)`)
+	seedSourceTorrent(t, src, 2, "ok2.bin", 40, 1700000002)
+	seedSourceFile(t, src, 2, "ok2.bin", 40)
+	seedSourceTorrent(t, src, 3, "ok3.bin", 50, 1700000003)
+	seedSourceFile(t, src, 3, "ok3.bin", 50)
+	importAll(t, src, tgt)
+
+	// The registry entry's source row disappears before verification.
+	execSourceSQL(t, src, `DELETE FROM magneticod.torrents WHERE id = 1`)
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err == nil || !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("error = %v, want ErrVerificationFindings", err)
+	}
+	if res.Pass {
+		t.Fatal("pass = true, want completed_fail with an unaccounted unresolved record")
+	}
+	// The surviving rows compare equal; the failure is the coverage gap.
+	if res.Verified != 2 || res.Mismatched != 0 || res.SourceObserved != 2 || res.ObservedTargets != 2 {
+		t.Fatalf("result = %d/%d/%d/%d, want 2/0/2/2",
+			res.Verified, res.Mismatched, res.SourceObserved, res.ObservedTargets)
+	}
+	if res.UnresolvedRecordErrors != 1 {
+		t.Fatalf("unresolved record errors = %d, want 1 (report-only count)", res.UnresolvedRecordErrors)
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedFail {
+		t.Fatalf("run state = %s, want completed_fail", run.State)
+	}
+	codes := issueCodes(issues)
+	if codes[IssueCodeUnresolvedCoverage] != 1 {
+		t.Fatalf("issues = %+v, want exactly one %s", issues, IssueCodeUnresolvedCoverage)
+	}
+	if codes[IssueCodeUnresolvedRecord] != 0 || codes[IssueCodeMissingTargetRow] != 0 {
+		t.Fatalf("issues = %+v, want no per-row registry/missing findings", issues)
+	}
+	for _, is := range issues {
+		if is.Code != IssueCodeUnresolvedCoverage {
+			continue
+		}
+		if is.Severity != state.IssueCoverage {
+			t.Fatalf("%s severity = %s, want coverage", is.Code, is.Severity)
+		}
+		// Details round-trip through JSONB: numbers come back as float64.
+		if is.Details["uncovered"] != float64(1) || is.Details["min_id"] != float64(1) || is.Details["max_id"] != float64(1) {
+			t.Fatalf("%s details = %+v, want uncovered/min/max = 1/1/1", is.Code, is.Details)
+		}
+	}
+}
+
 func TestVerifyContentDriftAsInfoPass(t *testing.T) {
 	t.Parallel()
 

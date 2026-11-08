@@ -64,6 +64,10 @@ const (
 	IssueCodeSourceDrift      = "source_fingerprint_drift"    // info
 	IssueCodeSourceIntegrity  = "source_integrity_unresolved" // coverage
 	IssueCodeSourceGrew       = "source_row_count_changed"    // coverage
+	// Aggregate finalize finding: unresolved record-scope registry entries
+	// with no per-row unresolved_record_error issue — their source rows are
+	// gone, so the merge never saw them.
+	IssueCodeUnresolvedCoverage = "unresolved_record_coverage" // coverage
 )
 
 // registryPageSize bounds one keyset page of unresolved-registry IDs held
@@ -673,6 +677,20 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 		}
 		return nil, verificationFatal("coverage", targetAfter, err)
 	}
+	// Aggregate unresolved-record coverage: every unresolved registry entry
+	// needs a per-row unresolved_record_error issue from the merge. An entry
+	// whose source row vanished is never seen by the scan — without this
+	// check the equality gate could pass over an unaccounted record.
+	uncCount, uncMin, uncMax, err := state.UncoveredUnresolvedRecords(runCtx, pool, prog.RunID, run.VerificationID)
+	if err != nil {
+		if cause := fatalCause(runCtx); cause != nil {
+			return nil, cause
+		}
+		if runCtx.Err() != nil {
+			return nil, interruptScan(runCtx, pool, run)
+		}
+		return nil, verificationFatal("coverage", targetAfter, err)
+	}
 
 	observedTarget := m.observed()
 	observedSource := m.sourceObserved
@@ -716,6 +734,15 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 				"orphan_source_files": fpNow.OrphanFiles,
 				"null_owner_files":    fpNow.NullOwnerFiles,
 				"registry_integrity":  regIntegrity,
+			},
+		})
+	}
+	if uncCount > 0 {
+		finalizeIssues = append(finalizeIssues, state.VerificationIssue{
+			Code: IssueCodeUnresolvedCoverage, Stage: IssueStageCoverage, Severity: state.IssueCoverage,
+			Details: map[string]any{
+				"reason":    "unresolved record-scope registry entries with no classified source row",
+				"uncovered": uncCount, "min_id": uncMin, "max_id": uncMax,
 			},
 		})
 	}
