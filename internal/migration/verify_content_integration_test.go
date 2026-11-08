@@ -1,0 +1,537 @@
+package migration
+
+// verify-content integration suite: clean full-equality pass (mixed row
+// shapes, duplicate paths, source-readonly proof), every classification
+// (missing/extra/mismatched metadata, missing atypical blob, unresolved
+// registry membership, not-representable overflow, NULL-owned source file
+// rows), fingerprint drift as info provenance (a pass WITH drift under full
+// equality), interrupt/resume with Equivalent-based adoption, refusal to
+// resume after source content-anchor changes, latest-run authority, and
+// incomplete-import refusals.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/internal/migration/state"
+	"github.com/skobkin/magnetico-web/internal/migration/target"
+)
+
+// verifyContent runs one verify-content pass with sane test defaults.
+func verifyContent(t *testing.T, ctx context.Context, src, tgt string, tweak func(*VerifyContentInput)) (*VerificationResult, error) {
+	t.Helper()
+	in := VerifyContentInput{SourceDSN: src, TargetDSN: tgt, Workers: 2, BatchSize: 100}
+	if tweak != nil {
+		tweak(&in)
+	}
+	return VerifyContent(ctx, in)
+}
+
+// latestContentRun reads the authoritative content run plus its issues.
+func latestContentRun(t *testing.T, tgt string) (*state.VerificationRun, []state.VerificationIssue) {
+	t.Helper()
+	ctx := context.Background()
+	pool := poolForRunner(t, tgt)
+	run, err := state.LatestVerification(ctx, pool, state.VerificationKindContent)
+	if err != nil {
+		t.Fatalf("LatestVerification() error = %v", err)
+	}
+	if run == nil {
+		t.Fatal("no content verification run exists")
+	}
+	issues, err := state.ListVerificationIssues(ctx, pool, run.VerificationID, 1000)
+	if err != nil {
+		t.Fatalf("ListVerificationIssues() error = %v", err)
+	}
+	return run, issues
+}
+
+// sourceRowMD5 is a mutation detector for the source dataset (torrent and
+// file rows), used to prove verify-content never writes the source.
+func sourceRowMD5(t *testing.T, dsn string) [2]string {
+	t.Helper()
+	pool := poolForRunner(t, dsn)
+	var torrentsMD5, filesMD5 string
+	err := pool.QueryRow(context.Background(), `SELECT
+        (SELECT md5(COALESCE(string_agg(x, '' ORDER BY id), '')) FROM
+            (SELECT row_number() OVER (ORDER BY id)::text || to_jsonb(torrents)::text AS x, id
+             FROM magneticod.torrents) d),
+        (SELECT md5(COALESCE(string_agg(x, '' ORDER BY id), '')) FROM
+            (SELECT row_number() OVER (ORDER BY id)::text || to_jsonb(files)::text AS x, id
+             FROM magneticod.files) d2)`).
+		Scan(&torrentsMD5, &filesMD5)
+	if err != nil {
+		t.Fatalf("source fingerprint: %v", err)
+	}
+	return [2]string{torrentsMD5, filesMD5}
+}
+
+// seedMatchingTargetSingle inserts a target torrent row equal to a source
+// typical single (no blob) and keeps the progress counters consistent.
+func seedMatchingTargetSingle(t *testing.T, src, tgt string, id int32) {
+	t.Helper()
+	pool := poolForRunner(t, src)
+	var infoHash []byte
+	var name string
+	var total int64
+	var discovered int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT info_hash, name, total_size, discovered_on FROM magneticod.torrents WHERE id = $1`, id).
+		Scan(&infoHash, &name, &total, &discovered); err != nil {
+		t.Fatalf("read source row %d: %v", id, err)
+	}
+	execTargetSQL(t, tgt, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on, file_count)
+        VALUES ($1, $2, $3, $4, $5, 1)`, int64(id), infoHash, name, total, discovered)
+	execTargetSQL(t, tgt, `UPDATE magnetico_migration.progress
+        SET success_count = success_count + 1, scanned_count = scanned_count + 1,
+            last_processed_id = GREATEST(last_processed_id, $1)`, int64(id))
+}
+
+// contentFixture seeds the standard clean source: 1 multi-file with
+// duplicate paths (blob), 2 typical single (no blob), 3 atypical single
+// (blob) — then imports everything.
+func contentFixture(t *testing.T) (string, string) {
+	t.Helper()
+	src, tgt := decodeFixture(t)
+	seedMultiFileTorrent(t, src, 1, "multi", [][2]any{
+		{"a/one.bin", int64(10)}, {"a/one.bin", int64(20)}, {"b/two.bin", int64(30)},
+	})
+	seedSourceTorrent(t, src, 2, "typical.bin", 40, 1700000002)
+	seedSourceFile(t, src, 2, "typical.bin", 40)
+	seedSourceTorrent(t, src, 3, "atypical", 50, 1700000003)
+	seedSourceFile(t, src, 3, "different.bin", 50)
+	importAll(t, src, tgt)
+	return src, tgt
+}
+
+func TestVerifyContentCleanPass(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := contentFixture(t)
+
+	srcBefore := sourceRowMD5(t, src)
+	tgtBefore := targetFingerprint(t, tgt)
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err != nil {
+		t.Fatalf("VerifyContent() error = %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("pass = false, issues %+v", res.IssuesBySeverity)
+	}
+	if res.Kind != state.VerificationKindContent {
+		t.Fatalf("kind = %s, want content", res.Kind)
+	}
+	if res.ObservedTargets != 3 || res.SourceObserved != 3 || res.Verified != 3 {
+		t.Fatalf("result = observed %d source %d verified %d, want 3/3/3",
+			res.ObservedTargets, res.SourceObserved, res.Verified)
+	}
+	if res.AssumedSingle != 0 {
+		t.Fatalf("assumed = %d, want 0 (content compares every matched row)", res.AssumedSingle)
+	}
+	if res.UnresolvedRecordErrors != 0 || res.UnresolvedIntegrity != 0 {
+		t.Fatalf("registry counts = %d/%d, want 0/0", res.UnresolvedRecordErrors, res.UnresolvedIntegrity)
+	}
+	// Neither database is modified by the pass.
+	if tgtBefore != targetFingerprint(t, tgt) {
+		t.Fatal("target mutated by the content pass")
+	}
+	if srcBefore != sourceRowMD5(t, src) {
+		t.Fatal("source mutated by the content pass")
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedPass || run.Phase != state.VerificationPhaseComplete {
+		t.Fatalf("run = %s/%s, want completed_pass/complete", run.State, run.Phase)
+	}
+	if len(issues) != 0 {
+		t.Fatalf("issues = %+v, want none", issues)
+	}
+	if run.ObservedSourceIDs == nil || *run.ObservedSourceIDs != 3 ||
+		run.ObservedTargetIDs == nil || *run.ObservedTargetIDs != 3 {
+		t.Fatalf("observed coverage = %v/%v, want 3/3", run.ObservedSourceIDs, run.ObservedTargetIDs)
+	}
+}
+
+func TestVerifyContentEmptyBothSidesPass(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	importAll(t, src, tgt) // empty source, empty target
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err != nil {
+		t.Fatalf("VerifyContent() error = %v", err)
+	}
+	if !res.Pass || res.ObservedTargets != 0 || res.SourceObserved != 0 {
+		t.Fatalf("result = pass %v observed %d/%d, want pass with 0/0",
+			res.Pass, res.ObservedTargets, res.SourceObserved)
+	}
+}
+
+func TestVerifyContentFindingsFail(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		seed         func(t *testing.T, src, tgt string) // before import (optional)
+		corrupt      func(t *testing.T, src, tgt string)
+		wantCode     string
+		wantSeverity string
+		wantMismatch int64
+	}{
+		{
+			name: "missing target row not in the registry is missing_target_row",
+			corrupt: func(t *testing.T, src, tgt string) {
+				execTargetSQL(t, tgt, `DELETE FROM magneticod.torrents WHERE id = 2`)
+				execTargetSQL(t, tgt, `UPDATE magnetico_migration.progress
+                    SET success_count = success_count - 1, scanned_count = scanned_count - 1`)
+			},
+			wantCode:     IssueCodeMissingTargetRow,
+			wantSeverity: state.IssueMismatch,
+			wantMismatch: 1,
+		},
+		{
+			name: "extra target row is extra_target_row",
+			corrupt: func(t *testing.T, src, tgt string) {
+				// The fixture's source has an ID gap at 3; a counter-
+				// consistent extra target row must stay inside the recorded
+				// source ID range (state.Load refuses anything beyond it).
+				execTargetSQL(t, tgt, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on, file_count)
+                    VALUES (3, decode('6333','hex'), 'extra', 5, 1700000003, 1)`)
+				execTargetSQL(t, tgt, `UPDATE magnetico_migration.progress
+                    SET success_count = success_count + 1, scanned_count = scanned_count + 1`)
+			},
+			wantCode:     IssueCodeExtraTargetRow,
+			wantSeverity: state.IssueMismatch,
+			wantMismatch: 1,
+		},
+		{
+			name: "name tamper is a content mismatch",
+			corrupt: func(t *testing.T, src, tgt string) {
+				execTargetSQL(t, tgt, `UPDATE magneticod.torrents SET name = 'renamed' WHERE id = 1`)
+			},
+			wantCode:     IssueCodeContentMismatch,
+			wantSeverity: state.IssueMismatch,
+			wantMismatch: 1,
+		},
+		{
+			name: "atypical single missing its blob is a content mismatch",
+			corrupt: func(t *testing.T, src, tgt string) {
+				// The reconstructed no-blob single (name, total) can never
+				// equal the source's atypical file list.
+				execTargetSQL(t, tgt, `DELETE FROM magneticod.torrent_file_blobs WHERE torrent_id = 4`)
+				execTargetSQL(t, tgt, `UPDATE magnetico_migration.progress SET blob_count = blob_count - 1`)
+			},
+			wantCode:     IssueCodeContentMismatch,
+			wantSeverity: state.IssueMismatch,
+			wantMismatch: 1,
+		},
+		{
+			name: "unresolved registry membership is unresolved_record_error",
+			seed: func(t *testing.T, src, tgt string) {
+				// 1-byte info hash: invalid metadata the import must reject.
+				execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+                    VALUES (5, decode('AA','hex'), 'bad-hash', 9, 1700000005)`)
+				seedSourceFile(t, src, 5, "whatever.bin", 9)
+			},
+			corrupt:      func(t *testing.T, src, tgt string) {},
+			wantCode:     IssueCodeUnresolvedRecord,
+			wantSeverity: state.IssueCoverage,
+			wantMismatch: 0,
+		},
+		{
+			name: "source file list over production limits is not representable",
+			corrupt: func(t *testing.T, src, tgt string) {
+				// Tiny limits applied at VERIFY time: the already-imported
+				// multi-file torrent's source list no longer fits → drained,
+				// classified unverifiable, never claimed compared.
+			},
+			wantCode:     IssueCodeNotRepresentable,
+			wantSeverity: state.IssueUnverifiable,
+			wantMismatch: 0,
+		},
+		{
+			name: "NULL-owned source file row is drift plus an integrity finding",
+			corrupt: func(t *testing.T, src, tgt string) {
+				execSourceSQL(t, src, `INSERT INTO magneticod.files (torrent_id, path, size)
+                    VALUES (NULL, 'dangling.bin', 5)`)
+			},
+			wantCode:     IssueCodeSourceIntegrity,
+			wantSeverity: state.IssueCoverage,
+			wantMismatch: 0,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			src, tgt := decodeFixture(t)
+			if tc.seed != nil {
+				tc.seed(t, src, tgt)
+			}
+			// Source IDs {1, 2, 4}: a gap at 3 leaves room for
+			// counter-consistent in-range extra-row tampering.
+			seedMultiFileTorrent(t, src, 1, "multi", [][2]any{
+				{"a/one.bin", int64(10)}, {"a/one.bin", int64(20)}, {"b/two.bin", int64(30)},
+			})
+			seedSourceTorrent(t, src, 2, "typical.bin", 40, 1700000002)
+			seedSourceFile(t, src, 2, "typical.bin", 40)
+			seedSourceTorrent(t, src, 4, "atypical", 50, 1700000004)
+			seedSourceFile(t, src, 4, "different.bin", 50)
+			importAll(t, src, tgt)
+
+			tc.corrupt(t, src, tgt)
+
+			tweak := func(in *VerifyContentInput) {}
+			if tc.wantCode == IssueCodeNotRepresentable {
+				tweak = func(in *VerifyContentInput) {
+					limits := codec.DefaultLimits()
+					limits.MaxFiles = 1
+					in.Limits = &limits
+				}
+			}
+			res, err := verifyContent(t, context.Background(), src, tgt, tweak)
+			if err == nil || !errors.Is(err, ErrVerificationFindings) {
+				t.Fatalf("error = %v, want ErrVerificationFindings", err)
+			}
+			if res.Pass {
+				t.Fatal("pass = true, want completed_fail")
+			}
+
+			run, issues := latestContentRun(t, tgt)
+			if run.State != state.VerificationCompletedFail {
+				t.Fatalf("run state = %s, want completed_fail", run.State)
+			}
+			codes := issueCodes(issues)
+			if codes[tc.wantCode] != 1 {
+				t.Fatalf("issues = %+v, want exactly one %s", issues, tc.wantCode)
+			}
+			for _, is := range issues {
+				if is.Code == tc.wantCode && is.Severity != tc.wantSeverity {
+					t.Fatalf("%s severity = %s, want %s", is.Code, is.Severity, tc.wantSeverity)
+				}
+			}
+			if res.Mismatched != tc.wantMismatch {
+				t.Fatalf("mismatched = %d, want %d", res.Mismatched, tc.wantMismatch)
+			}
+
+			// Classification-specific accounting.
+			switch tc.wantCode {
+			case IssueCodeUnresolvedRecord:
+				if res.UnresolvedRecordErrors != 1 || res.SourceObserved != 4 {
+					t.Fatalf("registry %d source %d, want 1/4", res.UnresolvedRecordErrors, res.SourceObserved)
+				}
+			case IssueCodeNotRepresentable:
+				if res.Unverifiable != 1 {
+					t.Fatalf("unverifiable = %d, want 1", res.Unverifiable)
+				}
+			case IssueCodeSourceIntegrity:
+				if res.IssuesBySeverity[state.IssueInfo] != 1 {
+					t.Fatalf("info issues = %d, want 1 (the drift provenance)", res.IssuesBySeverity[state.IssueInfo])
+				}
+			}
+		})
+	}
+}
+
+func TestVerifyContentDriftAsInfoPass(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Source IDs {1, 2, 4} (gap at 3): the post-import growth below can
+	// then be mirrored on the target while staying inside the recorded
+	// source ID range — the only counter-consistent way to simulate it
+	// (preflight refuses any target row beyond the import checkpoint).
+	seedMultiFileTorrent(t, src, 1, "multi", [][2]any{
+		{"a/one.bin", int64(10)}, {"a/one.bin", int64(20)}, {"b/two.bin", int64(30)},
+	})
+	seedSourceTorrent(t, src, 2, "typical.bin", 40, 1700000002)
+	seedSourceFile(t, src, 2, "typical.bin", 40)
+	seedSourceTorrent(t, src, 4, "atypical", 50, 1700000004)
+	seedSourceFile(t, src, 4, "different.bin", 50)
+	importAll(t, src, tgt)
+
+	// Post-import source growth mirrored on the target: full equality
+	// holds, but the fresh fingerprint's content anchors (torrent count,
+	// file rows) differ from the recorded import fingerprint.
+	seedSourceTorrent(t, src, 3, "typical3.bin", 70, 1700000003)
+	seedSourceFile(t, src, 3, "typical3.bin", 70)
+	seedMatchingTargetSingle(t, src, tgt, 3)
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err != nil {
+		t.Fatalf("VerifyContent() error = %v", err)
+	}
+	if !res.Pass {
+		t.Fatalf("pass = false with full equality, issues %+v", res.IssuesBySeverity)
+	}
+	if res.ObservedTargets != 4 || res.SourceObserved != 4 || res.Verified != 4 {
+		t.Fatalf("result = %d/%d/%d, want 4/4/4", res.ObservedTargets, res.SourceObserved, res.Verified)
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedPass {
+		t.Fatalf("run state = %s, want completed_pass", run.State)
+	}
+	if len(issues) != 1 || issues[0].Code != IssueCodeSourceDrift || issues[0].Severity != state.IssueInfo {
+		t.Fatalf("issues = %+v, want exactly one info source_fingerprint_drift", issues)
+	}
+	if res.IssuesBySeverity[state.IssueInfo] != 1 {
+		t.Fatalf("severity counts = %+v, want exactly one info", res.IssuesBySeverity)
+	}
+}
+
+func TestVerifyContentInterruptResumes(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	for id := int32(1); id <= 3; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d.bin", id), 2, 1700000000+id)
+		seedSourceFile(t, src, id, fmt.Sprintf("t%d.bin", id), 2)
+	}
+	importAll(t, src, tgt)
+
+	canceled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.BatchSize = 1
+		in.Progress = func(p VerifyProgress) {
+			if !canceled && p.Checkpoint >= 1 {
+				canceled = true
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+
+	pool := poolForRunner(t, tgt)
+	interrupted, err := state.LatestVerification(context.Background(), pool, state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.State != state.VerificationInterrupted ||
+		interrupted.TargetCheckpoint == nil || *interrupted.TargetCheckpoint != 1 {
+		t.Fatalf("run = %s checkpoint %v, want interrupted at 1", interrupted.State, interrupted.TargetCheckpoint)
+	}
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err != nil {
+		t.Fatalf("resume error = %v", err)
+	}
+	if !res.Resumed || res.VerificationID != interrupted.VerificationID {
+		t.Fatalf("resume = %v/%s, want adopted run %s", res.Resumed, res.VerificationID, interrupted.VerificationID)
+	}
+	if !res.Pass || res.ObservedTargets != 3 || res.SourceObserved != 3 || res.Verified != 3 {
+		t.Fatalf("resumed result = %v %d/%d/%d, want pass 3/3/3",
+			res.Pass, res.ObservedTargets, res.SourceObserved, res.Verified)
+	}
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedPass || len(issues) != 0 {
+		t.Fatalf("run = %s issues %+v, want clean pass", run.State, issues)
+	}
+}
+
+func TestVerifyContentResumeAfterSourceChangeRefuses(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	for id := int32(1); id <= 3; id++ {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("t%d.bin", id), 2, 1700000000+id)
+		seedSourceFile(t, src, id, fmt.Sprintf("t%d.bin", id), 2)
+	}
+	importAll(t, src, tgt)
+
+	canceled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.BatchSize = 1
+		in.Progress = func(p VerifyProgress) {
+			if !canceled && p.Checkpoint >= 1 {
+				canceled = true
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	interrupted, err := state.LatestVerification(context.Background(), poolForRunner(t, tgt), state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Source content-anchor change (a torrent disappears): the recorded
+	// fingerprint is no longer Equivalent — the old run aborts, history
+	// preserved, and a fresh pass runs.
+	execSourceSQL(t, src, `DELETE FROM magneticod.torrents WHERE id = 3`)
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err == nil || !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("error = %v, want ErrVerificationFindings", err)
+	}
+	if res.Resumed || res.VerificationID == interrupted.VerificationID {
+		t.Fatalf("resumed %v run %s, want a fresh run", res.Resumed, res.VerificationID)
+	}
+
+	pool := poolForRunner(t, tgt)
+	old, err := state.GetVerification(context.Background(), pool, interrupted.VerificationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.State != state.VerificationAborted {
+		t.Fatalf("old run state = %s, want aborted", old.State)
+	}
+	run, issues := latestContentRun(t, tgt)
+	if run.Seq <= interrupted.Seq || run.State != state.VerificationCompletedFail {
+		t.Fatalf("latest run = seq %d %s, want a newer completed_fail", run.Seq, run.State)
+	}
+	if issueCodes(issues)[IssueCodeExtraTargetRow] != 1 {
+		t.Fatalf("issues = %+v, want exactly one extra_target_row (source row 3 is gone)", issues)
+	}
+}
+
+func TestVerifyContentRefusesIncompleteImport(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no run state", func(t *testing.T) {
+		t.Parallel()
+		tgt := createTargetForRunner(t)
+		err := verifyContentErrOnly(t, tgt)
+		if !errors.Is(err, target.ErrRunNotComplete) {
+			t.Fatalf("error = %v, want ErrRunNotComplete", err)
+		}
+	})
+
+	t.Run("import still running", func(t *testing.T) {
+		t.Parallel()
+		tgt := createTargetForRunner(t)
+		pool := poolForRunner(t, tgt)
+		if _, err := state.InitRun(context.Background(), pool, state.InitInput{
+			RunID: "66666666-6666-4666-8666-666666666666", FingerprintRaw: []byte(`{}`),
+			SourceAdapter: SourceAdapterOriginal, ContractVersion: MigrationContractVersion,
+			CodecProfile: "compact", ExpectedTotal: 1, SourceMinID: 1, SourceMaxID: 1,
+			DeferIndexes: false, Options: state.Options{Workers: 1, BatchSize: 1, MaxInflightBytes: 1 << 20},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyContentErrOnly(t, tgt); !errors.Is(err, target.ErrRunNotComplete) {
+			t.Fatalf("error = %v, want ErrRunNotComplete", err)
+		}
+	})
+}
+
+// verifyContentErrOnly runs the pass against a target with no source (the
+// refusal must fire before any source connection is attempted).
+func verifyContentErrOnly(t *testing.T, tgt string) error {
+	t.Helper()
+	in := VerifyContentInput{SourceDSN: "postgres://127.0.0.1:1/none", TargetDSN: tgt}
+	_, err := VerifyContent(context.Background(), in)
+	return err
+}
