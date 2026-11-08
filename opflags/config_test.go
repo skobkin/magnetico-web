@@ -316,9 +316,11 @@ func TestApplyYamlConfig_RedactsSecretsFromDiagnostics(t *testing.T) {
 	t.Parallel()
 
 	// Unknown key: the strict decode fails and its diagnostic quotes the
-	// offending line — which carries its own credential — plus context.
+	// offending line — which carries its own credential — plus context
+	// lines, including one with an empty-username URL password.
 	data := []byte("migrateSourceDatabaseURL: postgres://src:SourceSecret@localhost/legacy\n" +
-		"unknownSetting: postgres://tgt:TargetSecret@localhost/t\n")
+		"migrateDatabaseURL: postgres://:TargetSecret@localhost/t\n" +
+		"unknownSetting: 1\n")
 	o := &OpFlags{}
 	err := o.applyYamlConfig(data, map[string]bool{})
 	if err == nil {
@@ -369,6 +371,21 @@ func TestRedactSecrets(t *testing.T) {
 			name: "yaml key colon form",
 			in:   "password: Sup3rSecret",
 			want: "password: xxxxx",
+		},
+		{
+			name: "empty-username URL password",
+			in:   `migrateSourceDatabaseURL: postgres://:Sup3rSecret@localhost/legacy`,
+			want: `migrateSourceDatabaseURL: postgres://:xxxxx@localhost/legacy`,
+		},
+		{
+			name: "quoted value with spaces",
+			in:   `source: host=localhost password='HEAD SECRET_TAIL'`,
+			want: `source: host=localhost password=xxxxx`,
+		},
+		{
+			name: "percent-encoded query key",
+			in:   `source: postgres://h/db?%70assword=SECRET`,
+			want: `source: postgres://h/db?%70assword=xxxxx`,
 		},
 	}
 	for _, tc := range cases {

@@ -366,23 +366,28 @@ func explicitInCommand(c *flags.Command) map[string]bool {
 
 var (
 	// urlPasswordPattern matches the userinfo password of any scheme-qualified
-	// URL (`scheme://user:secret@host`) — the shape of every DSN in the
-	// configuration file.
-	urlPasswordPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^:/@\s]+:)[^@\s]+@`)
-	// kvPasswordPattern matches a password given as a key/value pair, in
-	// PostgreSQL key-value DSNs, URL query parameters and YAML keys alike
-	// (`password=secret`, `pwd: secret`).
-	kvPasswordPattern = regexp.MustCompile(`(?i)\b(password|pwd)\b(\s*[=:]\s*)\S+`)
+	// URL (`scheme://user:secret@host`, empty username included:
+	// `scheme://:secret@host`) — the shape of every DSN in the configuration
+	// file. Hosts without userinfo never match: the `@` after the password
+	// is required.
+	urlPasswordPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^:/@\s]*:)[^@\s]+@`)
+	// credentialKeyPattern matches a credential given as a key/value pair —
+	// in PostgreSQL key-value DSNs, URL query parameters and YAML keys
+	// alike (`password=secret`, `pwd: secret`). The key may be spelled in
+	// either case or percent-encoded (`%70assword=secret`, as URLs encode
+	// query keys), and the value may be bare, or quoted with single or
+	// double quotes — quoted values may contain spaces.
+	credentialKeyPattern = regexp.MustCompile(`((?:[pP]|%70|%50)(?:[aA]|%61|%41)(?:[sS]|%73|%53)(?:[sS]|%73|%53)(?:[wW]|%77|%57)(?:[oO]|%6[fF])(?:[rR]|%72|%52)(?:[dD]|%64|%44)|(?:[pP]|%70|%50)(?:[uU]|%75|%55)(?:[dD]|%64|%44))(\s*[=:]\s*)(?:'[^']*'|"[^"]*"|[^\s]+)`)
 )
 
 // redactSecrets masks credential material that YAML diagnostics echo from
 // the configuration file's source lines: the yaml library renders errors
-// with the offending line (and a caret) quoted verbatim, so a typo on one
-// line would otherwise print a neighboring DSN — password included — to the
-// terminal and any log capture. Only the secret is masked; the diagnostic's
-// line numbers, keys and error text are preserved.
+// with the offending line (and its context) quoted verbatim, so a typo on
+// one line would otherwise print a neighboring DSN — password included —
+// to the terminal and any log capture. Only the secrets are masked; the
+// diagnostic's line numbers, keys and error text are preserved.
 func redactSecrets(msg string) string {
 	msg = urlPasswordPattern.ReplaceAllString(msg, "${1}xxxxx@")
-	msg = kvPasswordPattern.ReplaceAllString(msg, "${1}${2}xxxxx")
+	msg = credentialKeyPattern.ReplaceAllString(msg, "${1}${2}xxxxx")
 	return msg
 }
