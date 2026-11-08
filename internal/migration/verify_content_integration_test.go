@@ -546,6 +546,86 @@ func TestVerifyContentInterruptResumes(t *testing.T) {
 	}
 }
 
+// TestVerifyContentResumeClassifiesRegistryIDsBeyondCheckpoint: on resume,
+// the unresolved-registry walk starts at the source checkpoint the merge
+// resumes from — entries at or below it were already consumed pre-interrupt.
+// A registry entry ABOVE the checkpoint must classify its source row as
+// unresolved_record_error on the resumed pass, never missing_target_row
+// (Codex review iteration 1, finding 3).
+func TestVerifyContentResumeClassifiesRegistryIDsBeyondCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Rows 1 and 3 invalid (1-byte hash) → rejected into the registry;
+	// rows 2 and 4 import cleanly. Target = {2,4}, registry = {1,3}.
+	execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (1, decode('AA','hex'), 'bad1', 9, 1700000001)`)
+	seedSourceTorrent(t, src, 2, "ok2.bin", 40, 1700000002)
+	seedSourceFile(t, src, 2, "ok2.bin", 40)
+	execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (3, decode('AB','hex'), 'bad3', 9, 1700000003)`)
+	seedSourceTorrent(t, src, 4, "ok4.bin", 50, 1700000004)
+	seedSourceFile(t, src, 4, "ok4.bin", 50)
+	importAll(t, src, tgt)
+
+	// Interrupt right after the first commit: target checkpoint 2, source
+	// checkpoint 2, registry entry 1 consumed and committed.
+	canceled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.BatchSize = 1
+		in.Progress = func(p VerifyProgress) {
+			if !canceled && p.Checkpoint >= 2 {
+				canceled = true
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	interrupted, err := state.LatestVerification(context.Background(), poolForRunner(t, tgt), state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interrupted.State != state.VerificationInterrupted ||
+		interrupted.TargetCheckpoint == nil || *interrupted.TargetCheckpoint != 2 ||
+		interrupted.SourceCheckpoint == nil || *interrupted.SourceCheckpoint != 2 {
+		t.Fatalf("run = %s checkpoints %v/%v, want interrupted at 2/2",
+			interrupted.State, interrupted.SourceCheckpoint, interrupted.TargetCheckpoint)
+	}
+
+	// Resume: registry entry 3 sits ABOVE the source checkpoint. The
+	// registry iterator must resume past the consumed entry 1.
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err == nil || !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("resume error = %v, want ErrVerificationFindings", err)
+	}
+	if !res.Resumed || res.VerificationID != interrupted.VerificationID {
+		t.Fatalf("resume = %v/%s, want adopted run %s", res.Resumed, res.VerificationID, interrupted.VerificationID)
+	}
+	if res.Verified != 2 || res.Mismatched != 0 || res.SourceObserved != 4 || res.ObservedTargets != 2 {
+		t.Fatalf("resumed result = %d/%d/%d/%d, want 2/0/4/2",
+			res.Verified, res.Mismatched, res.SourceObserved, res.ObservedTargets)
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedFail {
+		t.Fatalf("run state = %s, want completed_fail", run.State)
+	}
+	codes := issueCodes(issues)
+	if codes[IssueCodeUnresolvedRecord] != 2 {
+		t.Fatalf("issues = %+v, want one unresolved_record_error per registry entry (1 and 3)", issues)
+	}
+	if codes[IssueCodeMissingTargetRow] != 0 {
+		t.Fatalf("issues = %+v, want no missing_target_row on the resumed pass", issues)
+	}
+	if run.VerifiedCount != 2 || run.MismatchCount != 0 {
+		t.Fatalf("durable counters = %d/%d, want 2/0", run.VerifiedCount, run.MismatchCount)
+	}
+}
+
 func TestVerifyContentResumeAfterSourceChangeRefuses(t *testing.T) {
 	t.Parallel()
 

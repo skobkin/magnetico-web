@@ -274,9 +274,14 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	report()
 
 	// The unresolved-registry iterator: keyset pages of unresolved
-	// record-scope IDs, walked alongside the merge. Buffered error: checked
-	// before every commit — an infrastructure failure never commits.
-	reg := &registryIter{pool: pool, runID: prog.RunID, afterID: srcStart}
+	// record-scope IDs, walked alongside the merge. It starts at the same
+	// cursor the merge resumes from — every registry entry at or below the
+	// source checkpoint was already consumed (and committed with its
+	// unresolved_record_error issue) by the pre-interrupt portion of the
+	// scan, so a resumed pass must not see those entries again. Buffered
+	// error: checked before every commit — an infrastructure failure never
+	// commits.
+	reg := &registryIter{pool: pool, runID: prog.RunID, afterID: srcReadCursor}
 
 	if run.Phase == state.VerificationPhaseScanning {
 		// Merge-scan state: one buffered source window (bounded by the
