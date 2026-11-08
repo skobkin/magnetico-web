@@ -565,6 +565,48 @@ func TestParseArgs_RetryErrorsNested(t *testing.T) {
 			t.Errorf("RetryErrors.SourceDatabaseURL = %s, want the env value", o.Migrate.Torrents.RetryErrors.SourceDatabaseURL)
 		}
 	})
+
+	// Shared options positioned before the nested command land on the
+	// torrents command; the repair pass must receive them anyway.
+	t.Run("ParentPositionedSharedFlagsTransfer", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "torrents",
+			"--database", "postgres://parent@localhost/db",
+			"--workers", "3",
+			"retry-errors",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		r := o.Migrate.Torrents.RetryErrors
+		if r.DatabaseURL != "postgres://parent@localhost/db" {
+			t.Errorf("RetryErrors.DatabaseURL = %q, want the parent-positioned value", r.DatabaseURL)
+		}
+		if r.Workers != 3 {
+			t.Errorf("RetryErrors.Workers = %d, want 3", r.Workers)
+		}
+		want := retryErrorsDefaults()
+		if r.BatchSize != want.BatchSize {
+			t.Errorf("RetryErrors.BatchSize = %d, want the untouched default %d", r.BatchSize, want.BatchSize)
+		}
+	})
+
+	// The nested position keeps precedence over the parent position.
+	t.Run("NestedPositionWins", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "torrents",
+			"--database", "postgres://parent@localhost/db",
+			"retry-errors",
+			"--database", "postgres://nested@localhost/db",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.Torrents.DatabaseURL != "postgres://parent@localhost/db" {
+			t.Errorf("Torrents.DatabaseURL = %q, want the parent-positioned value", o.Migrate.Torrents.DatabaseURL)
+		}
+		if got := o.Migrate.Torrents.RetryErrors.DatabaseURL; got != "postgres://nested@localhost/db" {
+			t.Errorf("RetryErrors.DatabaseURL = %q, want the nested-positioned value", got)
+		}
+	})
 }
 
 func TestApplyYamlConfig_FansOutToAllMigrateCommands(t *testing.T) {

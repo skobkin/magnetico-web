@@ -50,6 +50,7 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 			// the effective subcommand (go-flags only ever activates the
 			// known nested command, so the name check is belt and braces).
 			o.Migrate.Subcommand = sub.Active.Name
+			o.transferSharedFlagsToRetry(sub, sub.Active)
 		} else {
 			o.Migrate.Subcommand = sub.Name
 		}
@@ -59,4 +60,33 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 	}
 
 	return command, nil
+}
+
+// transferSharedFlagsToRetry moves the shared repair-pass options the
+// operator positioned before the nested command onto RetryErrors:
+// `migrate torrents --database X retry-errors` parses `--database X` into
+// the torrents command and leaves RetryErrors' own field at its tag
+// default — the repair pass would silently run against a different target
+// (or with different tunables) than the command line says. Each shared
+// option transfers only when the parent position set it explicitly and the
+// nested position did not: the nested position always wins. This runs
+// before the config layers, so the transferred value takes the CLI
+// precedence in the whole-tree explicit check (yaml/env skip when any
+// --database was given on the command line).
+func (o *OpFlags) transferSharedFlagsToRetry(parent, nested *flags.Command) {
+	pset, nset := explicitInCommand(parent), explicitInCommand(nested)
+	t := &o.Migrate.Torrents
+	r := &t.RetryErrors
+	if pset["database"] && !nset["database"] {
+		r.DatabaseURL = t.DatabaseURL
+	}
+	if pset["workers"] && !nset["workers"] {
+		r.Workers = t.Workers
+	}
+	if pset["batch-size"] && !nset["batch-size"] {
+		r.BatchSize = t.BatchSize
+	}
+	if pset["max-inflight-bytes"] && !nset["max-inflight-bytes"] {
+		r.MaxInflightBytes = t.MaxInflightBytes
+	}
 }

@@ -348,3 +348,17 @@ func explicitOptions(root *flags.Command) map[string]bool {
 	walkCommand(root)
 	return set
 }
+
+// explicitInCommand collects the long names of the options explicitly
+// provided on the command line for ONE command's own option group — the
+// non-recursive counterpart of explicitOptions (nested subcommands are not
+// walked), so individual parse positions can be compared independently.
+func explicitInCommand(c *flags.Command) map[string]bool {
+	set := map[string]bool{}
+	for _, opt := range c.Options() {
+		if opt.IsSet() && !opt.IsSetDefault() && opt.LongName != "" {
+			set[opt.LongName] = true
+		}
+	}
+	return set
+}
