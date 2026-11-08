@@ -282,9 +282,16 @@ type VerificationPageCommit struct {
 	NewObservedTargetIDs *int64
 }
 
+// errCheckpointCASLost is returned by the page transaction when the
+// compare-and-swap matched zero rows: the whole transaction (issues
+// included) rolls back, so a rejected page can never leave issues persisted
+// without their checkpoint and counter movement.
+var errCheckpointCASLost = errors.New("verification page checkpoint compare-and-swap matched zero rows")
+
 // CommitVerificationPage applies one page commit. It returns false when the
 // compare-and-swap lost (the checkpoints moved underneath us — the caller
-// must re-read the run and reconcile) or the run is not `running`.
+// must re-read the run and reconcile) or the run is not `running`. A lost
+// CAS rolls the page back entirely: nothing is persisted.
 func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in VerificationPageCommit) (bool, error) {
 	var committed bool
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
@@ -344,10 +351,19 @@ func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in Verifica
 		if err != nil {
 			return err
 		}
-		committed = tag.RowsAffected() == 1
+		if tag.RowsAffected() != 1 {
+			// The CAS lost: roll the whole transaction back — the issues
+			// inserted above must never persist without their checkpoints
+			// and counter deltas.
+			return errCheckpointCASLost
+		}
+		committed = true
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errCheckpointCASLost) {
+			return false, nil
+		}
 		return false, err
 	}
 	return committed, nil

@@ -182,6 +182,63 @@ func TestVerificationPageCASRejectsStaleCheckpoint(t *testing.T) {
 	}
 }
 
+// A stale page (lost checkpoint CAS) carrying issue rows must persist
+// NOTHING — previously the issue inserts committed even when the CAS
+// matched zero rows, leaving issues without their checkpoint or counters.
+func TestVerificationPageStaleCASRollsBackIssues(t *testing.T) {
+	t.Parallel()
+
+	pool := schemaTestPool(t, pgtest.IntegrationCluster(t).TestDatabase(t))
+	runID := seedVerificationBase(t, pool)
+	ctx := context.Background()
+
+	run, err := CreateVerification(ctx, pool, CreateVerificationInput{
+		RunID: runID, Kind: VerificationKindDecode, StartDataRevision: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateVerification() error = %v", err)
+	}
+	id10 := int64(10)
+	if _, err := CommitVerificationPage(ctx, pool, VerificationPageCommit{
+		VerificationID:   run.VerificationID,
+		TargetCheckpoint: nil, NewTargetCheckpoint: &id10,
+	}); err != nil {
+		t.Fatalf("first commit error = %v", err)
+	}
+
+	// Stale expectation WITH a new issue: the CAS must lose and the issue
+	// must not persist.
+	src42 := int64(42)
+	ok, err := CommitVerificationPage(ctx, pool, VerificationPageCommit{
+		VerificationID: run.VerificationID,
+		Issues: []VerificationIssue{{
+			SourceID: &src42, Code: "missing_blob", Stage: "decode", Severity: IssueMismatch,
+		}},
+		TargetCheckpoint: nil, NewTargetCheckpoint: &id10,
+	})
+	if err != nil {
+		t.Fatalf("stale commit error = %v", err)
+	}
+	if ok {
+		t.Fatal("stale page commit must lose the CAS")
+	}
+	var issueRows int64
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM magnetico_migration.verification_issues
+        WHERE verification_id = $1::uuid`, run.VerificationID).Scan(&issueRows); err != nil {
+		t.Fatal(err)
+	}
+	if issueRows != 0 {
+		t.Fatalf("%d issue rows persisted by a stale page, want 0 (rollback broken)", issueRows)
+	}
+	got, err := GetVerification(ctx, pool, run.VerificationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IssueCount != 0 || *got.TargetCheckpoint != 10 {
+		t.Fatalf("run after stale page = issue_count %d checkpoint %d, want 0/10", got.IssueCount, *got.TargetCheckpoint)
+	}
+}
+
 func TestVerificationPageRollsBackWholePage(t *testing.T) {
 	t.Parallel()
 
