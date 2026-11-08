@@ -160,7 +160,7 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 	}
 	// expectedTarget mirrors the STORED checkpoint for the commit CAS: nil
 	// until the first page commits (never conflate "no checkpoint" with 0).
-	var expectedTarget *int64 = run.TargetCheckpoint
+	expectedTarget := run.TargetCheckpoint
 	m := newDecodeMirrors(run)
 	report := func() {
 		if in.Progress != nil {
@@ -506,7 +506,7 @@ func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limi
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	rows, err := tx.Query(ctx, `SELECT t.id, t.info_hash, t.name, t.total_size, t.discovered_on,
             t.file_count, b.torrent_id, octet_length(b.data)
         FROM magneticod.torrents t
@@ -702,7 +702,7 @@ func fetchAndDecodeChunk(ctx context.Context, pool *pgxpool.Pool, page *decodePa
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	rows, err := tx.Query(ctx, `SELECT torrent_id, data FROM magneticod.torrent_file_blobs
         WHERE torrent_id = ANY($1::bigint[])`, ids)
 	if err != nil {
@@ -784,9 +784,7 @@ func verifyBlobRow(r *decodeRow, blob []byte, limits codec.Limits) rowVerdict {
 	}
 	meta := decodeMeta(r)
 	pfiles := make([]persistence.File, len(files))
-	for i, f := range files {
-		pfiles[i] = persistence.File{Path: f.Path, Size: f.Size}
-	}
+	copy(pfiles, files)
 	if err := persistence.ValidateIngest(meta, pfiles, limits); err != nil {
 		return rowVerdict{outcome: outcomeMismatch, issues: []state.VerificationIssue{{
 			SourceID: i64ptr(r.id), InfoHash: r.infoHash,
@@ -813,7 +811,7 @@ func decodeExtrasScan(ctx context.Context, pool *pgxpool.Pool) (count int64, min
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	err = tx.QueryRow(ctx, `SELECT COUNT(*), MIN(b.torrent_id), MAX(b.torrent_id)
         FROM magneticod.torrent_file_blobs b
         LEFT JOIN magneticod.torrents t ON t.id = b.torrent_id

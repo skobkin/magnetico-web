@@ -235,8 +235,8 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	// expectedSource/expectedTarget mirror the STORED checkpoints for the
 	// commit CAS (nil until the first commit on each side — never conflate
 	// "no checkpoint" with 0).
-	var expectedSource *int64 = run.SourceCheckpoint
-	var expectedTarget *int64 = run.TargetCheckpoint
+	expectedSource := run.SourceCheckpoint
+	expectedTarget := run.TargetCheckpoint
 	m := newDecodeMirrors(run)
 	// sourceObserved mirror: durable cumulative value (resumed runs carry
 	// it; fresh runs start at 0). newDecodeMirrors read the column already.
