@@ -12,6 +12,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/codec"
@@ -65,10 +66,13 @@ type VerificationResult struct {
 
 	ExpectedTargets *int64
 	ObservedTargets int64
-	Verified        int64
-	Mismatched      int64
-	Unverifiable    int64
-	AssumedSingle   int64
+	// SourceObserved: source rows classified (content pass only; the
+	// durable cumulative value from the run row).
+	SourceObserved int64
+	Verified       int64
+	Mismatched     int64
+	Unverifiable   int64
+	AssumedSingle  int64
 
 	IssuesBySeverity map[string]int64
 
@@ -176,35 +180,63 @@ func verificationFatal(stage string, checkpoint int64, err error) error {
 
 // finishVerificationOutcome closes a verification run. The pass decision
 // needs the authoritative severity recount, so the recount happens first;
-// a coverage shortfall forces fail with its issue (committed atomically
-// with the state flip — a crash between finding and verdict replays
-// idempotently). Returns the finished run, the pass decision and the
-// final severity counts.
+// finalize issues (coverage shortfalls, mid-scan growth, fingerprint
+// provenance) commit atomically with the state flip — a crash between
+// finding and verdict replays idempotently (NULL-source issues dedupe via
+// the partial unique index). Any finalize issue of severity
+// mismatch/coverage/unverifiable forces fail; info issues never do.
+// Returns the finished run, the pass decision and the final severity
+// counts (finalize issues included).
 func finishVerificationOutcome(
 	ctx context.Context, pool *pgxpool.Pool, run *state.VerificationRun,
-	observed int64, coverageIssue *state.VerificationIssue,
+	observedSource, observedTarget *int64, finalizeIssues []state.VerificationIssue,
 ) (*state.VerificationRun, bool, map[string]int64, error) {
 	counts, err := verifyIssueSeverityCounts(ctx, pool, run.VerificationID)
 	if err != nil {
 		return nil, false, nil, err
 	}
 	pass := verificationPass(counts)
-	finIssues := []state.VerificationIssue{}
-	if coverageIssue != nil {
-		finIssues = append(finIssues, *coverageIssue)
-		pass = false
+	for _, issue := range finalizeIssues {
+		switch issue.Severity {
+		case state.IssueMismatch, state.IssueCoverage, state.IssueUnverifiable:
+			pass = false
+		}
+		counts[issue.Severity]++
 	}
 	finished, err := state.FinishVerification(ctx, pool, state.FinishVerificationInput{
 		VerificationID:    run.VerificationID,
 		Pass:              pass,
-		ObservedTargetIDs: &observed,
-		Issues:            finIssues,
+		ObservedSourceIDs: observedSource,
+		ObservedTargetIDs: observedTarget,
+		Issues:            finalizeIssues,
 	})
 	if err != nil {
 		return nil, false, nil, err
 	}
-	if coverageIssue != nil {
-		counts[coverageIssue.Severity]++
-	}
 	return finished, pass, counts, nil
+}
+
+// normalizeVerifyConfig applies the shared verification tunable defaults
+// and bounds (workers, batch size, in-flight budget) for both verification
+// passes.
+func normalizeVerifyConfig(workers, batchSize int, maxInflight int64) (int, int, int64, error) {
+	if workers <= 0 {
+		workers = DefaultWorkers
+	}
+	if workers > MaxWorkers {
+		return 0, 0, 0, &ConfigError{msg: fmt.Sprintf("--workers must be 1..%d, got %d", MaxWorkers, workers)}
+	}
+	if batchSize <= 0 {
+		batchSize = DefaultBatchSize
+	}
+	if batchSize > MaxBatchSize {
+		return 0, 0, 0, &ConfigError{msg: fmt.Sprintf("--batch-size must be 1..%d, got %d", MaxBatchSize, batchSize)}
+	}
+	if maxInflight <= 0 {
+		maxInflight = DefaultMaxInflightBytes
+	}
+	if maxInflight < 1<<20 {
+		return 0, 0, 0, &ConfigError{msg: fmt.Sprintf("--max-inflight-bytes must be at least 1 MiB, got %d", maxInflight)}
+	}
+	return workers, batchSize, maxInflight, nil
 }

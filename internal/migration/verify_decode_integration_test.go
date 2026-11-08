@@ -665,7 +665,10 @@ func TestVerifyDecodeRowClassifiers(t *testing.T) {
 	r = baseRow()
 	r.hasBlobRow = true
 	r.blobLen = nil
-	res := processDecodePage(context.Background(), nil, page(r), limits, 1, 1<<20)
+	res, err := processDecodePage(context.Background(), nil, page(r), limits, 1, 1<<20)
+	if err != nil {
+		t.Fatalf("null-data page error = %v", err)
+	}
 	if res.mismatch != 1 || len(res.issues) != 1 || res.issues[0].Code != IssueCodeBlobNullData {
 		t.Fatalf("null-data verdict = %+v", res)
 	}
@@ -674,7 +677,10 @@ func TestVerifyDecodeRowClassifiers(t *testing.T) {
 	r.hasBlobRow = true
 	over := int64(limits.MaxStoredBytes) + 1
 	r.blobLen = &over
-	res = processDecodePage(context.Background(), nil, page(r), limits, 1, 1<<20)
+	res, err = processDecodePage(context.Background(), nil, page(r), limits, 1, 1<<20)
+	if err != nil {
+		t.Fatalf("over-limit page error = %v", err)
+	}
 	if res.mismatch != 1 || len(res.issues) != 1 || res.issues[0].Code != IssueCodeBlobOverLimit {
 		t.Fatalf("over-limit verdict = %+v", res)
 	}

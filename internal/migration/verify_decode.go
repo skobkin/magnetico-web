@@ -81,24 +81,11 @@ type VerifyDecodeInput struct {
 // ErrVerificationFindings after a COMPLETED scan with findings (exit 3) —
 // the result is returned alongside in every completed case.
 func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResult, error) {
-	if in.Workers <= 0 {
-		in.Workers = DefaultWorkers
+	workers, batchSize, maxInflight, err := normalizeVerifyConfig(in.Workers, in.BatchSize, in.MaxInflightBytes)
+	if err != nil {
+		return nil, err
 	}
-	if in.Workers > MaxWorkers {
-		return nil, &ConfigError{msg: fmt.Sprintf("--workers must be 1..%d, got %d", MaxWorkers, in.Workers)}
-	}
-	if in.BatchSize <= 0 {
-		in.BatchSize = DefaultBatchSize
-	}
-	if in.BatchSize > MaxBatchSize {
-		return nil, &ConfigError{msg: fmt.Sprintf("--batch-size must be 1..%d, got %d", MaxBatchSize, in.BatchSize)}
-	}
-	if in.MaxInflightBytes <= 0 {
-		in.MaxInflightBytes = DefaultMaxInflightBytes
-	}
-	if in.MaxInflightBytes < 1<<20 {
-		return nil, &ConfigError{msg: fmt.Sprintf("--max-inflight-bytes must be at least 1 MiB, got %d", in.MaxInflightBytes)}
-	}
+	in.Workers, in.BatchSize, in.MaxInflightBytes = workers, batchSize, maxInflight
 	limits := codec.DefaultLimits()
 	if in.Limits != nil {
 		limits = *in.Limits
@@ -210,7 +197,18 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 				break // scanned through the last torrent
 			}
 
-			pageRes := processDecodePage(runCtx, pool, page, limits, in.Workers, in.MaxInflightBytes)
+			pageRes, err := processDecodePage(runCtx, pool, page, limits, in.Workers, in.MaxInflightBytes)
+			if err != nil {
+				// Infrastructure failure (blob-fetch transaction, decode
+				// scheduling): never committed as findings — stop fatally.
+				if cause := fatalCause(runCtx); cause != nil {
+					return nil, cause
+				}
+				if runCtx.Err() != nil {
+					return nil, interruptScan(runCtx, pool, run)
+				}
+				return nil, verificationFatal("scan", checkpoint, err)
+			}
 			// Never commit a page whose processing was cut short.
 			if runCtx.Err() != nil {
 				return nil, interruptScan(runCtx, pool, run)
@@ -347,7 +345,11 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 			},
 		}
 	}
-	finished, pass, counts, err := finishVerificationOutcome(runCtx, pool, run, observed, coverageIssue)
+	var finalizeIssues []state.VerificationIssue
+	if coverageIssue != nil {
+		finalizeIssues = append(finalizeIssues, *coverageIssue)
+	}
+	finished, pass, counts, err := finishVerificationOutcome(runCtx, pool, run, nil, &observed, finalizeIssues)
 	if err != nil {
 		if cause := fatalCause(runCtx); cause != nil {
 			return nil, cause
@@ -402,20 +404,24 @@ func interruptScan(runCtx context.Context, pool *pgxpool.Pool, run *state.Verifi
 
 // decodeMirrors are the runner-side cumulative counters. They start from
 // the stored row (resume-cumulative) and resync from the authoritative row
-// after an ambiguous-commit reconciliation.
+// after an ambiguous-commit reconciliation. sourceObserved carries the
+// content pass's durable classified-source count (the decode pass leaves
+// the column NULL and this field 0).
 type decodeMirrors struct {
 	verified, mismatch, unverifiable, assumed, issues int64
+	sourceObserved                                    int64
 	phase                                             string
 }
 
 func newDecodeMirrors(run *state.VerificationRun) *decodeMirrors {
 	return &decodeMirrors{
-		verified:     run.VerifiedCount,
-		mismatch:     run.MismatchCount,
-		unverifiable: run.UnverifiableCount,
-		assumed:      run.AssumedSingleCount,
-		issues:       run.IssueCount,
-		phase:        run.Phase,
+		verified:       run.VerifiedCount,
+		mismatch:       run.MismatchCount,
+		unverifiable:   run.UnverifiableCount,
+		assumed:        run.AssumedSingleCount,
+		issues:         run.IssueCount,
+		sourceObserved: derefInt64(run.ObservedSourceIDs),
+		phase:          run.Phase,
 	}
 }
 
@@ -425,6 +431,16 @@ func (m *decodeMirrors) apply(p decodePageResult) {
 	m.unverifiable += p.unverifiable
 	m.assumed += p.assumed
 	m.issues += int64(len(p.issues))
+}
+
+// applyContent applies one content-merge unit: counter deltas plus the
+// source rows classified in the unit.
+func (m *decodeMirrors) applyContent(p contentUnitResult) {
+	m.apply(decodePageResult{
+		issues: p.issues, verified: p.verified, mismatch: p.mismatch,
+		unverifiable: p.unverifiable, assumed: p.assumed,
+	})
+	m.sourceObserved += p.sourceObserved
 }
 
 func (m *decodeMirrors) observed() int64 {
@@ -437,6 +453,7 @@ func (m *decodeMirrors) resync(run *state.VerificationRun) {
 	m.unverifiable = run.UnverifiableCount
 	m.assumed = run.AssumedSingleCount
 	m.issues = run.IssueCount
+	m.sourceObserved = derefInt64(run.ObservedSourceIDs)
 	m.phase = run.Phase
 }
 
@@ -542,8 +559,9 @@ type indexedVerdict struct {
 // (solo admission for valid blobs over the budget), fetches chunk contents
 // sequentially (one bounded snapshot transaction per chunk) and decodes in
 // parallel across workers. Concurrent raw bytes never exceed the budget
-// plus at most one codec-bounded oversized blob.
-func processDecodePage(ctx context.Context, pool *pgxpool.Pool, page *decodePage, limits codec.Limits, workers int, maxInflight int64) decodePageResult {
+// plus at most one codec-bounded oversized blob. An infrastructure failure
+// (transaction, query) aborts the whole page as an error — never a finding.
+func processDecodePage(ctx context.Context, pool *pgxpool.Pool, page *decodePage, limits codec.Limits, workers int, maxInflight int64) (decodePageResult, error) {
 	res := decodePageResult{issues: []state.VerificationIssue{}}
 	verdicts := make([]rowVerdict, len(page.rows))
 	var entries []blobEntry
@@ -575,8 +593,15 @@ func processDecodePage(ctx context.Context, pool *pgxpool.Pool, page *decodePage
 		}
 	}
 
-	for _, iv := range packAndFetchDecodeChunks(ctx, pool, page, entries, limits, workers, maxInflight) {
-		verdicts[iv.idx] = iv.verdict
+	chunks := packChunks(entries, maxInflight)
+	for _, chunk := range chunks {
+		ivs, err := fetchAndDecodeChunk(ctx, pool, page, chunk, limits, workers)
+		if err != nil {
+			return decodePageResult{}, err
+		}
+		for _, iv := range ivs {
+			verdicts[iv.idx] = iv.verdict
+		}
 	}
 
 	for _, v := range verdicts {
@@ -590,7 +615,7 @@ func processDecodePage(ctx context.Context, pool *pgxpool.Pool, page *decodePage
 		}
 		res.issues = append(res.issues, v.issues...)
 	}
-	return res
+	return res, nil
 }
 
 // verifyNoBlobRow checks a blob-absent row: file_count==1 reconstructs the
@@ -628,21 +653,19 @@ func decodeMeta(r *decodeRow) persistence.Torrent {
 	}
 }
 
-// packAndFetchDecodeChunks greedily packs blob entries into chunks whose
-// cumulative probed length stays within the budget; an entry whose own
-// length exceeds the budget (but not the codec cap) forms a solo chunk.
-// Each chunk is fetched in its own bounded snapshot transaction and decoded
-// across the worker pool; chunks are sequential, so raw bytes in memory are
-// bounded by the budget plus at most one codec-bounded blob.
-func packAndFetchDecodeChunks(ctx context.Context, pool *pgxpool.Pool, page *decodePage, entries []blobEntry, limits codec.Limits, workers int, maxInflight int64) []indexedVerdict {
-	var out []indexedVerdict
+// packChunks greedily packs blob entries into chunks whose cumulative
+// probed length stays within the budget; an entry whose own length exceeds
+// the budget (but not the codec cap) forms a solo chunk — never skipped for
+// scheduling reasons.
+func packChunks(entries []blobEntry, maxInflight int64) [][]blobEntry {
+	var chunks [][]blobEntry
 	var chunk []blobEntry
 	var chunkBytes int64
 	flush := func() {
 		if len(chunk) == 0 {
 			return
 		}
-		out = append(out, fetchAndDecodeChunk(ctx, pool, page, chunk, limits, workers)...)
+		chunks = append(chunks, chunk)
 		chunk = nil
 		chunkBytes = 0
 	}
@@ -650,9 +673,9 @@ func packAndFetchDecodeChunks(ctx context.Context, pool *pgxpool.Pool, page *dec
 		switch {
 		case e.length > maxInflight:
 			// Valid, codec-bounded, but over the scheduling budget: admit
-			// solo — never skipped for scheduling reasons.
+			// solo (the read-side analogue of the pipeline's solo slot).
 			flush()
-			out = append(out, fetchAndDecodeChunk(ctx, pool, page, []blobEntry{e}, limits, workers)...)
+			chunks = append(chunks, []blobEntry{e})
 		case chunkBytes+e.length > maxInflight:
 			flush()
 			chunk = []blobEntry{e}
@@ -663,37 +686,39 @@ func packAndFetchDecodeChunks(ctx context.Context, pool *pgxpool.Pool, page *dec
 		}
 	}
 	flush()
-	return out
+	return chunks
 }
 
 // fetchAndDecodeChunk fetches one chunk's blob contents (one snapshot
 // transaction, bounded by construction) and decodes its rows in parallel.
-func fetchAndDecodeChunk(ctx context.Context, pool *pgxpool.Pool, page *decodePage, chunk []blobEntry, limits codec.Limits, workers int) []indexedVerdict {
+// Infrastructure failures return an error — the caller aborts the page
+// fatally instead of recording findings.
+func fetchAndDecodeChunk(ctx context.Context, pool *pgxpool.Pool, page *decodePage, chunk []blobEntry, limits codec.Limits, workers int) ([]indexedVerdict, error) {
 	ids := make([]int64, len(chunk))
 	for i, e := range chunk {
 		ids[i] = page.rows[e.idx].id
 	}
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return chunkFailures(chunk, page, err)
+		return nil, err
 	}
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	rows, err := tx.Query(ctx, `SELECT torrent_id, data FROM magneticod.torrent_file_blobs
         WHERE torrent_id = ANY($1::bigint[])`, ids)
 	if err != nil {
-		return chunkFailures(chunk, page, err)
+		return nil, err
 	}
 	blobs := make(map[int64][]byte, len(chunk))
 	for rows.Next() {
 		var id int64
 		var data []byte
 		if err := rows.Scan(&id, &data); err != nil {
-			return chunkFailures(chunk, page, err)
+			return nil, err
 		}
 		blobs[id] = data
 	}
 	if err := rows.Err(); err != nil {
-		return chunkFailures(chunk, page, err)
+		return nil, err
 	}
 
 	out := make([]indexedVerdict, len(chunk))
@@ -733,27 +758,7 @@ func fetchAndDecodeChunk(ctx context.Context, pool *pgxpool.Pool, page *decodePa
 	}
 	close(jobs)
 	wg.Wait()
-	return out
-}
-
-// chunkFailures fails a whole chunk on a fetch error. The runner stops
-// fatally before committing a page whose processing failed, so these
-// transient verdicts never reach the issue store as data findings — they
-// exist so the page result stays total.
-func chunkFailures(chunk []blobEntry, page *decodePage, err error) []indexedVerdict {
-	out := make([]indexedVerdict, len(chunk))
-	for i, e := range chunk {
-		r := &page.rows[e.idx]
-		out[i] = indexedVerdict{idx: e.idx, verdict: rowVerdict{
-			outcome: outcomeMismatch,
-			issues: []state.VerificationIssue{{
-				SourceID: i64ptr(r.id), InfoHash: r.infoHash,
-				Code: IssueCodeDecodeFailure, Stage: IssueStageDecode, Severity: state.IssueMismatch,
-				Details: map[string]any{"reason": sanitizeDetail(err.Error())},
-			}},
-		}}
-	}
-	return out
+	return out, nil
 }
 
 // verifyBlobRow decodes one fetched blob and applies the full check set:

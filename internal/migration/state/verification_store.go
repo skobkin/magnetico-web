@@ -273,6 +273,13 @@ type VerificationPageCommit struct {
 	// together with the extras findings, so a resumed pass can tell the
 	// extras scan already ran durably.
 	NewPhase string
+	// NewObservedSourceIDs/NewObservedTargetIDs record the CUMULATIVE
+	// classified-row counts (nil leaves the column unchanged; the decode
+	// pass never sets the source side). The content pass commits both so a
+	// resumed pass resumes with honest coverage mirrors — the counters alone
+	// cannot reconstruct how many source-only rows were classified.
+	NewObservedSourceIDs *int64
+	NewObservedTargetIDs *int64
 }
 
 // CommitVerificationPage applies one page commit. It returns false when the
@@ -321,6 +328,8 @@ func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in Verifica
             unverifiable_count = unverifiable_count + $8,
             assumed_single_count = assumed_single_count + $9,
             issue_count = issue_count + $10,
+            observed_source_ids = COALESCE($12, observed_source_ids),
+            observed_target_ids = COALESCE($13, observed_target_ids),
             updated_at = now()
         WHERE verification_id = $1::uuid AND state = 'running'
           AND source_checkpoint IS NOT DISTINCT FROM $2
@@ -330,6 +339,7 @@ func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in Verifica
 			in.NewSourceCheckpoint, in.NewTargetCheckpoint,
 			in.VerifiedDelta, in.MismatchDelta, in.UnverifiableDelta, in.AssumedSingleDelta,
 			inserted, in.NewPhase,
+			in.NewObservedSourceIDs, in.NewObservedTargetIDs,
 		)
 		if err != nil {
 			return err
