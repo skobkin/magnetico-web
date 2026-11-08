@@ -115,6 +115,13 @@ func Preflight(ctx context.Context, in Input) (*Result, error) {
 }
 
 func preflightLocked(ctx context.Context, pool *pgxpool.Pool, in Input) (*Result, error) {
+	// Bring the operational schema to the current version before touching
+	// run state: 04A (v1) databases upgrade transparently, fresh targets
+	// pass through (InitRun creates v2), and anything unexpected refuses
+	// before any DDL runs.
+	if err := state.EnsureOperationalSchema(ctx, pool); err != nil {
+		return nil, err
+	}
 	existing, err := state.Load(ctx, pool)
 	switch {
 	case errors.Is(err, state.ErrNoRunState):

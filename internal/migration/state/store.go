@@ -17,7 +17,9 @@ import (
 )
 
 // Progress is one row of `magnetico_migration.progress`: the authoritative,
-// transactional checkpoint and counters.
+// transactional checkpoint and counters. DataRevision is the monotonic
+// mutation counter (0 on a fresh run, incremented transactionally by every
+// retry mutation; verification records it to detect staleness).
 type Progress struct {
 	RunID           string
 	Phase           Phase
@@ -35,6 +37,7 @@ type Progress struct {
 	ErrorCount      int64
 	RunErrorCount   int64
 	BlobCount       int64
+	DataRevision    int64
 	DeferIndexes    bool
 	IndexesDeferred bool
 	OptionsRaw      json.RawMessage
@@ -58,7 +61,9 @@ type InitInput struct {
 }
 
 // migrationSchemaDDL creates the operational schema. Only ever executed on a
-// target whose Load classified as fresh, under the run lock.
+// target whose Load classified as fresh, under the run lock. The v2 pieces
+// (operationalSchemaV2DDL + the version marker) follow, so fresh runs are
+// born v2 — definitionally identical to an upgraded v1 database.
 var migrationSchemaDDL = []string{
 	`CREATE SCHEMA IF NOT EXISTS magnetico_migration`,
 	`CREATE TABLE IF NOT EXISTS magnetico_migration.progress (
@@ -82,7 +87,8 @@ var migrationSchemaDDL = []string{
         indexes_deferred BOOLEAN NOT NULL DEFAULT FALSE,
         options JSONB NOT NULL,
         started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        data_revision BIGINT NOT NULL DEFAULT 0
     )`,
 	`CREATE TABLE IF NOT EXISTS magnetico_migration.errors (
         id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -104,10 +110,15 @@ var migrationSchemaDDL = []string{
 }
 
 // expectedRunTables is the exact relation inventory of the operational
-// schema; anything else is corrupt state.
+// schema (v2); anything else is corrupt state.
 var expectedRunTables = map[string]bool{
-	"progress": true,
-	"errors":   true,
+	"progress":            true,
+	"errors":              true,
+	"operational_schema":  true,
+	"verification_runs":   true,
+	"verification_issues": true,
+	"retry_runs":          true,
+	"retry_attempts":      true,
 }
 
 // Load reads the run state, classifying absent (fresh-eligible), present
@@ -178,13 +189,13 @@ func Load(ctx context.Context, pool *pgxpool.Pool) (*Progress, error) {
 	err = pool.QueryRow(ctx, `SELECT run_id::text, phase, source_fingerprint, source_adapter,
             contract_version, codec_profile, expected_total, source_min_id, source_max_id,
             source_file_rows, last_processed_id, scanned_count, success_count, error_count,
-            run_error_count, blob_count, defer_indexes, indexes_deferred, options,
+            run_error_count, blob_count, data_revision, defer_indexes, indexes_deferred, options,
             started_at, updated_at
         FROM magnetico_migration.progress`).Scan(
 		&p.RunID, &phase, &p.FingerprintRaw, &p.SourceAdapter,
 		&p.ContractVersion, &p.CodecProfile, &p.ExpectedTotal, &p.SourceMinID, &p.SourceMaxID,
 		&p.SourceFileRows, &p.LastProcessedID, &p.ScannedCount, &p.SuccessCount, &p.ErrorCount,
-		&p.RunErrorCount, &p.BlobCount, &p.DeferIndexes, &p.IndexesDeferred, &p.OptionsRaw,
+		&p.RunErrorCount, &p.BlobCount, &p.DataRevision, &p.DeferIndexes, &p.IndexesDeferred, &p.OptionsRaw,
 		&p.StartedAt, &p.UpdatedAt,
 	)
 	if err != nil {
@@ -205,6 +216,10 @@ func Load(ctx context.Context, pool *pgxpool.Pool) (*Progress, error) {
 			fmt.Sprintf("scanned %d != success %d + error %d",
 				p.ScannedCount, p.SuccessCount, p.ErrorCount)}}
 	}
+	if p.DataRevision < 0 {
+		return nil, &StateError{Err: ErrRunStateCorrupt, Details: []string{
+			fmt.Sprintf("data_revision %d is negative", p.DataRevision)}}
+	}
 	return p, nil
 }
 
@@ -222,6 +237,15 @@ func InitRun(ctx context.Context, pool *pgxpool.Pool, in InitInput) (*Progress, 
 			if _, err := tx.Exec(ctx, stmt); err != nil {
 				return err
 			}
+		}
+		for _, stmt := range operationalSchemaV2DDL {
+			if _, err := tx.Exec(ctx, stmt); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, insertOperationalMarker,
+			OperationalSchemaComponent, OperationalSchemaVersion); err != nil {
+			return err
 		}
 		err := tx.QueryRow(ctx, `INSERT INTO magnetico_migration.progress (
                 run_id, phase, source_fingerprint, source_adapter, contract_version,
@@ -256,6 +280,7 @@ func InitRun(ctx context.Context, pool *pgxpool.Pool, in InitInput) (*Progress, 
 		SourceMaxID:     in.SourceMaxID,
 		SourceFileRows:  in.SourceFileRows,
 		LastProcessedID: in.SourceMinID - 1, // mirrors the INSERTed checkpoint
+		DataRevision:    0,
 		DeferIndexes:    in.DeferIndexes,
 		OptionsRaw:      opts,
 	}
@@ -291,7 +316,7 @@ func Reconcile(p *Progress, f Facts) error {
 	check(f.RowsBeyondCheckpoint == 0,
 		"%d torrent rows exist beyond checkpoint %d", f.RowsBeyondCheckpoint, p.LastProcessedID)
 	check(f.RecordErrors == p.ErrorCount,
-		"error registry %d != error_count %d", f.RecordErrors, p.ErrorCount)
+		"unresolved record errors %d != error_count %d", f.RecordErrors, p.ErrorCount)
 	check(f.UnresolvedIntegrity == p.RunErrorCount,
 		"unresolved integrity incidents %d != run_error_count %d",
 		f.UnresolvedIntegrity, p.RunErrorCount)

@@ -107,10 +107,14 @@ func EnsureIncident(ctx context.Context, pool *pgxpool.Pool, runID string, rec E
 	return inserted, nil
 }
 
-// CountErrors returns the registry counts compared by Reconcile.
+// CountErrors returns the registry counts compared by Reconcile. The record
+// count is UNRESOLVED record errors: after retry passes resolve their
+// records, progress.error_count must track the unresolved set while the full
+// history (resolved rows included) stays in the registry. Backward
+// compatible with 04A data, where record errors always start unresolved.
 func CountErrors(ctx context.Context, q queryer, runID string) (record int64, unresolvedIntegrity int64, err error) {
 	if err := q.QueryRow(ctx, `SELECT
-            COUNT(*) FILTER (WHERE scope = 'record'),
+            COUNT(*) FILTER (WHERE scope = 'record' AND NOT resolved),
             COUNT(*) FILTER (WHERE scope = 'run' AND category = 'integrity' AND NOT resolved)
         FROM magnetico_migration.errors
         WHERE run_id = $1::uuid`, runID).Scan(&record, &unresolvedIntegrity); err != nil {
