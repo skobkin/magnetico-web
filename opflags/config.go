@@ -3,6 +3,7 @@ package opflags
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -174,7 +175,7 @@ func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 	var present map[string]any
 	if err := yaml.Unmarshal(data, &present); err != nil {
-		return fmt.Errorf("config file: %w", err)
+		return fmt.Errorf("config file: %s", redactSecrets(err.Error()))
 	}
 
 	var file struct {
@@ -183,7 +184,7 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		MigrateSourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
 	}
 	if err := yaml.UnmarshalWithOptions(data, &file, yaml.Strict()); err != nil {
-		return fmt.Errorf("config file: %w", err)
+		return fmt.Errorf("config file: %s", redactSecrets(err.Error()))
 	}
 
 	for _, s := range crawlSettings {
@@ -361,4 +362,27 @@ func explicitInCommand(c *flags.Command) map[string]bool {
 		}
 	}
 	return set
+}
+
+var (
+	// urlPasswordPattern matches the userinfo password of any scheme-qualified
+	// URL (`scheme://user:secret@host`) — the shape of every DSN in the
+	// configuration file.
+	urlPasswordPattern = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://[^:/@\s]+:)[^@\s]+@`)
+	// kvPasswordPattern matches a password given as a key/value pair, in
+	// PostgreSQL key-value DSNs, URL query parameters and YAML keys alike
+	// (`password=secret`, `pwd: secret`).
+	kvPasswordPattern = regexp.MustCompile(`(?i)\b(password|pwd)\b(\s*[=:]\s*)\S+`)
+)
+
+// redactSecrets masks credential material that YAML diagnostics echo from
+// the configuration file's source lines: the yaml library renders errors
+// with the offending line (and a caret) quoted verbatim, so a typo on one
+// line would otherwise print a neighboring DSN — password included — to the
+// terminal and any log capture. Only the secret is masked; the diagnostic's
+// line numbers, keys and error text are preserved.
+func redactSecrets(msg string) string {
+	msg = urlPasswordPattern.ReplaceAllString(msg, "${1}xxxxx@")
+	msg = kvPasswordPattern.ReplaceAllString(msg, "${1}${2}xxxxx")
+	return msg
 }

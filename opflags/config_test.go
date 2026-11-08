@@ -308,3 +308,74 @@ func TestApplyConfig_MissingFileError(t *testing.T) {
 		t.Error("expected an error for a missing config file, got nil")
 	}
 }
+
+// A typo on one config line must not echo a neighboring DSN's password:
+// yaml diagnostics quote source lines verbatim, so every diagnostic that
+// can carry file content passes through redactSecrets.
+func TestApplyYamlConfig_RedactsSecretsFromDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	// Unknown key: the strict decode fails and its diagnostic quotes the
+	// offending line — which carries its own credential — plus context.
+	data := []byte("migrateSourceDatabaseURL: postgres://src:SourceSecret@localhost/legacy\n" +
+		"unknownSetting: postgres://tgt:TargetSecret@localhost/t\n")
+	o := &OpFlags{}
+	err := o.applyYamlConfig(data, map[string]bool{})
+	if err == nil {
+		t.Fatal("applyYamlConfig() error = nil, want an unknown-setting error")
+	}
+	assertRedacted := func(msg string) {
+		t.Helper()
+		for _, secret := range []string{"SourceSecret", "TargetSecret"} {
+			if strings.Contains(msg, secret) {
+				t.Errorf("diagnostic leaked secret %q: %s", secret, msg)
+			}
+		}
+	}
+	assertRedacted(err.Error())
+	if !strings.Contains(err.Error(), "unknownSetting") {
+		t.Errorf("diagnostic lost the offending key: %s", err.Error())
+	}
+
+	// Invalid YAML syntax: the generic decode fails the same way.
+	o = &OpFlags{}
+	err = o.applyYamlConfig([]byte("migrateSourceDatabaseURL: postgres://src:SourceSecret@localhost/legacy\nfoo: [::"), map[string]bool{})
+	if err == nil {
+		t.Fatal("applyYamlConfig(invalid yaml) error = nil, want a syntax error")
+	}
+	assertRedacted(err.Error())
+}
+
+func TestRedactSecrets(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, in, want string }{
+		{
+			name: "url userinfo password",
+			in:   `line 1: migrateSourceDatabaseURL: postgres://src:Sup3rSecret@localhost/legacy`,
+			want: `line 1: migrateSourceDatabaseURL: postgres://src:xxxxx@localhost/legacy`,
+		},
+		{
+			name: "url without password untouched",
+			in:   `databaseURL: postgres://localhost:5432/db`,
+			want: `databaseURL: postgres://localhost:5432/db`,
+		},
+		{
+			name: "key-value DSN password",
+			in:   `source: host=localhost port=5432 password=Sup3rSecret sslmode=disable`,
+			want: `source: host=localhost port=5432 password=xxxxx sslmode=disable`,
+		},
+		{
+			name: "yaml key colon form",
+			in:   "password: Sup3rSecret",
+			want: "password: xxxxx",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := redactSecrets(tc.in); got != tc.want {
+				t.Errorf("redactSecrets() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
