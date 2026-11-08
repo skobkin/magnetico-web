@@ -1013,7 +1013,9 @@ func compareMetadata(srcRow *original.TorrentRow, tr *decodeRow) []string {
 // classifySourceOnly classifies a source row absent from the target:
 // unresolved-record (coverage) when the 04A registry still holds the ID,
 // missing-target (mismatch) otherwise. It never increments target-row
-// counters — there is no target row.
+// counters — there is no target row: the mismatch severity lives on the
+// issue alone, so the target-side observed coverage stays exact across
+// commits and resumes.
 func classifySourceOnly(ctx context.Context, srcRow *original.TorrentRow, unit *contentUnitResult, reg *registryIter) error {
 	unit.sourceObserved++
 	id, ok, err := reg.peek(ctx)
@@ -1031,7 +1033,6 @@ func classifySourceOnly(ctx context.Context, srcRow *original.TorrentRow, unit *
 		issue.Severity = state.IssueCoverage
 		issue.Details = map[string]any{"reason": "unresolved record error — no target row"}
 	} else {
-		unit.mismatch++
 		issue.Code = IssueCodeMissingTargetRow
 		issue.Severity = state.IssueMismatch
 		issue.Details = map[string]any{"reason": "source torrent row absent from target"}

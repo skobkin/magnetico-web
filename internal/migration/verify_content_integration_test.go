@@ -4,10 +4,11 @@ package migration
 // shapes, duplicate paths, source-readonly proof), every classification
 // (missing/extra/mismatched metadata, missing atypical blob, unresolved
 // registry membership, not-representable overflow, NULL-owned source file
-// rows), fingerprint drift as info provenance (a pass WITH drift under full
-// equality), interrupt/resume with Equivalent-based adoption, refusal to
-// resume after source content-anchor changes, latest-run authority, and
-// incomplete-import refusals.
+// rows), source-only rows carried by their issues alone (target-side
+// counters and coverage mirrors stay exact), fingerprint drift as info
+// provenance (a pass WITH drift under full equality), interrupt/resume with
+// Equivalent-based adoption, refusal to resume after source content-anchor
+// changes, latest-run authority, and incomplete-import refusals.
 
 import (
 	"context"
@@ -207,7 +208,10 @@ func TestVerifyContentFindingsFail(t *testing.T) {
 			},
 			wantCode:     IssueCodeMissingTargetRow,
 			wantSeverity: state.IssueMismatch,
-			wantMismatch: 1,
+			// Source-only rows carry their severity on the issue alone; the
+			// mismatch COUNTER stays target-side (0 here — the two surviving
+			// rows verify).
+			wantMismatch: 0,
 		},
 		{
 			name: "extra target row is extra_target_row",
@@ -364,6 +368,81 @@ func TestVerifyContentFindingsFail(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestVerifyContentSourceOnlyRowsStayOutOfTargetCounters: a source row with
+// no target row (deleted mid-range → merge phase; valid row beyond the last
+// target ID → drain phase) is carried by its missing_target_row issue alone.
+// It must never move the target-side counters or coverage mirrors — otherwise
+// observed_target_ids exceeds the target's actual row count and finalize
+// grows a spurious coverage finding (Codex review iteration 1, finding 4).
+func TestVerifyContentSourceOnlyRowsStayOutOfTargetCounters(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedMultiFileTorrent(t, src, 1, "multi", [][2]any{
+		{"a/one.bin", int64(10)}, {"a/one.bin", int64(20)}, {"b/two.bin", int64(30)},
+	})
+	seedSourceTorrent(t, src, 2, "typical.bin", 40, 1700000002)
+	seedSourceFile(t, src, 2, "typical.bin", 40)
+	seedSourceTorrent(t, src, 4, "atypical", 50, 1700000004)
+	seedSourceFile(t, src, 4, "different.bin", 50)
+	importAll(t, src, tgt)
+
+	// Merge-phase source-only row: target row 2 deleted mid-range.
+	execTargetSQL(t, tgt, `DELETE FROM magneticod.torrents WHERE id = 2`)
+	execTargetSQL(t, tgt, `UPDATE magnetico_migration.progress
+        SET success_count = success_count - 1, scanned_count = scanned_count - 1`)
+	// Drain-phase source-only row: a valid source row beyond the last target
+	// ID. Seeding it after the import makes the recorded import fingerprint
+	// stale — expected drift provenance (info), not a blocker.
+	seedSourceTorrent(t, src, 5, "late.bin", 60, 1700000005)
+	seedSourceFile(t, src, 5, "late.bin", 60)
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err == nil || !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("error = %v, want ErrVerificationFindings", err)
+	}
+	if res.Pass {
+		t.Fatal("pass = true, want completed_fail")
+	}
+	// Target-side accounting: exactly the two surviving target rows.
+	if res.ObservedTargets != 2 || res.Verified != 2 || res.Mismatched != 0 {
+		t.Fatalf("result = observed %d verified %d mismatched %d, want 2/2/0",
+			res.ObservedTargets, res.Verified, res.Mismatched)
+	}
+	// All four source rows classified, none folded into target counters.
+	if res.SourceObserved != 4 {
+		t.Fatalf("source observed = %d, want 4", res.SourceObserved)
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedFail {
+		t.Fatalf("run state = %s, want completed_fail", run.State)
+	}
+	// The durable mirrors equal the in-memory result (target rows only).
+	if run.ObservedTargetIDs == nil || *run.ObservedTargetIDs != 2 ||
+		run.ObservedSourceIDs == nil || *run.ObservedSourceIDs != 4 {
+		t.Fatalf("durable coverage = %v/%v, want 2/4", run.ObservedTargetIDs, run.ObservedSourceIDs)
+	}
+	if run.MismatchCount != 0 || run.VerifiedCount != 2 {
+		t.Fatalf("durable counters = mismatch %d verified %d, want 0/2",
+			run.MismatchCount, run.VerifiedCount)
+	}
+	// Exactly two missing_target_row issues plus the drift provenance — and
+	// NO coverage-severity finding (target coverage is exact).
+	codes := issueCodes(issues)
+	if len(issues) != 3 || codes[IssueCodeMissingTargetRow] != 2 || codes[IssueCodeSourceDrift] != 1 {
+		t.Fatalf("issues = %+v, want two missing_target_row + one drift", issues)
+	}
+	if codes[IssueCodeCoverage] != 0 {
+		t.Fatalf("issues = %+v, want no coverage finding", issues)
+	}
+	for _, is := range issues {
+		if is.Code == IssueCodeMissingTargetRow && is.Severity != state.IssueMismatch {
+			t.Fatalf("%s severity = %s, want mismatch", is.Code, is.Severity)
+		}
 	}
 }
 
