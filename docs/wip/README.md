@@ -8,6 +8,7 @@ This directory contains **implementation assignments**, not automatic execution 
 | 2 | [`02-upstream-cleanup.md`](02-upstream-cleanup.md) | Scoped Go crawler without old web/backends/automatic legacy schema migration; stop for review |
 | 3 | [`03-storage-persistence.md`](03-storage-persistence.md) | Versioned codec, fresh PostgreSQL persistence and integration tests; stop for review |
 | 4 | [`04A-core-migrator.md`](04A-core-migrator.md) | Core offline migrator: original v0.12.0 source → 0.8.0 target with checkpoints, error registry, crash/resume, index deferral ([report](04A-core-migrator-report.md)); stop for review |
+| 5 | [`04B-verification-recovery.md`](04B-verification-recovery.md) | Full verification (`verify-decode`, `verify-content`) and targeted retry (`torrents retry-errors`) with durable resumable state ([report](04B-verification-recovery-report.md)); stop for review |
 
 Approved reference contracts live in [`docs/specs/`](../specs/): [`wire-format-v1.md`](../specs/wire-format-v1.md) and [`postgresql-persistence-v2.md`](../specs/postgresql-persistence-v2.md).
 
