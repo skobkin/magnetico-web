@@ -461,7 +461,11 @@ func RetryErrors(ctx context.Context, in RetryErrorsInput) (*RetryResult, error)
 					return nil, nil, cause
 				}
 				if runCtx.Err() != nil {
-					return nil, nil, ErrInterrupted
+					// Graceful interruption must DURABLY mark the pass
+					// interrupted, exactly like every other interrupt path —
+					// returning the sentinel alone leaves retry_runs in
+					// state 'running' (Codex review iteration 3, finding 3).
+					return nil, nil, interruptRetry()
 				}
 				return nil, nil, verificationFatal("retry", derefInt64(cursor), err)
 			}

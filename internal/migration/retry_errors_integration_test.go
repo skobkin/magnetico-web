@@ -634,3 +634,62 @@ func TestRetryErrorsRequiresCompletedImport(t *testing.T) {
 		t.Fatalf("error = %v, want ErrRunNotComplete", err)
 	}
 }
+
+// TestRetryErrorsInterruptDuringWindowFetchPersists: cancelling between
+// the windows of one multi-window batch surfaces at the NEXT source
+// fetch; that path must durably mark the pass interrupted
+// (retry_runs.state = interrupted), not merely return the sentinel
+// (Codex review iteration 3, finding 3 — the seam extraction initially
+// lost the durable mark, leaving the run in state 'running' with exit 2).
+func TestRetryErrorsInterruptDuringWindowFetchPersists(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Two repairable rows with ~1.1 MiB of path data each: under the 1 MiB
+	// window budget the FIRST row alone trips the window budget at its own
+	// group boundary, so the batch splits into window {2} + remaining {3}
+	// and the pass must fetch the source again right after the first settle.
+	// (Fewer bytes would let BOTH rows ride in one window — the budget cut
+	// only lands at the next torrent boundary — and the interruption would
+	// then surface at the settle commit's own interrupt path, which already
+	// persists durably; the fetch path would never run.)
+	bigInvalid := func(id int32) {
+		seedSourceTorrent(t, src, id, fmt.Sprintf("bad%d", id), 100, 1700000002)
+		for i := 0; i < 22; i++ {
+			seedSourceFile(t, src, id, fmt.Sprintf("d%d/%s", i, randomASCIIPath(t, 50_000)), int64(1+i))
+		}
+	}
+	seedSourceTorrent(t, src, 1, "ok1.bin", 40, 1700000001)
+	seedSourceFile(t, src, 1, "ok1.bin", 40)
+	bigInvalid(2)
+	bigInvalid(3)
+	importAll(t, src, tgt)
+
+	canceled := false
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := retryPass(t, ctx, src, tgt, func(in *RetryErrorsInput) {
+		in.BatchSize = 10
+		in.MaxInflightBytes = 1 << 20
+		in.Progress = func(p RetryProgress) {
+			// Fires after window 1's only settle completes; the next source
+			// fetch is the first statement to see the cancelled context.
+			if !canceled && p.Attempted >= 1 {
+				canceled = true
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	interrupted := latestRetryRun(t, tgt)
+	if interrupted.State != state.RetryInterrupted {
+		t.Fatalf("pass state = %s, want interrupted (the durable mark must survive a mid-batch interruption)",
+			interrupted.State)
+	}
+	if interrupted.AttemptedCount != 1 {
+		t.Fatalf("attempted = %d, want 1 (window 1 settled, window 2 never fetched)",
+			interrupted.AttemptedCount)
+	}
+}
