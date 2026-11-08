@@ -13,3 +13,6 @@ go.work
 go.work.sum
 magnetico
 vendor/
+
+# Owner-provided read-only sample dump (real-data extract; never commit).
+/magneticod-sample.sql.gz
