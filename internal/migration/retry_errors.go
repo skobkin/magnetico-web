@@ -449,71 +449,30 @@ func RetryErrors(ctx context.Context, in RetryErrorsInput) (*RetryResult, error)
 		}
 
 		// Fetch the batch set-oriented (budget-split via `remaining`) and
-		// settle each window immediately, ascending — the batch's source
-		// rows never accumulate beyond one window (the window budget bounds
-		// them; nothing piles the whole batch in memory). Registry IDs the
-		// source stops returning (deleted between the registry query and the
-		// fetch) settle as missing_source, interleaved below each fetched ID
-		// so the pass cursor never moves backward: FetchByIDs returns
-		// ascending prefixes with the ascending suffix in `remaining`, so an
-		// unsettled registry ID below the current fetched ID has had its
-		// chance in an earlier window and is genuinely absent.
-		next := 0 // first ids index not yet settled
-		todo := ids
-		for len(todo) > 0 {
-			w, remaining, err := src.FetchByIDs(runCtx, todo, wlimits)
+		// settle each window fully before fetching the next: the batch's
+		// source rows never accumulate beyond one window, whatever the
+		// batch size. Fetch failures keep their infrastructure mapping
+		// (fatal cause, interruption, fatal wrap); settle errors propagate
+		// as-is — exactly as before the extraction.
+		fetch := func(ctx context.Context, want []int64, limits original.WindowLimits) (*original.Window, []int64, error) {
+			w, remaining, err := src.FetchByIDs(ctx, want, limits)
 			if err != nil {
 				if cause := fatalCause(runCtx); cause != nil {
-					return nil, cause
+					return nil, nil, cause
 				}
 				if runCtx.Err() != nil {
-					return nil, interruptRetry()
+					return nil, nil, ErrInterrupted
 				}
-				return nil, verificationFatal("retry", derefInt64(cursor), err)
+				return nil, nil, verificationFatal("retry", derefInt64(cursor), err)
 			}
-			for i := range w.Torrents {
-				t := &w.Torrents[i]
-				id := int64(t.ID)
-				for next < len(ids) && ids[next] < id {
-					// Absent from the source: explicit missing_source — the
-					// disappearance is diagnosed, never silently excused.
-					if err := settle(ids[next], nil, nil, nil); err != nil {
-						if errors.Is(err, ErrInterrupted) || fatalCause(runCtx) != nil {
-							return nil, err
-						}
-						return nil, err
-					}
-					report()
-					next++
-				}
-				var ov *original.Overflow
-				if o, has := w.Overflow[t.ID]; has {
-					ov = &o
-				}
-				if err := settle(id, t, w.Files[t.ID], ov); err != nil {
-					if errors.Is(err, ErrInterrupted) || fatalCause(runCtx) != nil {
-						return nil, err
-					}
-					return nil, err
-				}
-				afterID = id
-				report()
-				next++
-			}
-			todo = remaining
+			return w, remaining, nil
 		}
-		// Registry IDs after the last window (or every ID, when the source
-		// returned nothing): missing_source, ascending.
-		for next < len(ids) {
-			if err := settle(ids[next], nil, nil, nil); err != nil {
-				if errors.Is(err, ErrInterrupted) || fatalCause(runCtx) != nil {
-					return nil, err
-				}
-				return nil, err
-			}
-			afterID = ids[next]
-			report()
-			next++
+		last, settled, err := settleBatchWindows(runCtx, ids, fetch, wlimits, settle, report)
+		if err != nil {
+			return nil, err
+		}
+		if settled {
+			afterID = last
 		}
 	}
 
@@ -555,6 +514,77 @@ func RetryErrors(ctx context.Context, in RetryErrorsInput) (*RetryResult, error)
 		return result, fmt.Errorf("%w (%d still unresolved; pass %s)", ErrRetryRemaining, remaining, run.RetryID)
 	}
 	return result, nil
+}
+
+// retryFetch fetches one budget-bounded window of a batch's source rows
+// (the shape of original.Store.FetchByIDs).
+type retryFetch func(ctx context.Context, ids []int64, limits original.WindowLimits) (*original.Window, []int64, error)
+
+// retrySettle settles one batch ID against the target.
+type retrySettle func(sourceID int64, row *original.TorrentRow, files []original.FileRow, ov *original.Overflow) error
+
+// settleBatchWindows fetches the batch's ID set window by window and
+// settles each window FULLY before the next fetch (Codex review iteration
+// 1, finding 6; the ordering property is pinned by
+// TestSettleBatchWindowsSettlesPerWindow): the batch's source rows never
+// accumulate beyond one window, so the window budget bounds memory
+// regardless of batch size. Registry IDs the source stops returning
+// (deleted between the registry query and the fetch) settle as
+// missing_source, interleaved below each fetched ID so the pass cursor
+// never moves backward — FetchByIDs returns ascending prefixes with the
+// ascending suffix in `remaining`, so an unsettled registry ID below the
+// current fetched ID has had its chance in an earlier window and is
+// genuinely absent — and IDs after the last window (or all of them, when
+// the source returned nothing) settle ascending in the tail. Settlement
+// covers a strict ascending prefix of ids; the returned last ID is
+// ids[settled count - 1], with settled reporting whether ANY ID settled so
+// the caller advances its batch cursor only then. Fetch and settle errors
+// propagate verbatim; interrupt/fatal mapping stays with the caller.
+func settleBatchWindows(ctx context.Context, ids []int64, fetch retryFetch, limits original.WindowLimits, settle retrySettle, report func()) (last int64, settled bool, err error) {
+	next := 0 // first ids index not yet settled
+	todo := ids
+	for len(todo) > 0 {
+		w, remaining, err := fetch(ctx, todo, limits)
+		if err != nil {
+			return 0, false, err
+		}
+		for i := range w.Torrents {
+			t := &w.Torrents[i]
+			id := int64(t.ID)
+			for next < len(ids) && ids[next] < id {
+				// Absent from the source: explicit missing_source — the
+				// disappearance is diagnosed, never silently excused.
+				if err := settle(ids[next], nil, nil, nil); err != nil {
+					return 0, false, err
+				}
+				report()
+				next++
+			}
+			var ov *original.Overflow
+			if o, has := w.Overflow[t.ID]; has {
+				ov = &o
+			}
+			if err := settle(id, t, w.Files[t.ID], ov); err != nil {
+				return 0, false, err
+			}
+			report()
+			next++
+		}
+		todo = remaining
+	}
+	// Registry IDs after the last window (or every ID, when the source
+	// returned nothing): missing_source, ascending.
+	for next < len(ids) {
+		if err := settle(ids[next], nil, nil, nil); err != nil {
+			return 0, false, err
+		}
+		report()
+		next++
+	}
+	if next > 0 {
+		return ids[next-1], true, nil
+	}
+	return 0, false, nil
 }
 
 // retryBuildRecord mirrors the import adapter's conversion for one fetched
