@@ -1070,18 +1070,22 @@ func (pc *pageContent) decodeEntry(e *blobEntry, blobs map[int64][]byte) *tpCont
 	return &tpContent{files: files}
 }
 
-// decodedBytes estimates one decoded row's live memory: its decoded file
-// lists' path bytes plus a small per-file constant for slice and size
-// bookkeeping. It is the retention currency of a serving segment — the
-// inflight budget bounds raw (compressed) blob bytes, which do not cap
-// decoded content.
+// decodedBytes estimates one decoded row's live memory: the []codec.File
+// backing array at slice CAPACITY (24 bytes per entry: 16-byte string
+// header + 8-byte size) plus each path's own string data. It is the
+// retention currency of a serving segment — the inflight budget bounds
+// raw (compressed) blob bytes, which do not cap decoded content. Charging
+// capacity, not length, and the full entry size, keeps the estimate honest
+// for append-grown slices of tiny paths (Codex review iteration 3,
+// finding 2: 30,000 one-byte paths were charged 510 KB while their real
+// arrays held ~740 KB).
 func decodedBytes(c *tpContent) int64 {
 	if c == nil || c.files == nil {
 		return 0
 	}
-	var n int64
+	n := int64(cap(c.files)) * 24
 	for _, f := range c.files {
-		n += int64(len(f.Path)) + 16
+		n += int64(len(f.Path))
 	}
 	return n
 }

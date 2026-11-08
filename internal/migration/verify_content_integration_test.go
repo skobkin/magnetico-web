@@ -1113,3 +1113,71 @@ func TestVerifyContentExtrasResumeKeepsOrphanCount(t *testing.T) {
 		t.Fatalf("resumed orphan count = %d, want 1 (restored from the durable issue)", res2.OrphanTargetBlobs)
 	}
 }
+
+// TestPageContentAccountingCoversFileArrays: the decoded-segment budget is
+// charged with the REAL retained memory — the []codec.File backing array
+// at capacity plus path data — not a per-file lower bound. Two rows of
+// 30,000 one-byte duplicate paths each fit the 1 MiB budget individually
+// but not jointly under honest accounting: the segment cut must admit
+// only the first (Codex review iteration 3, finding 2 — the earlier
+// estimator charged 17 bytes per file, admitted both, and retained
+// 1.74 MB of arrays).
+func TestPageContentAccountingCoversFileArrays(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	const filesPerRow = 30_000
+	// 30,000 duplicate one-byte paths per torrent (duplicate paths are
+	// valid: the canonical compare is a multiset). Bulk-seeded in one
+	// statement per row.
+	for id := int32(1); id <= 2; id++ {
+		total := int64(filesPerRow) * int64(filesPerRow+1) / 2
+		seedSourceTorrent(t, src, id, fmt.Sprintf("manyfiles%d", id), total, 1700000002)
+		execSourceSQL(t, src, `INSERT INTO magneticod.files (torrent_id, path, size)
+            SELECT $1, 'a', g FROM generate_series(1, $2) g`, id, int32(filesPerRow))
+	}
+	importAll(t, src, tgt)
+
+	pool := poolForRunner(t, tgt)
+	defer pool.Close()
+	ctx := context.Background()
+	tp, err := readDecodePage(ctx, pool, 0, 4)
+	if err != nil {
+		t.Fatalf("readDecodePage() error = %v", err)
+	}
+	if len(tp.rows) != 2 {
+		t.Fatalf("page rows = %d, want 2", len(tp.rows))
+	}
+	pc := newPageContent(ctx, pool, tp, codec.DefaultLimits(), 1<<20)
+	if len(pc.entries) != 2 {
+		t.Fatalf("blob-backed entries = %d, want 2", len(pc.entries))
+	}
+
+	// The first window must hold ONLY the first row: each row fits solo,
+	// but two admitted together exceed the budget under honest accounting.
+	tc, err := pc.get(0)
+	if err != nil || tc == nil || tc.files == nil {
+		t.Fatalf("get(0) = %v, %v; want decoded content", tc, err)
+	}
+	if pc.curHi != 1 {
+		t.Fatalf("first window covers rows [0,%d), want [0,1) — the budget admitted both rows jointly",
+			pc.curHi)
+	}
+	if perRow := decodedBytes(tc); perRow > 1<<20 {
+		t.Fatalf("single row charged %d, want within the 1 MiB budget (solo admission)", perRow)
+	}
+
+	// Walking the page keeps every window within the budget.
+	for idx := 0; idx < len(tp.rows); idx++ {
+		if _, err := pc.get(idx); err != nil {
+			t.Fatalf("get(%d) error = %v", idx, err)
+		}
+		var retained int64
+		for _, c := range pc.cur {
+			retained += decodedBytes(c)
+		}
+		if retained > 1<<20 {
+			t.Fatalf("get(%d): retained decoded bytes = %d, budget %d", idx, retained, int64(1<<20))
+		}
+	}
+}
