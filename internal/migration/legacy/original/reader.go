@@ -3,6 +3,9 @@ package original
 import (
 	"context"
 	"fmt"
+	"sort"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // TorrentRow is one source `magneticod.torrents` row. Source-only type:
@@ -87,7 +90,7 @@ type Overflow struct {
 // Window is one keyset page of source data: the torrents with
 // afterID < id <= lastID, their file rows grouped by torrent ID (duplicates
 // preserved in source order), plus the aggregate accounting for rows that
-// must not be retained.
+// must not be retained. FetchByIDs reuses the type for a sparse ID set.
 type Window struct {
 	Torrents []TorrentRow
 	Files    map[int32][]FileRow
@@ -130,21 +133,57 @@ func (w *Window) Truncated() bool { return w.truncated }
 // maxFiles/limits semantics: see WindowLimits. limit is the keyset page
 // size (the batch), independent of the retention caps.
 func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits WindowLimits) (*Window, error) {
+	return s.readWindow(ctx, afterID, limit, limits, false)
+}
+
+// WindowSnapshot is Window read inside ONE `REPEATABLE READ READ ONLY`
+// transaction, so a window's metadata and file rows come from a single
+// consistent per-database snapshot (the verification content pass, 04B,
+// reads the source page by page this way). Snapshots are per-window: two
+// windows are never cross-atomic, and no cross-database snapshot pair is
+// ever atomic — operator-enforced source immutability stays essential.
+func (s *Source) WindowSnapshot(ctx context.Context, afterID int64, limit int, limits WindowLimits) (*Window, error) {
+	return s.readWindow(ctx, afterID, limit, limits, true)
+}
+
+// queryer (the package-level pool/tx read interface, original.go) covers
+// both read paths below.
+
+func validateWindowLimits(limit int, limits WindowLimits) error {
 	if limit <= 0 {
-		return nil, fmt.Errorf("window limit must be positive, got %d", limit)
+		return fmt.Errorf("window limit must be positive, got %d", limit)
 	}
 	if limits.MaxFiles <= 0 {
-		return nil, fmt.Errorf("MaxFiles must be positive, got %d", limits.MaxFiles)
+		return fmt.Errorf("MaxFiles must be positive, got %d", limits.MaxFiles)
 	}
 	if limits.MaxPathBytes <= 0 {
-		return nil, fmt.Errorf("MaxPathBytes must be positive, got %d", limits.MaxPathBytes)
+		return fmt.Errorf("MaxPathBytes must be positive, got %d", limits.MaxPathBytes)
+	}
+	return nil
+}
+
+func (s *Source) readWindow(ctx context.Context, afterID int64, limit int, limits WindowLimits, snapshot bool) (*Window, error) {
+	if err := validateWindowLimits(limit, limits); err != nil {
+		return nil, err
+	}
+
+	var q queryer = s.pool
+	var tx pgx.Tx
+	if snapshot {
+		var err error
+		tx, err = s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }() // no-op after Commit
+		q = tx
 	}
 
 	w := &Window{Files: map[int32][]FileRow{}}
 	// $1 is cast to bigint explicitly: uncast, PostgreSQL reports the
 	// parameter as int4 (from the id column context) and pgx refuses to
 	// encode the MinInt32-1 start cursor into it.
-	rows, err := s.pool.Query(ctx, `SELECT id, info_hash, name, total_size, discovered_on
+	rows, err := q.Query(ctx, `SELECT id, info_hash, name, total_size, discovered_on
         FROM magneticod.torrents
         WHERE id > $1::bigint
         ORDER BY id
@@ -154,56 +193,190 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 	}
 	// scanned marks the torrents retained in this window: the files pass
 	// uses it to attach rows and to recognize orphans.
-	scanned := make(map[int32]bool)
-	for rows.Next() {
-		var t TorrentRow
-		if err := rows.Scan(&t.ID, &t.InfoHash, &t.Name, &t.TotalSize, &t.DiscoveredOn); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		// The window budget bounds the METADATA scan too, not just the file
-		// rows: with a keyset page far larger than the budget, torrents with
-		// long names — above all torrents with no files, which never reach
-		// the file-row pass — would otherwise be retained in full before any
-		// budget check. The weight is charged BEFORE retention; a torrent
-		// that would push an occupied window past the budget is dropped from
-		// the wire together with the rows after it (they arrive in the next
-		// keyset window — the caller's cursor stops at the last kept torrent,
-		// so nothing is skipped and nothing is duplicated). An EMPTY window
-		// always admits its first torrent: one whose metadata alone exceeds
-		// the budget is the read-side mirror of the pipeline's oversized-solo
-		// admission, and refusing it would stall the run forever.
-		weight := retainedTorrentOverhead + int64(len(t.Name))
-		if limits.WindowMaxBytes > 0 && len(w.Torrents) > 0 &&
-			w.RetainedBytes+weight > limits.WindowMaxBytes {
-			w.truncated = true
-			break
-		}
-		w.Torrents = append(w.Torrents, t)
-		scanned[t.ID] = true
-		w.RetainedBytes += weight
-	}
+	scanned, truncated, err := scanMetadata(rows, w, limits)
 	rows.Close()
-	if err := rows.Err(); err != nil {
+	if err != nil {
 		return nil, err
 	}
+	if truncated {
+		w.truncated = true
+	}
 	if len(w.Torrents) == 0 {
-		return w, nil
+		return w, commitIfSnapshot(ctx, tx, snapshot)
 	}
 	lastID := w.Torrents[len(w.Torrents)-1].ID
 
 	// One bounded, set-oriented files query for the whole window; NULL
 	// torrent_id rows fail the range comparison and are therefore excluded
 	// here (they are counted at preflight and in the fingerprint).
-	frows, err := s.pool.Query(ctx, `SELECT id, torrent_id, size, path
+	frows, err := q.Query(ctx, `SELECT id, torrent_id, size, path
         FROM magneticod.files
         WHERE torrent_id > $1::bigint AND torrent_id <= $2
         ORDER BY torrent_id, id`, afterID, lastID)
 	if err != nil {
 		return nil, err
 	}
-	defer frows.Close()
+	lastKept, filesStopped, err := readFiles(frows, w, scanned, limits)
+	frows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if filesStopped {
+		// The read stopped early at a group boundary: that group is complete
+		// and kept; everything after it was never read and moves to the next
+		// window. Truncate the torrent list to the read range.
+		w.truncated = true
+		w.truncateAfter(lastKept)
+	}
+	return w, commitIfSnapshot(ctx, tx, snapshot)
+}
 
+func commitIfSnapshot(ctx context.Context, tx pgx.Tx, snapshot bool) error {
+	if !snapshot {
+		return nil
+	}
+	return tx.Commit(ctx)
+}
+
+// FetchByIDs fetches a sparse, possibly unordered ID set set-oriented: one
+// metadata query by ID list, one files query for the kept IDs — never one
+// query per torrent. The returned Window has the same overflow-drain and
+// byte-budget semantics as Window: when the retained weight would exceed
+// WindowLimits.WindowMaxBytes, the scan stops at a torrent boundary and the
+// requested IDs beyond the cut come back as `remaining` for a follow-up
+// call (an empty result always admits its first torrent whatever it
+// weighs). Torrents whose file rows exceed the caps are drained and
+// reported in Window.Overflow.
+//
+// Requested IDs absent from the source are simply absent from the result —
+// the caller decides what missing means (a retry pass reports
+// missing_source; it never guesses). File rows of an ID dropped by the
+// budget cut are neither fetched nor counted: they belong to the follow-up
+// batch, so they can never masquerade as orphans.
+func (s *Source) FetchByIDs(ctx context.Context, ids []int64, limits WindowLimits) (*Window, []int64, error) {
+	ids = normalizedIDs(ids)
+	if len(ids) == 0 {
+		return &Window{Files: map[int32][]FileRow{}}, nil, nil
+	}
+	if err := validateWindowLimits(len(ids), limits); err != nil {
+		return nil, nil, err
+	}
+
+	w := &Window{Files: map[int32][]FileRow{}}
+	rows, err := s.pool.Query(ctx, `SELECT id, info_hash, name, total_size, discovered_on
+        FROM magneticod.torrents
+        WHERE id = ANY($1::bigint[])
+        ORDER BY id`, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	scanned, truncated, err := scanMetadata(rows, w, limits)
+	rows.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var remaining []int64
+	if truncated && len(w.Torrents) > 0 {
+		lastKept := int64(w.Torrents[len(w.Torrents)-1].ID)
+		remaining = idsAfter(ids, lastKept)
+	}
+	if len(w.Torrents) == 0 {
+		// None of the requested IDs exists (or the first alone tripped the
+		// budget — impossible: an empty window admits its first torrent).
+		return w, remaining, nil
+	}
+
+	kept := make([]int64, 0, len(w.Torrents))
+	for _, t := range w.Torrents {
+		kept = append(kept, int64(t.ID))
+	}
+	frows, err := s.pool.Query(ctx, `SELECT id, torrent_id, size, path
+        FROM magneticod.files
+        WHERE torrent_id = ANY($1::bigint[])
+        ORDER BY torrent_id, id`, kept)
+	if err != nil {
+		return nil, nil, err
+	}
+	lastKept, filesStopped, err := readFiles(frows, w, scanned, limits)
+	frows.Close()
+	if err != nil {
+		return nil, nil, err
+	}
+	if filesStopped {
+		// Groups after lastKept were never read: drop the retained metadata
+		// (it would masquerade as a file-less torrent) and return those IDs
+		// for the follow-up batch.
+		w.truncated = true
+		remaining = append(remaining, idsAfter(ids, int64(lastKept))...)
+		w.truncateAfter(lastKept)
+	}
+	return w, remaining, nil
+}
+
+// normalizedIDs returns a sorted, deduplicated copy of ids.
+func normalizedIDs(ids []int64) []int64 {
+	out := make([]int64, len(ids))
+	copy(out, ids)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	dedup := out[:0]
+	for i, id := range out {
+		if i == 0 || id != out[i-1] {
+			dedup = append(dedup, id)
+		}
+	}
+	return dedup
+}
+
+func idsAfter(ids []int64, lastKept int64) []int64 {
+	var remaining []int64
+	for _, id := range ids {
+		if id > lastKept {
+			remaining = append(remaining, id)
+		}
+	}
+	return remaining
+}
+
+// scanMetadata consumes a torrent-metadata iterator (ordered by id),
+// applying the retention-budget admission policy (see WindowLimits): the
+// weight is charged before retention, an occupied window stops before any
+// torrent that would push it past the budget, and an empty window admits
+// its first torrent whatever it weighs. It returns the map marking every
+// retained torrent and whether the budget stopped the scan before the
+// iterator was exhausted.
+func scanMetadata(rows pgx.Rows, w *Window, limits WindowLimits) (map[int32]bool, bool, error) {
+	scanned := make(map[int32]bool)
+	for rows.Next() {
+		var t TorrentRow
+		if err := rows.Scan(&t.ID, &t.InfoHash, &t.Name, &t.TotalSize, &t.DiscoveredOn); err != nil {
+			return nil, false, err
+		}
+		// The window budget bounds the METADATA scan too, not just the file
+		// rows: with a keyset page far larger than the budget, torrents with
+		// long names — above all torrents with no files, which never reach
+		// the file-row pass — would otherwise be retained in full before any
+		// budget check.
+		weight := retainedTorrentOverhead + int64(len(t.Name))
+		if limits.WindowMaxBytes > 0 && len(w.Torrents) > 0 &&
+			w.RetainedBytes+weight > limits.WindowMaxBytes {
+			return scanned, true, nil
+		}
+		w.Torrents = append(w.Torrents, t)
+		scanned[t.ID] = true
+		w.RetainedBytes += weight
+	}
+	return scanned, false, rows.Err()
+}
+
+// readFiles consumes a file-row iterator ordered by (torrent_id, id),
+// attaching rows to w for the scanned torrents, draining capped torrents
+// into Overflow, counting orphans and enforcing the byte budget. It returns
+// the ID of the last torrent whose group was fully read and kept, and
+// whether reading stopped early at a group boundary because the budget ran
+// out — the torrents whose groups come after it were never read and the
+// caller must drop their metadata (they move to the next window/batch).
+func readFiles(rows pgx.Rows, w *Window, scanned map[int32]bool, limits WindowLimits) (int32, bool, error) {
 	var (
 		current         int32
 		currentCount    int64
@@ -221,37 +394,30 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 		}
 	}
 	budgetHit := false
-	// stopped records an EARLY stop: the loop broke before the window's
-	// torrent range was exhausted, so the torrents beyond the cut were never
-	// read and must be truncated from the window (they arrive in the next
-	// keyset window). A normal loop end leaves stopped false even when the
-	// budget tripped inside the final group — that range was read in full.
 	stopped := false
-	for frows.Next() {
+	for rows.Next() {
 		var f FileRow
-		if err := frows.Scan(&f.ID, &f.TorrentID, &f.Size, &f.Path); err != nil {
-			return nil, err
+		if err := rows.Scan(&f.ID, &f.TorrentID, &f.Size, &f.Path); err != nil {
+			return 0, false, err
 		}
 		if f.TorrentID != current {
 			finishGroup()
 			if budgetHit {
 				// Window byte budget reached: finish the torrent whose group
-				// just completed and stop reading. Torrents beyond the cut
-				// are re-read by the next keyset window (the caller's cursor
-				// stops at the last kept torrent), so nothing is lost — the
-				// window just got smaller under backpressure. The flag stays
-				// set: the post-loop truncation below drops the unread
-				// torrents, and returning them without their files would
-				// corrupt them into missing_files errors past the checkpoint.
+				// just completed and stop reading. Torrents beyond the cut are
+				// re-read by the next keyset window or follow-up batch (the
+				// caller's cursor stops at the last kept torrent), so nothing
+				// is lost — the window just got smaller under backpressure.
 				stopped = true
 				break
 			}
 			current, currentCount, currentBytes, currentKnown, currentOverflow, currentReason = f.TorrentID, 0, 0, false, false, ""
 		}
 		if !scanned[f.TorrentID] {
-			// Orphan: no owning torrent in this window (the window covers a
-			// contiguous ID range, so absence here means no row). Excluded
-			// from every record, accounted as run-scope integrity state.
+			// Orphan: no owning torrent in this window (both queries cover
+			// exactly the retained set, so absence here means no row).
+			// Excluded from every record, accounted as run-scope integrity
+			// state.
 			w.OrphanFiles++
 			continue
 		}
@@ -281,18 +447,11 @@ func (s *Source) Window(ctx context.Context, afterID int64, limit int, limits Wi
 			budgetHit = true
 		}
 	}
-	if err := frows.Err(); err != nil {
-		return nil, err
+	if err := rows.Err(); err != nil {
+		return 0, false, err
 	}
 	finishGroup()
-	if stopped {
-		// The read stopped early at a group boundary: that group is complete
-		// and kept; everything after it was never read and moves to the next
-		// window. Truncate the torrent list to the read range.
-		w.truncated = true
-		w.truncateAfter(current)
-	}
-	return w, nil
+	return current, stopped, nil
 }
 
 // overflowObserved reports the diagnostic figure for an overflow: the row

@@ -103,6 +103,10 @@ func (s *Source) Fingerprint(ctx context.Context) (Fingerprint, error) {
 // anchor info-hashes and the orphan/NULL-owner bookkeeping — the documented
 // weak anchors; they never prove immutability (verify-content, 04B, is the
 // equality gate).
+//
+// 04B resume paths use this same comparison — never byte-equal JSON — so a
+// source PostgreSQL restart or a TCP↔socket switch between sessions does
+// not abort an otherwise resumable verification or retry pass.
 func (a Fingerprint) Equivalent(b Fingerprint) bool {
 	return a.Database == b.Database &&
 		a.Torrents == b.Torrents &&
