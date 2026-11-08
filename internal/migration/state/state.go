@@ -153,6 +153,11 @@ func validatePhaseTransition(from, to Phase) error {
 		return fmt.Errorf("%w: unknown phase", ErrRunStateCorrupt)
 	}
 	switch {
+	case from == PhaseCompleteWithErrors && to == PhaseImportComplete:
+		// The ONE post-completion edge (04B retry): every unresolved record
+		// error was repaired and no run-scope integrity incident remains.
+		// Only CompleteRetryPhase reaches it — the import code paths cannot.
+		return nil
 	case from.Complete():
 		return fmt.Errorf("%w: completed run cannot advance", ErrRunStateCorrupt)
 	case from == PhaseImporting && to == PhaseImporting:

@@ -123,6 +123,45 @@ func CountErrors(ctx context.Context, q queryer, runID string) (record int64, un
 	return record, unresolvedIntegrity, nil
 }
 
+// CountUnresolvedRecords returns the number of UNRESOLVED record-scope
+// errors — the work list a retry pass reports against.
+func CountUnresolvedRecords(ctx context.Context, q queryer, runID string) (int64, error) {
+	var n int64
+	if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM magnetico_migration.errors
+        WHERE run_id = $1::uuid AND scope = 'record' AND NOT resolved`, runID).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// UnresolvedRecordIDs reads one keyset page of unresolved record-scope IDs
+// (ascending; limit-bounded). A retry pass re-queries it per batch —
+// resolving IDs shrinks the set, so no stale work list accumulates.
+func UnresolvedRecordIDs(ctx context.Context, q queryer, runID string, afterID int64, limit int) ([]int64, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("unresolved ID page limit must be positive, got %d", limit)
+	}
+	rows, err := q.Query(ctx, `SELECT source_id FROM magnetico_migration.errors
+        WHERE run_id = $1::uuid AND scope = 'record' AND NOT resolved
+          AND source_id > $2::bigint
+        ORDER BY source_id
+        LIMIT $3`, runID, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 type queryer interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
