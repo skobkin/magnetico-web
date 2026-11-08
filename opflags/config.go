@@ -383,14 +383,43 @@ var (
 	credentialKeyPattern = regexp.MustCompile(`((?:[pP]|%70|%50)(?:[aA]|%61|%41)(?:[sS]|%73|%53)(?:[sS]|%73|%53)(?:[wW]|%77|%57)(?:[oO]|%6[fF])(?:[rR]|%72|%52)(?:[dD]|%64|%44)|(?:[pP]|%70|%50)(?:[wW]|%77|%57)(?:[dD]|%64|%44))(\s*[=:]\s*)(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|(?:\\.|[^\s\\])+)`)
 )
 
+var (
+	// excerptLinePattern matches a quoted configuration source line inside a
+	// yaml diagnostic (gutter + line number + `|` + content; the offending
+	// line is prefixed with `>`).
+	excerptLinePattern = regexp.MustCompile(`^(>?)(\s*\d+\s*\|)(.*)$`)
+	// credentialLinePattern is a deliberately LOOSE detector for a line that
+	// may carry a credential: any password/pwd spelling (case classes and
+	// percent escapes — a key itself is never escaped, so plain matching is
+	// sound for detection) or a scheme-qualified URL with userinfo. Over-
+	// matching costs a redacted diagnostic line; under-matching leaks a
+	// secret.
+	credentialLinePattern = regexp.MustCompile(`(?i:passw|pwd|%70|%50)|://[^/@\s]+@`)
+)
+
 // redactSecrets masks credential material that YAML diagnostics echo from
 // the configuration file's source lines: the yaml library renders errors
 // with the offending line (and its context) quoted verbatim, so a typo on
 // one line would otherwise print a neighboring DSN — password included —
-// to the terminal and any log capture. Only the secrets are masked; the
-// diagnostic's line numbers, keys and error text are preserved.
+// to the terminal and any log capture.
+//
+// Two layers, because exact-value masking alone cannot be exhaustive there:
+// the YAML representation re-encodes conninfo escapes on top of the DSN's
+// own (a double-quoted scalar spells a conninfo escaped space as `\\ `), so
+// a value parser working on the raw line inevitably misses shapes. Layer 1
+// masks the recognized value shapes in place (error text, inline DSNs);
+// layer 2 drops any quoted source line that may carry a credential whole —
+// the line number survives, the content does not (Codex review iteration 5,
+// finding 1).
 func redactSecrets(msg string) string {
 	msg = urlPasswordPattern.ReplaceAllString(msg, "${1}xxxxx@")
 	msg = credentialKeyPattern.ReplaceAllString(msg, "${1}${2}xxxxx")
-	return msg
+	lines := strings.Split(msg, "\n")
+	for i, line := range lines {
+		if m := excerptLinePattern.FindStringSubmatch(line); m != nil &&
+			credentialLinePattern.MatchString(m[3]) {
+			lines[i] = m[1] + m[2] + " [credential-bearing configuration line redacted]"
+		}
+	}
+	return strings.Join(lines, "\n")
 }

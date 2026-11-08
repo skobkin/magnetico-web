@@ -330,7 +330,7 @@ func TestApplyYamlConfig_RedactsSecretsFromDiagnostics(t *testing.T) {
 	}
 	assertRedacted := func(msg string) {
 		t.Helper()
-		for _, secret := range []string{"SourceSecret", "TargetSecret"} {
+		for _, secret := range []string{"SourceSecret", "TargetSecret", "REVIEWTAIL"} {
 			if strings.Contains(msg, secret) {
 				t.Errorf("diagnostic leaked secret %q: %s", secret, msg)
 			}
@@ -346,6 +346,16 @@ func TestApplyYamlConfig_RedactsSecretsFromDiagnostics(t *testing.T) {
 	err = o.applyYamlConfig([]byte("migrateSourceDatabaseURL: postgres://src:SourceSecret@localhost/legacy\nfoo: [::"), map[string]bool{})
 	if err == nil {
 		t.Fatal("applyYamlConfig(invalid yaml) error = nil, want a syntax error")
+	}
+	assertRedacted(err.Error())
+
+	// A YAML double-quoted value re-encodes conninfo escapes (`\\ ` spells a
+	// conninfo escaped space): the raw excerpt line cannot be value-parsed
+	// reliably, so credential-bearing lines are dropped whole.
+	o = &OpFlags{}
+	err = o.applyYamlConfig([]byte("migrateSourceDatabaseURL: \"host=localhost user=u password=HEAD\\\\ REVIEWTAIL dbname=d\"\nfoo: [::"), map[string]bool{})
+	if err == nil {
+		t.Fatal("applyYamlConfig(escaped DSN) error = nil, want a syntax error")
 	}
 	assertRedacted(err.Error())
 }
@@ -403,6 +413,19 @@ func TestRedactSecrets(t *testing.T) {
 			name: "pwd key spelled correctly",
 			in:   `source: host=localhost pwd=Sup3rSecret sslmode=disable`,
 			want: `source: host=localhost pwd=xxxxx sslmode=disable`,
+		},
+		{
+			// A YAML double-quoted scalar re-encodes conninfo escapes (`\ `
+			// spells a conninfo escaped space), so the raw excerpt line cannot
+			// be value-parsed reliably: credential-bearing lines drop whole.
+			name: "credential excerpt line dropped whole",
+			in:   "config file: [2:6] sequence end token ']' not found\n   1 | source: host=localhost password=HEAD\\\\ REVIEWTAIL dbname=d\n>  2 | foo: [:: null",
+			want: "config file: [2:6] sequence end token ']' not found\n   1 | [credential-bearing configuration line redacted]\n>  2 | foo: [:: null",
+		},
+		{
+			name: "URL userinfo excerpt line dropped whole",
+			in:   "   1 | databaseURL: postgres://src:Secret@localhost/db\n>  2 | x: [",
+			want: "   1 | [credential-bearing configuration line redacted]\n>  2 | x: [",
 		},
 	}
 	for _, tc := range cases {
