@@ -213,6 +213,18 @@ func finishVerificationOutcome(
 	if err != nil {
 		return nil, false, nil, err
 	}
+	// The reported severity split must match the durable issue table exactly.
+	// A finalize issue that already exists durably (the drift provenance on an
+	// extras-phase resume, re-proposed by every invocation) is deduplicated by
+	// the insert, so counting the finalize list on top of the pre-commit
+	// recount would inflate the summary. The post-commit recount is
+	// authoritative (Codex review iteration 4, finding 4); the pre-commit
+	// recount above stays the pass decision's basis, with the finalize list's
+	// severity gate applied explicitly.
+	counts, err = verifyIssueSeverityCounts(ctx, pool, run.VerificationID)
+	if err != nil {
+		return nil, false, nil, err
+	}
 	return finished, pass, counts, nil
 }
 
