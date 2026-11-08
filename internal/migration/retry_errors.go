@@ -448,11 +448,18 @@ func RetryErrors(ctx context.Context, in RetryErrorsInput) (*RetryResult, error)
 			break // attempted everything still unresolved within the pass
 		}
 
-		// Fetch the batch set-oriented (budget-split via `remaining`).
+		// Fetch the batch set-oriented (budget-split via `remaining`) and
+		// settle each window immediately, ascending — the batch's source
+		// rows never accumulate beyond one window (the window budget bounds
+		// them; nothing piles the whole batch in memory). Registry IDs the
+		// source stops returning (deleted between the registry query and the
+		// fetch) settle as missing_source, interleaved below each fetched ID
+		// so the pass cursor never moves backward: FetchByIDs returns
+		// ascending prefixes with the ascending suffix in `remaining`, so an
+		// unsettled registry ID below the current fetched ID has had its
+		// chance in an earlier window and is genuinely absent.
+		next := 0 // first ids index not yet settled
 		todo := ids
-		rowsByID := make(map[int64]*original.TorrentRow, len(ids))
-		filesBy := make(map[int64][]original.FileRow, len(ids))
-		ovBy := make(map[int64]original.Overflow, len(ids))
 		for len(todo) > 0 {
 			w, remaining, err := src.FetchByIDs(runCtx, todo, wlimits)
 			if err != nil {
@@ -466,30 +473,47 @@ func RetryErrors(ctx context.Context, in RetryErrorsInput) (*RetryResult, error)
 			}
 			for i := range w.Torrents {
 				t := &w.Torrents[i]
-				rowsByID[int64(t.ID)] = t
-				if rows, has := w.Files[t.ID]; has {
-					filesBy[int64(t.ID)] = rows
+				id := int64(t.ID)
+				for next < len(ids) && ids[next] < id {
+					// Absent from the source: explicit missing_source — the
+					// disappearance is diagnosed, never silently excused.
+					if err := settle(ids[next], nil, nil, nil); err != nil {
+						if errors.Is(err, ErrInterrupted) || fatalCause(runCtx) != nil {
+							return nil, err
+						}
+						return nil, err
+					}
+					report()
+					next++
 				}
-				if ov, has := w.Overflow[t.ID]; has {
-					ovBy[int64(t.ID)] = ov
+				var ov *original.Overflow
+				if o, has := w.Overflow[t.ID]; has {
+					ov = &o
 				}
+				if err := settle(id, t, w.Files[t.ID], ov); err != nil {
+					if errors.Is(err, ErrInterrupted) || fatalCause(runCtx) != nil {
+						return nil, err
+					}
+					return nil, err
+				}
+				afterID = id
+				report()
+				next++
 			}
 			todo = remaining
 		}
-
-		for _, id := range ids {
-			var ov *original.Overflow
-			if o, has := ovBy[id]; has {
-				ov = &o
-			}
-			if err := settle(id, rowsByID[id], filesBy[id], ov); err != nil {
+		// Registry IDs after the last window (or every ID, when the source
+		// returned nothing): missing_source, ascending.
+		for next < len(ids) {
+			if err := settle(ids[next], nil, nil, nil); err != nil {
 				if errors.Is(err, ErrInterrupted) || fatalCause(runCtx) != nil {
 					return nil, err
 				}
 				return nil, err
 			}
-			afterID = id
+			afterID = ids[next]
 			report()
+			next++
 		}
 	}
 

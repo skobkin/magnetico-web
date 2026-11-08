@@ -11,6 +11,7 @@ package migration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/skobkin/magnetico-web/internal/migration/state"
@@ -202,6 +203,107 @@ func TestRetryErrorsStillInvalidStaysUnresolved(t *testing.T) {
 	attempts, _ := errorRow(t, tgt, 2)
 	if attempts != 3 {
 		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+// TestRetryErrorsSparseBatchSettlesPerWindow: a batch mixing fixable
+// records with deleted (missing-source) IDs, forced across multiple
+// FetchByIDs windows by a 1 MiB window budget, settles each window
+// immediately — interleaving the missing IDs below their fetched neighbors
+// so the pass cursor never moves backward. Every registry ID is attempted
+// exactly once with the right outcome (Codex review iteration 1, finding 6).
+func TestRetryErrorsSparseBatchSettlesPerWindow(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Rows 1, 4, 7, 8 import (1 and 8 anchor MinID/MaxID). Rows 2 and 5 are
+	// repairable total-size mismatches with ~600 KiB of path data each —
+	// two of them exceed the 1 MiB window budget, so the fetch splits.
+	// Rows 3 and 6 are mismatches too, deleted after the import (between
+	// the fetched IDs, exercising the gap handling).
+	bigFiles := func(id int32, name string) {
+		seedSourceTorrent(t, src, id, name, 79, 1700000002)
+		for i := 0; i < 12; i++ {
+			seedSourceFile(t, src, id, fmt.Sprintf("d%d/%s", i, randomASCIIPath(t, 50_000)), int64(1+i))
+		}
+	}
+	smallFiles := func(id int32, name string) {
+		seedSourceTorrent(t, src, id, name, 40, 1700000002)
+		seedSourceFile(t, src, id, fmt.Sprintf("x%d.bin", id), 40)
+	}
+	smallFiles(1, "ok1.bin")
+	bigFiles(2, "repair2")
+	bigFiles(3, "vanish3")
+	smallFiles(4, "ok4.bin")
+	bigFiles(5, "repair5")
+	bigFiles(6, "vanish6")
+	smallFiles(7, "ok7.bin")
+	smallFiles(8, "ok8.bin")
+	importAll(t, src, tgt)
+
+	// Fixture assumptions: rows 2 and 5 exist in the registry, and their
+	// combined path bytes exceed the window budget — the fetch MUST split.
+	for _, id := range []int64{2, 3, 5, 6} {
+		if attempts, resolved := errorRow(t, tgt, id); attempts != 1 || resolved {
+			t.Fatalf("registry row %d = attempts %d resolved %v, want 1/false", id, attempts, resolved)
+		}
+	}
+	var pathBytes int64
+	pool := poolForRunner(t, src)
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COALESCE(SUM(octet_length(path)), 0) FROM magneticod.files WHERE torrent_id IN (2, 5)`).
+		Scan(&pathBytes); err != nil {
+		t.Fatal(err)
+	}
+	if pathBytes <= 1<<20 {
+		t.Fatalf("fixture assumption broken: rows 2+5 path bytes = %d, want >1MiB (no window split)", pathBytes)
+	}
+
+	// Operator actions: repair 2 and 5; rows 3 and 6 vanish (content anchors
+	// move — explicit authorization; database name and ID bounds stay).
+	execSourceSQL(t, src, `UPDATE magneticod.torrents SET total_size = 78 WHERE id IN (2, 5)`)
+	execSourceSQL(t, src, `DELETE FROM magneticod.torrents WHERE id IN (3, 6)`)
+
+	res, err := retryPass(t, context.Background(), src, tgt, func(in *RetryErrorsInput) {
+		in.AcceptSourceRepairs = true
+		in.MaxInflightBytes = 1 << 20
+	})
+	if err == nil || !errors.Is(err, ErrRetryRemaining) {
+		t.Fatalf("error = %v, want ErrRetryRemaining", err)
+	}
+	if res.Attempted != 4 || res.Fixed != 2 || res.Missing != 2 || res.StillInvalid != 0 || res.UnresolvedRemaining != 2 {
+		t.Fatalf("result = attempted %d fixed %d missing %d invalid %d remaining %d, want 4/2/2/0/2",
+			res.Attempted, res.Fixed, res.Missing, res.StillInvalid, res.UnresolvedRemaining)
+	}
+
+	// Every registry ID attempted exactly once with the right outcome.
+	for _, id := range []int64{2, 5} {
+		attempts, resolved := errorRow(t, tgt, id)
+		if attempts != 2 || !resolved {
+			t.Fatalf("row %d attempts %d resolved %v, want 2/true", id, attempts, resolved)
+		}
+	}
+	for _, id := range []int64{3, 6} {
+		attempts, resolved := errorRow(t, tgt, id)
+		if attempts != 2 || resolved {
+			t.Fatalf("row %d attempts %d resolved %v, want 2/false (missing never resolves)", id, attempts, resolved)
+		}
+	}
+	for id, want := range map[int64]string{2: "fixed", 3: "missing_source", 5: "fixed", 6: "missing_source"} {
+		run := latestRetryRun(t, tgt)
+		row, err := state.GetRetryAttempt(context.Background(), poolForRunner(t, tgt), run.RetryID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if row == nil || row.Outcome != want {
+			t.Fatalf("attempt row %d = %+v, want outcome %s", id, row, want)
+		}
+	}
+
+	// The cursor ends at the batch end — ascending through 2, 3, 5, 6.
+	run := latestRetryRun(t, tgt)
+	if run.State != state.RetryCompletedRemaining || run.LastSourceID == nil || *run.LastSourceID != 6 {
+		t.Fatalf("retry run = %s cursor %v, want completed_remaining at 6", run.State, run.LastSourceID)
 	}
 }
 
