@@ -997,3 +997,71 @@ func TestPageContentRetentionStaysWithinDecodedBudget(t *testing.T) {
 		t.Fatalf("serving used %d segments, want >= 2 (12 rows x ~600KB decoded vs a 1MiB budget)", segments)
 	}
 }
+
+// TestVerifyContentVanishedRegistryEntryDoesNotPoisonLaterRows: a registry
+// entry whose source row vanished (deleted post-import) must not block the
+// classification of LATER unresolved rows (Codex review iteration 2,
+// finding 3). With entry 2 vanished and entry 3 still live, row 3 is a
+// real unresolved_record_error — not a missing_target_row — and only the
+// vanished entry stays uncovered at finalize.
+func TestVerifyContentVanishedRegistryEntryDoesNotPoisonLaterRows(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	// Rows 1 and 4 import; rows 2 and 3 are rejected into the registry.
+	seedSourceTorrent(t, src, 1, "ok1.bin", 40, 1700000001)
+	seedSourceFile(t, src, 1, "ok1.bin", 40)
+	execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (2, decode('AA','hex'), 'bad2', 9, 1700000002)`)
+	execSourceSQL(t, src, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (3, decode('AB','hex'), 'bad3', 9, 1700000003)`)
+	seedSourceTorrent(t, src, 4, "ok4.bin", 50, 1700000004)
+	seedSourceFile(t, src, 4, "ok4.bin", 50)
+	importAll(t, src, tgt)
+
+	// Registry entry 2's source row disappears before verification; entry
+	// 3's source row is still live.
+	execSourceSQL(t, src, `DELETE FROM magneticod.torrents WHERE id = 2`)
+
+	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if err == nil || !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("error = %v, want ErrVerificationFindings", err)
+	}
+	if res.Pass {
+		t.Fatal("pass = true, want completed_fail")
+	}
+	if res.Verified != 2 || res.SourceObserved != 3 || res.ObservedTargets != 2 {
+		t.Fatalf("result = verified %d source %d targets %d, want 2/3/2",
+			res.Verified, res.SourceObserved, res.ObservedTargets)
+	}
+
+	run, issues := latestContentRun(t, tgt)
+	if run.State != state.VerificationCompletedFail {
+		t.Fatalf("run state = %s, want completed_fail", run.State)
+	}
+	codes := issueCodes(issues)
+	// Row 3 is classified by its own live registry entry.
+	if codes[IssueCodeUnresolvedRecord] != 1 {
+		t.Fatalf("issues = %+v, want exactly one %s (for source 3)", issues, IssueCodeUnresolvedRecord)
+	}
+	if codes[IssueCodeMissingTargetRow] != 0 {
+		t.Fatalf("issues = %+v, want no missing_target_row (the vanished entry must not poison row 3)", issues)
+	}
+	// Only the vanished entry (2) stays uncovered: row 3 was classified.
+	if codes[IssueCodeUnresolvedCoverage] != 1 {
+		t.Fatalf("issues = %+v, want exactly one %s", issues, IssueCodeUnresolvedCoverage)
+	}
+	for _, is := range issues {
+		switch is.Code {
+		case IssueCodeUnresolvedRecord:
+			if is.SourceID == nil || *is.SourceID != 3 {
+				t.Fatalf("%s source = %v, want 3", is.Code, is.SourceID)
+			}
+		case IssueCodeUnresolvedCoverage:
+			// Details round-trip through JSONB: numbers come back as float64.
+			if is.Details["uncovered"] != float64(1) || is.Details["min_id"] != float64(2) || is.Details["max_id"] != float64(2) {
+				t.Fatalf("%s details = %+v, want uncovered/min/max = 1/2/2", is.Code, is.Details)
+			}
+		}
+	}
+}

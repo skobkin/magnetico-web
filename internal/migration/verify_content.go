@@ -1196,6 +1196,12 @@ func compareMetadata(srcRow *original.TorrentRow, tr *decodeRow) []string {
 // commits and resumes.
 func classifySourceOnly(ctx context.Context, srcRow *original.TorrentRow, unit *contentUnitResult, reg *registryIter) error {
 	unit.sourceObserved++
+	// Stale entries below this row (a vanished source row's entry, or one
+	// whose row matched the target) must not block the classification of
+	// the row at hand; see registryIter.skipBelow.
+	if err := reg.skipBelow(ctx, int64(srcRow.ID)); err != nil {
+		return err
+	}
 	id, ok, err := reg.peek(ctx)
 	if err != nil {
 		return err
@@ -1263,4 +1269,23 @@ func (it *registryIter) advance(ctx context.Context) error {
 	}
 	it.idx++
 	return nil
+}
+
+// skipBelow advances past registry entries strictly below id — entries
+// whose source rows never reached classifySourceOnly: they were matched
+// in the target (that classification never consults the registry) or the
+// source rows vanished entirely. Such entries can never get a per-row
+// unresolved_record_error issue; they stay uncovered and the finalize
+// coverage check accounts for them, but they must not poison the
+// classification of the row at hand (Codex review iteration 2, finding 3).
+func (it *registryIter) skipBelow(ctx context.Context, id int64) error {
+	for {
+		cur, ok, err := it.peek(ctx)
+		if err != nil || !ok || cur >= id {
+			return err
+		}
+		if err := it.advance(ctx); err != nil {
+			return err
+		}
+	}
 }
