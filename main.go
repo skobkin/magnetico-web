@@ -48,9 +48,15 @@ func main() {
 			runMigrateSchemaInit(&opFlags.Migrate.SchemaInit)
 		case "torrents":
 			runMigrateTorrents(&opFlags.Migrate.Torrents)
+		case "retry-errors":
+			runMigrateRetryErrors(&opFlags.Migrate.Torrents.RetryErrors)
+		case "verify-decode":
+			runMigrateVerifyDecode(&opFlags.Migrate.VerifyDecode)
+		case "verify-content":
+			runMigrateVerifyContent(&opFlags.Migrate.VerifyContent)
 		default:
 			// parseArgs guarantees a subcommand; this is defense in depth.
-			log.Fatalln("migrate: expected a subcommand; expected: schema-init, torrents (see --help)")
+			log.Fatalln("migrate: expected a subcommand; expected: schema-init, torrents, verify-decode, verify-content (see --help)")
 		}
 	}
 }
@@ -114,8 +120,18 @@ func controlledErrorDetail(err error) string {
 		return state.ErrNoRunState.Error()
 	case errors.Is(err, state.ErrRunStateCorrupt):
 		return state.ErrRunStateCorrupt.Error()
+	case errors.Is(err, target.ErrRunNotComplete):
+		return target.ErrRunNotComplete.Error()
+	case errors.Is(err, target.ErrRetryConflict):
+		return target.ErrRetryConflict.Error()
 	case errors.Is(err, migration.ErrSourceIDRange):
 		return migration.ErrSourceIDRange.Error()
+	case errors.Is(err, migration.ErrSourceDrift):
+		return migration.ErrSourceDrift.Error()
+	case errors.Is(err, migration.ErrRetryRemaining):
+		return migration.ErrRetryRemaining.Error()
+	case errors.Is(err, migration.ErrVerificationFindings):
+		return migration.ErrVerificationFindings.Error()
 	}
 	return fmt.Sprintf("unexpected error (%T)", err)
 }
@@ -276,6 +292,244 @@ func runMigrateTorrents(opFlags *opflags.TorrentsOptions) {
 	}
 }
 
+// runMigrateVerifyDecode implements `magnetico migrate verify-decode`: the
+// full target-only decode scan of an imported database (the source is never
+// contacted). Exit codes: 0 for a completed passing scan, 3 for a completed
+// scan with findings (the summary is printed, not a fatal), 2 for an
+// interrupted scan (the settled pages are committed; a re-run resumes), 1
+// for any fatal failure.
+func runMigrateVerifyDecode(opFlags *opflags.VerifyOptions) {
+	res, err := runVerificationCommand("verify-decode", opFlags.DatabaseURL, func(ctx context.Context, update func(progress.Snapshot)) (*migration.VerificationResult, error) {
+		return migration.VerifyDecode(ctx, migration.VerifyDecodeInput{
+			TargetDSN:        opFlags.DatabaseURL,
+			Workers:          int(opFlags.Workers),
+			BatchSize:        int(opFlags.BatchSize),
+			MaxInflightBytes: opFlags.MaxInflightBytes,
+			Progress: func(p migration.VerifyProgress) {
+				update(verifySnapshot("verify-decode", p))
+			},
+		})
+	})
+	switch {
+	case err == nil:
+		log.Printf("%s", verificationOutcomeMessage("verify-decode", opFlags.DatabaseURL, res, true))
+	case errors.Is(err, migration.ErrVerificationFindings):
+		log.Printf("%s", verificationOutcomeMessage("verify-decode", opFlags.DatabaseURL, res, false))
+		os.Exit(3)
+	default:
+		finishVerificationCommand("verify-decode", opFlags.DatabaseURL, err)
+	}
+}
+
+// runMigrateVerifyContent implements `magnetico migrate verify-content`:
+// the full source↔target equality scan. Exit codes: 0 pass, 3 completed
+// with findings, 2 interrupted, 1 fatal — as with verify-decode.
+func runMigrateVerifyContent(opFlags *opflags.VerifyOptions) {
+	res, err := runVerificationCommand("verify-content", opFlags.DatabaseURL, func(ctx context.Context, update func(progress.Snapshot)) (*migration.VerificationResult, error) {
+		return migration.VerifyContent(ctx, migration.VerifyContentInput{
+			SourceDSN:        opFlags.SourceDatabaseURL,
+			TargetDSN:        opFlags.DatabaseURL,
+			Workers:          int(opFlags.Workers),
+			BatchSize:        int(opFlags.BatchSize),
+			MaxInflightBytes: opFlags.MaxInflightBytes,
+			Progress: func(p migration.VerifyProgress) {
+				update(verifySnapshot("verify-content", p))
+			},
+		})
+	})
+	switch {
+	case err == nil:
+		log.Printf("%s", verificationOutcomeMessage("verify-content", opFlags.DatabaseURL, res, true))
+	case errors.Is(err, migration.ErrVerificationFindings):
+		log.Printf("%s", verificationOutcomeMessage("verify-content", opFlags.DatabaseURL, res, false))
+		os.Exit(3)
+	default:
+		finishVerificationCommand("verify-content", opFlags.DatabaseURL, err)
+	}
+}
+
+// runVerificationCommand carries the plumbing shared by the two verification
+// commands: the interrupt context, the progress renderer with an explicit
+// Stop before every exit path, and the interrupted/fatal classification.
+// The run callback receives a snapshot updater bound to the renderer.
+func runVerificationCommand(command, rawTargetURL string, run func(ctx context.Context, update func(progress.Snapshot)) (*migration.VerificationResult, error)) (*migration.VerificationResult, error) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Operator progress: same renderer discipline as the import (non-blocking
+	// updates on their own goroutine; explicit Stop before every exit path —
+	// os.Exit and log.Fatalln bypass deferred calls).
+	renderer := progress.New(progress.IsTTY(os.Stderr), os.Stderr, nil)
+	go renderer.Run()
+	defer renderer.Stop()
+	update := func(s progress.Snapshot) { renderer.Update(s) }
+
+	res, err := run(ctx, update)
+	// The renderer's final line lands before the outcome; the deferred Stop
+	// above stays as panic insurance.
+	renderer.Stop()
+	switch {
+	case err == nil, errors.Is(err, migration.ErrVerificationFindings):
+		// Both completed outcomes print the summary in the caller (res is
+		// non-nil for both, per the runners' contract).
+		return res, err
+	case errors.Is(err, migration.ErrInterrupted):
+		log.Printf("%s on %s interrupted before completion; "+
+			"the settled pages are committed — re-run to resume",
+			command, redactDatabaseURL(rawTargetURL))
+		os.Exit(2)
+	default:
+		log.Fatalln(migrationFailureMessage(err)) // exit 1
+	}
+	return nil, err // unreachable
+}
+
+// finishVerificationCommand is the fatal exit path of the verification
+// commands (kept separate so every caller's switch stays explicit about the
+// completed/interrupted/fatal split).
+func finishVerificationCommand(command, rawTargetURL string, err error) {
+	log.Printf("%s on %s failed", command, redactDatabaseURL(rawTargetURL))
+	log.Fatalln(migrationFailureMessage(err))
+}
+
+// verifySnapshot maps a verify progress snapshot onto the renderer's
+// cumulative fields: observed→Scanned, verified→Successes, mismatched→
+// Errors, unverifiable→RunErrors (the renderer's vocabulary is the import's;
+// the command's own summary line carries the authoritative numbers).
+func verifySnapshot(title string, p migration.VerifyProgress) progress.Snapshot {
+	return progress.Snapshot{
+		Title:         title,
+		Phase:         p.Phase,
+		Checkpoint:    p.Checkpoint,
+		Scanned:       p.Observed,
+		Successes:     p.Verified,
+		Errors:        p.Mismatched,
+		RunErrors:     p.Unverifiable,
+		ExpectedTotal: p.ExpectedTargets,
+	}
+}
+
+// runMigrateRetryErrors implements `magnetico migrate torrents retry-errors`:
+// the transactional repair pass over the unresolved record errors of a
+// completed import. Exit codes: 0 for a clean pass (no unresolved records
+// remain), 3 for a completed pass with still-invalid or missing records
+// (the summary is printed), 2 for an interrupted pass, 1 for any fatal
+// failure (drift refusal, precondition conflict, corrupt state).
+func runMigrateRetryErrors(opFlags *opflags.RetryErrorsOptions) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	renderer := progress.New(progress.IsTTY(os.Stderr), os.Stderr, nil)
+	go renderer.Run()
+	defer renderer.Stop()
+
+	res, err := migration.RetryErrors(ctx, migration.RetryErrorsInput{
+		SourceDSN:           opFlags.SourceDatabaseURL,
+		TargetDSN:           opFlags.DatabaseURL,
+		Workers:             int(opFlags.Workers),
+		BatchSize:           int(opFlags.BatchSize),
+		MaxInflightBytes:    opFlags.MaxInflightBytes,
+		AcceptSourceRepairs: opFlags.AcceptSourceRepairs,
+		Progress: func(p migration.RetryProgress) {
+			renderer.Update(progress.Snapshot{
+				Title:         "retry-errors",
+				Phase:         p.Phase,
+				Checkpoint:    p.Cursor,
+				Scanned:       p.Attempted,
+				Successes:     p.Fixed,
+				Errors:        p.StillInvalid + p.Missing,
+				ExpectedTotal: p.UnresolvedAtStart,
+			})
+		},
+	})
+	// The renderer's final line lands before the outcome; the deferred Stop
+	// above stays as panic insurance.
+	renderer.Stop()
+	switch {
+	case err == nil:
+		log.Printf("%s", retryOutcomeMessage(opFlags.SourceDatabaseURL, opFlags.DatabaseURL, res))
+	case errors.Is(err, migration.ErrRetryRemaining):
+		if res == nil {
+			log.Fatalln(migrationFailureMessage(err)) // unreachable per the runners' contract
+		}
+		log.Printf("%s", retryOutcomeMessage(opFlags.SourceDatabaseURL, opFlags.DatabaseURL, res))
+		os.Exit(3)
+	case errors.Is(err, migration.ErrInterrupted):
+		log.Printf("retry-errors on %s interrupted before completion; "+
+			"the settled attempts are committed — re-run to resume",
+			redactDatabaseURL(opFlags.DatabaseURL))
+		os.Exit(2)
+	default:
+		log.Printf("retry-errors on %s failed", redactDatabaseURL(opFlags.DatabaseURL))
+		log.Fatalln(migrationFailureMessage(err)) // exit 1
+	}
+}
+
+// verificationOutcomeMessage composes the summary line of a completed
+// verification scan from controlled content only: the redacted URL, the
+// run's counters and fixed phrases. pass selects the PASS/FAIL wording and
+// the cutover advice. Issue details are never echoed into the log — they
+// live in magnetico_migration.verification_issues and are reported through
+// the report path.
+func verificationOutcomeMessage(command, rawTargetURL string, res *migration.VerificationResult, pass bool) string {
+	expected := int64(0)
+	if res.ExpectedTargets != nil {
+		expected = *res.ExpectedTargets
+	}
+	issues := int64(0)
+	for _, n := range res.IssuesBySeverity {
+		issues += n
+	}
+	verdict := "FAIL — the discrepancies are recorded in magnetico_migration.verification_issues; resolve them and re-run the scan"
+	if pass {
+		verdict = "PASS"
+	}
+	scope := "target decode pass only — source comparison requires verify-content"
+	if command == "verify-content" {
+		scope = "full source↔target equality scan"
+	}
+	observed := fmt.Sprintf("%d/%d target rows observed", res.ObservedTargets, expected)
+	if command == "verify-content" {
+		observed = fmt.Sprintf("%d/%d target rows, %d source rows classified", res.ObservedTargets, expected, res.SourceObserved)
+	}
+
+	msg := fmt.Sprintf("%s on %s finished: %s (%s) — %s: %d verified, %d mismatched, %d unverifiable, %d assumed single-file (historical blind spot); %d issue(s) recorded",
+		command, redactDatabaseURL(rawTargetURL), verdict, scope, observed,
+		res.Verified, res.Mismatched, res.Unverifiable, res.AssumedSingle, issues)
+	if res.OrphanTargetBlobs > 0 {
+		msg += fmt.Sprintf("; %d orphan blob(s)", res.OrphanTargetBlobs)
+	}
+	if res.UnresolvedRecordErrors > 0 || res.UnresolvedIntegrity > 0 {
+		msg += fmt.Sprintf("; %d unresolved import record error(s) and %d unresolved integrity incident(s) counted separately (not verification findings)",
+			res.UnresolvedRecordErrors, res.UnresolvedIntegrity)
+	}
+	if pass {
+		msg += fmt.Sprintf("; verdict applies to target data revision %d — re-run the scan after any further target change", res.StartDataRevision)
+	}
+	return msg
+}
+
+// retryOutcomeMessage composes the summary line of a completed retry pass
+// from controlled content only: the redacted URLs, the pass's counters and
+// fixed phrases.
+func retryOutcomeMessage(rawSourceURL, rawTargetURL string, res *migration.RetryResult) string {
+	msg := fmt.Sprintf("retry-errors on %s (source %s) finished: %d attempted, %d fixed, %d still invalid, %d missing source; %d unresolved record error(s) remain",
+		redactDatabaseURL(rawTargetURL), redactDatabaseURL(rawSourceURL),
+		res.Attempted, res.Fixed, res.StillInvalid, res.Missing, res.UnresolvedRemaining)
+	if res.PhaseFlipped {
+		msg += "; import phase advanced to import_complete"
+	}
+	if res.AcceptedSourceRepair {
+		msg += " (authorized source repair — provenance recorded in retry_runs)"
+	}
+	if res.UnresolvedRemaining == 0 {
+		msg += "; the target data revision advanced — run verify-content before cutover"
+	} else {
+		msg += "; correct the source records and re-run retry-errors; verify-content stays required before cutover"
+	}
+	return msg
+}
+
 // migrationFailureMessage composes the `migrate torrents` failure log line
 // from controlled content only: a FatalError's text is sanitized at
 // construction (stage, attempted ID range, checkpoint, SQLSTATE — credential
@@ -304,7 +558,55 @@ func migrationFailureMessage(err error) string {
 		// detail length is unbounded.
 		return appendBoundedDetails("migration refused: "+srcStateErr.Err.Error(), srcStateErr.Details)
 	}
+	// 04B refusals whose wrap suffix is composed by this codebase from
+	// controlled content (counts, database names, ID bounds, fixed advice):
+	// surface it through the bounded, prefix-verified extraction so the
+	// operator sees the actionable detail, not just the sentinel.
+	switch {
+	case errors.Is(err, migration.ErrSourceDrift):
+		return appendSentinelDetail("migration refused: "+migration.ErrSourceDrift.Error(), err, migration.ErrSourceDrift)
+	case errors.Is(err, target.ErrRetryConflict):
+		return appendSentinelDetail("migration refused: "+target.ErrRetryConflict.Error(), err, target.ErrRetryConflict)
+	case errors.Is(err, target.ErrRunNotComplete):
+		return appendSentinelDetail("migration refused: "+target.ErrRunNotComplete.Error(), err, target.ErrRunNotComplete)
+	}
 	return appendSchemaStateDetails("migration refused: "+controlledErrorDetail(err), err)
+}
+
+// sentinelDetail extracts the bounded detail suffix of a wrapped sentinel
+// error, accepting only the two wrap shapes this codebase composes
+// (`<sentinel>: <detail>` and `<sentinel> (<detail>)`). The detail is
+// controlled content by construction — numbers, database names, fixed
+// phrases — and the strict prefix check guarantees no other error can leak
+// its text through here.
+func sentinelDetail(err error, sentinel error) string {
+	text := err.Error()
+	if rest, ok := strings.CutPrefix(text, sentinel.Error()+": "); ok {
+		return boundDetail(rest)
+	}
+	if rest, ok := strings.CutPrefix(text, sentinel.Error()+" ("); ok && strings.HasSuffix(rest, ")") {
+		return boundDetail(strings.TrimSuffix(rest, ")"))
+	}
+	return ""
+}
+
+// boundDetail truncates a controlled detail line to the same per-item bound
+// as the catalog detail lists.
+func boundDetail(s string) string {
+	if len(s) > schemaStateDetailMaxBytes {
+		return s[:schemaStateDetailMaxBytes]
+	}
+	return s
+}
+
+// appendSentinelDetail appends the bounded wrap-suffix detail of a
+// recognized sentinel error to a failure message; an empty detail
+// contributes nothing.
+func appendSentinelDetail(msg string, err error, sentinel error) string {
+	if d := sentinelDetail(err, sentinel); d != "" {
+		return appendBoundedDetails(msg, []string{d})
+	}
+	return msg
 }
 
 // torrentFromMetadata converts a drained metadata record into a persistence

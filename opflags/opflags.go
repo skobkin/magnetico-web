@@ -21,13 +21,36 @@ type OpFlags struct {
 
 // MigrateOptions carries the subcommands of `migrate`.
 type MigrateOptions struct {
-	SchemaInit SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
-	Torrents   TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)."`
+	SchemaInit    SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
+	Torrents      TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)." subcommands-optional:"true"`
+	VerifyDecode  VerifyOptions     `command:"verify-decode" description:"Full target-only decode scan of an imported database: every stored torrent is fetched and decoded, metadata revalidated, orphan blobs reported. The source database is never contacted."`
+	VerifyContent VerifyOptions     `command:"verify-content" description:"Full source↔target equality scan of an imported database: every source row is compared against its target counterpart. Read-only on both databases."`
 
 	// Subcommand records the selected migrate subcommand for main's
-	// dispatch; it is never user-settable, and yaml:"-" keeps strict config
-	// decoding from accepting a key for it.
+	// dispatch (the nested repair pass records "retry-errors"); it is never
+	// user-settable, and yaml:"-" keeps strict config decoding from
+	// accepting a key for it.
 	Subcommand string `yaml:"-"`
+}
+
+// VerifyOptions carries the shared options of `migrate verify-decode` and
+// `migrate verify-content`: the target DSN (same flag/env/file precedence
+// as the other migrate commands) and the scan tunables (validated by the
+// runners). SourceDatabaseURL has no CLI flag — config file and
+// MAGNETICO_MIGRATION_SOURCE_DSN only, so it can never appear in `ps`
+// output; verify-content consumes it, verify-decode is target-only and
+// never reads it.
+type VerifyOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to verify." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	Workers          uint  `long:"workers" description:"Number of parallel blob decoders (1-64)." default:"4"`
+	BatchSize        uint  `long:"batch-size" description:"Maximum target rows per committed page (1-10000)." default:"256"`
+	MaxInflightBytes int64 `long:"max-inflight-bytes" description:"Upper bound on in-flight blob bytes." default:"67108864"`
+
+	// SourceDatabaseURL is the read-only v0.12.0 source database (verify-
+	// content only). Config file and MAGNETICO_MIGRATION_SOURCE_DSN only —
+	// no flag, no default, and it never falls back to the target DSN.
+	SourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
 }
 
 // TorrentsOptions carries the options of `migrate torrents`. The target DSN
@@ -42,6 +65,29 @@ type TorrentsOptions struct {
 	BatchSize             uint  `long:"batch-size" description:"Maximum processed records (successes and errors alike) per committed batch (1-10000)." default:"256"`
 	MaxInflightBytes      int64 `long:"max-inflight-bytes" description:"Upper bound on decoded in-flight record bytes." default:"67108864"`
 	DeferSecondaryIndexes bool  `long:"defer-secondary-indexes" description:"Drop the three secondary indexes for the import and rebuild them at finalization (authorized only at the start of an empty run)."`
+
+	// SourceDatabaseURL is the read-only v0.12.0 source database.
+	// Config file and MAGNETICO_MIGRATION_SOURCE_DSN only — no flag, no
+	// default, and it never falls back to the target DSN.
+	SourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
+
+	// RetryErrors is the nested `migrate torrents retry-errors` repair pass
+	// (optional at the command line; bare `migrate torrents` still imports).
+	RetryErrors RetryErrorsOptions `command:"retry-errors" description:"Retry the unresolved record errors of a completed import: re-process each against the source and repair the target transactionally (history-preserving; requires verify-content afterward)."`
+}
+
+// RetryErrorsOptions carries the options of `migrate torrents retry-errors`.
+// AcceptSourceRepairs is deliberately CLI-only (no config-file key): an
+// authorization must be given explicitly per invocation, never inherited
+// from a file.
+type RetryErrorsOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to repair." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	Workers          uint  `long:"workers" description:"Number of parallel record processors (1-64)." default:"4"`
+	BatchSize        uint  `long:"batch-size" description:"Maximum records attempted per committed batch (1-10000)." default:"256"`
+	MaxInflightBytes int64 `long:"max-inflight-bytes" description:"Upper bound on decoded in-flight record bytes." default:"67108864"`
+
+	AcceptSourceRepairs bool `long:"accept-source-repairs" description:"Authorize the repair against a source whose content differs from the recorded import fingerprint (matched by stable evidence only — database name and ID bounds; this is an operator assertion, not proof of identity)."`
 
 	// SourceDatabaseURL is the read-only v0.12.0 source database.
 	// Config file and MAGNETICO_MIGRATION_SOURCE_DSN only — no flag, no

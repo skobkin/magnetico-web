@@ -148,8 +148,9 @@ func TestParseArgs_MigrateSubcommands(t *testing.T) {
 	t.Run("BareMigrateIsAUsageError", func(t *testing.T) {
 		o := &OpFlags{}
 		_, err := o.parseArgs([]string{"migrate"})
-		if err == nil || !strings.Contains(err.Error(), "schema-init") || !strings.Contains(err.Error(), "torrents") {
-			t.Errorf("parseArgs([migrate]) error = %v, want a usage error naming both subcommands", err)
+		if err == nil || !strings.Contains(err.Error(), "schema-init") || !strings.Contains(err.Error(), "torrents") ||
+			!strings.Contains(err.Error(), "verify-decode") || !strings.Contains(err.Error(), "verify-content") {
+			t.Errorf("parseArgs([migrate]) error = %v, want a usage error naming the subcommands", err)
 		}
 	})
 
@@ -196,6 +197,29 @@ func TestParseArgs_MigrateSubcommands(t *testing.T) {
 // defaults of `migrate torrents`.
 func torrentsDefaults() TorrentsOptions {
 	return TorrentsOptions{
+		DatabaseURL:      "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
+		Workers:          4,
+		BatchSize:        256,
+		MaxInflightBytes: 67108864,
+		RetryErrors:      retryErrorsDefaults(),
+	}
+}
+
+// verifyDefaults returns VerifyOptions equivalent to the built-in flag
+// defaults of `migrate verify-decode` / `migrate verify-content`.
+func verifyDefaults() VerifyOptions {
+	return VerifyOptions{
+		DatabaseURL:      "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
+		Workers:          4,
+		BatchSize:        256,
+		MaxInflightBytes: 67108864,
+	}
+}
+
+// retryErrorsDefaults returns RetryErrorsOptions equivalent to the built-in
+// flag defaults of `migrate torrents retry-errors`.
+func retryErrorsDefaults() RetryErrorsOptions {
+	return RetryErrorsOptions{
 		DatabaseURL:      "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
 		Workers:          4,
 		BatchSize:        256,
@@ -280,7 +304,7 @@ func TestParseArgs_TorrentsSubcommand(t *testing.T) {
 	t.Run("SourceEnvBeatsFile", func(t *testing.T) {
 		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
 
-		o := &OpFlags{}
+		o := &OpFlags{Migrate: MigrateOptions{Subcommand: "torrents"}}
 		data := []byte("migrateSourceDatabaseURL: postgres://source-file@localhost/legacy\n")
 		// parseArgs with a config file would need a real file on disk; apply
 		// the layers directly (the parseArgs-level wiring is covered above).
@@ -290,8 +314,8 @@ func TestParseArgs_TorrentsSubcommand(t *testing.T) {
 		if err := o.applyEnvMigrateConfig(map[string]bool{}); err != nil {
 			t.Fatalf("applyEnvMigrateConfig() error = %v", err)
 		}
-		if err := o.applyEnvTorrentsConfig(); err != nil {
-			t.Fatalf("applyEnvTorrentsConfig() error = %v", err)
+		if err := o.applyEnvMigrationConfig(); err != nil {
+			t.Fatalf("applyEnvMigrationConfig() error = %v", err)
 		}
 		if o.Migrate.Torrents.SourceDatabaseURL != "postgres://source-env@localhost/legacy" {
 			t.Errorf("SourceDatabaseURL = %s, want the env value to beat the file", o.Migrate.Torrents.SourceDatabaseURL)
@@ -301,12 +325,12 @@ func TestParseArgs_TorrentsSubcommand(t *testing.T) {
 	t.Run("EmptySourceEnvTreatedAsUnset", func(t *testing.T) {
 		t.Setenv(migrationSourceEnvName, "")
 
-		o := &OpFlags{}
+		o := &OpFlags{Migrate: MigrateOptions{Subcommand: "torrents"}}
 		if err := o.applyYamlConfig([]byte("migrateSourceDatabaseURL: postgres://source-file@localhost/legacy\n"), map[string]bool{}); err != nil {
 			t.Fatalf("applyYamlConfig() error = %v", err)
 		}
-		if err := o.applyEnvTorrentsConfig(); err != nil {
-			t.Fatalf("applyEnvTorrentsConfig() error = %v", err)
+		if err := o.applyEnvMigrationConfig(); err != nil {
+			t.Fatalf("applyEnvMigrationConfig() error = %v", err)
 		}
 		if o.Migrate.Torrents.SourceDatabaseURL != "postgres://source-file@localhost/legacy" {
 			t.Errorf("SourceDatabaseURL = %s, want the file value (empty env is unset)", o.Migrate.Torrents.SourceDatabaseURL)
@@ -316,8 +340,8 @@ func TestParseArgs_TorrentsSubcommand(t *testing.T) {
 	t.Run("UnknownMigrationEnvRejected", func(t *testing.T) {
 		t.Setenv("MAGNETICO_MIGRATION_BOGUS", "1")
 
-		o := &OpFlags{}
-		err := o.applyEnvTorrentsConfig()
+		o := &OpFlags{Migrate: MigrateOptions{Subcommand: "torrents"}}
+		err := o.applyEnvMigrationConfig()
 		if err == nil || !strings.Contains(err.Error(), "MAGNETICO_MIGRATION_BOGUS") {
 			t.Errorf("expected unknown-variable error, got: %v", err)
 		}
@@ -367,18 +391,221 @@ func TestApplyYamlConfig_TorrentsKeys(t *testing.T) {
 	})
 }
 
-// The migration env namespace is scoped to `migrate torrents` runs: a
-// schema-init run neither applies nor rejects MAGNETICO_MIGRATION_* (the
-// same way crawl variables are not validated during migrate runs).
-func TestApplyEnvMigrateConfig_IgnoresMigrationNamespace(t *testing.T) {
-	t.Setenv("MAGNETICO_MIGRATION_BOGUS", "1")
-	t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+// The migration env namespace is validated for EVERY migrate run: unknown
+// MAGNETICO_MIGRATION_* variables are rejected on schema-init too, and the
+// source DSN never applies to it (schema-init reads no source).
+func TestApplyEnvMigrateConfig_MigrationNamespaceOnSchemaInit(t *testing.T) {
+	t.Run("UnknownVariableRejected", func(t *testing.T) {
+		t.Setenv("MAGNETICO_MIGRATION_BOGUS", "1")
 
-	o := &OpFlags{Crawl: defaults(), Migrate: MigrateOptions{SchemaInit: migrateDefaults(), Torrents: torrentsDefaults()}}
-	if err := o.applyConfig(map[string]bool{}, "migrate"); err != nil {
-		t.Fatalf("applyConfig(migrate) error = %v", err)
+		o := &OpFlags{Crawl: defaults(), Migrate: MigrateOptions{SchemaInit: migrateDefaults(), Torrents: torrentsDefaults()}}
+		err := o.applyConfig(map[string]bool{}, "migrate")
+		if err == nil || !strings.Contains(err.Error(), "MAGNETICO_MIGRATION_BOGUS") {
+			t.Errorf("applyConfig(migrate) error = %v, want an unknown-variable error", err)
+		}
+	})
+
+	t.Run("SourceDSNValidatedButNotApplied", func(t *testing.T) {
+		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+
+		o := &OpFlags{Crawl: defaults(), Migrate: MigrateOptions{SchemaInit: migrateDefaults(), Torrents: torrentsDefaults()}}
+		if err := o.applyConfig(map[string]bool{}, "migrate"); err != nil {
+			t.Fatalf("applyConfig(migrate) error = %v", err)
+		}
+		if o.Migrate.Torrents.SourceDatabaseURL != "" {
+			t.Errorf("Torrents.SourceDatabaseURL = %s, want empty (schema-init applies no source)", o.Migrate.Torrents.SourceDatabaseURL)
+		}
+		if o.Migrate.SchemaInit.DatabaseURL != migrateDefaults().DatabaseURL {
+			t.Errorf("SchemaInit.DatabaseURL = %s, want the default", o.Migrate.SchemaInit.DatabaseURL)
+		}
+	})
+}
+
+// verifyDefaultsParse is the shared body of the verify-subcommand parse
+// assertions.
+func verifyDefaultsParse(t *testing.T, o *OpFlags, wantSub string) {
+	t.Helper()
+	if o.Migrate.Subcommand != wantSub {
+		t.Errorf("Migrate.Subcommand = %q, want %q", o.Migrate.Subcommand, wantSub)
 	}
-	if o.Migrate.SchemaInit.DatabaseURL != migrateDefaults().DatabaseURL {
-		t.Errorf("SchemaInit.DatabaseURL = %s, want the default", o.Migrate.SchemaInit.DatabaseURL)
+	var got VerifyOptions
+	if wantSub == "verify-decode" {
+		got = o.Migrate.VerifyDecode
+	} else {
+		got = o.Migrate.VerifyContent
+	}
+	if got != verifyDefaults() {
+		t.Errorf("VerifyOptions = %+v, want the built-in defaults", got)
+	}
+}
+
+func TestParseArgs_VerifySubcommands(t *testing.T) {
+	t.Run("VerifyDecodeDefaults", func(t *testing.T) {
+		o := &OpFlags{}
+		command, err := o.parseArgs([]string{"migrate", "verify-decode"})
+		if err != nil {
+			t.Fatalf("parseArgs([migrate verify-decode]) error = %v", err)
+		}
+		if command != "migrate" {
+			t.Errorf("command = %q, want migrate", command)
+		}
+		verifyDefaultsParse(t, o, "verify-decode")
+	})
+
+	t.Run("VerifyContentDefaults", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "verify-content"}); err != nil {
+			t.Fatalf("parseArgs([migrate verify-content]) error = %v", err)
+		}
+		verifyDefaultsParse(t, o, "verify-content")
+	})
+
+	t.Run("CLIFlagBeatsEnv", func(t *testing.T) {
+		t.Setenv(migrateDatabaseEnvName, "postgres://migrate-env@localhost/db")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "verify-content", "--database", "postgres://cli@localhost/db"}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.VerifyContent.DatabaseURL != "postgres://cli@localhost/db" {
+			t.Errorf("DatabaseURL = %s, want the CLI value", o.Migrate.VerifyContent.DatabaseURL)
+		}
+	})
+
+	t.Run("SourceEnvAppliesToVerifyContent", func(t *testing.T) {
+		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "verify-content"}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.VerifyContent.SourceDatabaseURL != "postgres://source-env@localhost/legacy" {
+			t.Errorf("VerifyContent.SourceDatabaseURL = %s, want the env value", o.Migrate.VerifyContent.SourceDatabaseURL)
+		}
+	})
+
+	t.Run("SourceEnvValidatedButIgnoredOnVerifyDecode", func(t *testing.T) {
+		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "verify-decode"}); err != nil {
+			t.Fatalf("parseArgs([migrate verify-decode]) error = %v (a set source DSN is accepted and ignored)", err)
+		}
+		if o.Migrate.VerifyDecode.SourceDatabaseURL != "" {
+			t.Errorf("VerifyDecode.SourceDatabaseURL = %s, want empty (verify-decode is target-only)", o.Migrate.VerifyDecode.SourceDatabaseURL)
+		}
+	})
+
+	t.Run("UnknownMigrationEnvRejected", func(t *testing.T) {
+		t.Setenv("MAGNETICO_MIGRATION_BOGUS", "1")
+
+		o := &OpFlags{}
+		_, err := o.parseArgs([]string{"migrate", "verify-decode"})
+		if err == nil || !strings.Contains(err.Error(), "MAGNETICO_MIGRATION_BOGUS") {
+			t.Errorf("parseArgs() error = %v, want an unknown-variable error", err)
+		}
+	})
+}
+
+func TestParseArgs_RetryErrorsNested(t *testing.T) {
+	t.Run("NestedDefaultsAndSubcommandRecording", func(t *testing.T) {
+		o := &OpFlags{}
+		command, err := o.parseArgs([]string{"migrate", "torrents", "retry-errors"})
+		if err != nil {
+			t.Fatalf("parseArgs([migrate torrents retry-errors]) error = %v", err)
+		}
+		if command != "migrate" {
+			t.Errorf("command = %q, want migrate", command)
+		}
+		if o.Migrate.Subcommand != "retry-errors" {
+			t.Errorf("Migrate.Subcommand = %q, want retry-errors", o.Migrate.Subcommand)
+		}
+		if o.Migrate.Torrents.RetryErrors != retryErrorsDefaults() {
+			t.Errorf("RetryErrors = %+v, want the built-in defaults", o.Migrate.Torrents.RetryErrors)
+		}
+	})
+
+	t.Run("BareTorrentsStillImports", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "torrents"}); err != nil {
+			t.Fatalf("parseArgs([migrate torrents]) error = %v", err)
+		}
+		if o.Migrate.Subcommand != "torrents" {
+			t.Errorf("Migrate.Subcommand = %q, want torrents", o.Migrate.Subcommand)
+		}
+		if o.Migrate.Torrents != torrentsDefaults() {
+			t.Errorf("Torrents = %+v, want the built-in defaults", o.Migrate.Torrents)
+		}
+	})
+
+	t.Run("FlagsAndAuthorization", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "torrents", "retry-errors",
+			"--database", "postgres://cli@localhost/db",
+			"--workers", "8",
+			"--batch-size", "64",
+			"--accept-source-repairs",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		got := o.Migrate.Torrents.RetryErrors
+		if got.DatabaseURL != "postgres://cli@localhost/db" || got.Workers != 8 || got.BatchSize != 64 || !got.AcceptSourceRepairs {
+			t.Errorf("RetryErrors = %+v, want the CLI values", got)
+		}
+	})
+
+	t.Run("SourceEnvAppliesToNested", func(t *testing.T) {
+		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "torrents", "retry-errors"}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.Torrents.RetryErrors.SourceDatabaseURL != "postgres://source-env@localhost/legacy" {
+			t.Errorf("RetryErrors.SourceDatabaseURL = %s, want the env value", o.Migrate.Torrents.RetryErrors.SourceDatabaseURL)
+		}
+	})
+}
+
+func TestApplyYamlConfig_FansOutToAllMigrateCommands(t *testing.T) {
+	data := []byte("migrateDatabaseURL: postgres://target-file@localhost/db\n" +
+		"migrateSourceDatabaseURL: postgres://source-file@localhost/legacy\n")
+
+	o := &OpFlags{
+		Crawl: defaults(),
+		Migrate: MigrateOptions{
+			SchemaInit:    migrateDefaults(),
+			Torrents:      torrentsDefaults(),
+			VerifyDecode:  verifyDefaults(),
+			VerifyContent: verifyDefaults(),
+		},
+	}
+	if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
+		t.Fatalf("applyYamlConfig() error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		url  string
+	}{
+		{"SchemaInit", o.Migrate.SchemaInit.DatabaseURL},
+		{"Torrents", o.Migrate.Torrents.DatabaseURL},
+		{"VerifyDecode", o.Migrate.VerifyDecode.DatabaseURL},
+		{"VerifyContent", o.Migrate.VerifyContent.DatabaseURL},
+		{"RetryErrors", o.Migrate.Torrents.RetryErrors.DatabaseURL},
+	} {
+		if tc.url != "postgres://target-file@localhost/db" {
+			t.Errorf("%s.DatabaseURL = %s, want the file value", tc.name, tc.url)
+		}
+	}
+	if o.Migrate.Torrents.SourceDatabaseURL != "postgres://source-file@localhost/legacy" ||
+		o.Migrate.VerifyContent.SourceDatabaseURL != "postgres://source-file@localhost/legacy" ||
+		o.Migrate.Torrents.RetryErrors.SourceDatabaseURL != "postgres://source-file@localhost/legacy" {
+		t.Errorf("source fan-out missed a field: torrents=%q verify-content=%q retry=%q",
+			o.Migrate.Torrents.SourceDatabaseURL, o.Migrate.VerifyContent.SourceDatabaseURL,
+			o.Migrate.Torrents.RetryErrors.SourceDatabaseURL)
+	}
+	if o.Crawl.DatabaseURL != defaults().DatabaseURL {
+		t.Errorf("Crawl.DatabaseURL = %s, want the default (crawl key is separate)", o.Crawl.DatabaseURL)
 	}
 }

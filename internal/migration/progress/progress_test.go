@@ -70,6 +70,29 @@ func TestNonTTYLogsUpdatesAndFinalLine(t *testing.T) {
 	}
 }
 
+// A titled snapshot (a non-import pass) prefixes the non-TTY log line with
+// its own name; an untitled snapshot keeps the legacy `migrate torrents`
+// line byte-identical — the import path's output must never change.
+func TestTitlePrefixesLogLineOnly(t *testing.T) {
+	t.Parallel()
+
+	s := Snapshot{Title: "verify-decode", Phase: "scanning", Scanned: 3, ExpectedTotal: 5, Successes: 3}
+	titled := logLine(s, 90*time.Second, 2.5, false, 0)
+	if !strings.HasPrefix(titled, "verify-decode: phase=scanning") {
+		t.Fatalf("titled log line = %q, want the title prefix", titled)
+	}
+
+	s.Title = ""
+	legacy := logLine(s, 90*time.Second, 2.5, false, 0)
+	if !strings.HasPrefix(legacy, "migrate torrents: phase=scanning") {
+		t.Fatalf("legacy log line = %q, want the migrate torrents prefix", legacy)
+	}
+	// Everything after the prefix is shared between the two shapes.
+	if strings.TrimPrefix(titled, "verify-decode: ") != strings.TrimPrefix(legacy, "migrate torrents: ") {
+		t.Fatalf("titled and legacy line bodies differ:\n%q\n%q", titled, legacy)
+	}
+}
+
 // A burst of committed batches must not become a burst of log lines:
 // ordinary progress is rate-limited to the interval no matter how many
 // updates land between renders (regression: every batch update rendered,

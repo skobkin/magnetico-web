@@ -42,16 +42,19 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		}
 	case "migrate":
 		if active.Active == nil {
-			return "", errors.New("migrate: expected a subcommand; expected: schema-init, torrents (see --help)")
+			return "", errors.New("migrate: expected a subcommand; expected: schema-init, torrents, verify-decode, verify-content (see --help)")
 		}
-		o.Migrate.Subcommand = active.Active.Name
+		sub := active.Active
+		if sub.Name == "torrents" && sub.Active != nil {
+			// `migrate torrents retry-errors` — the nested repair pass is
+			// the effective subcommand (go-flags only ever activates the
+			// known nested command, so the name check is belt and braces).
+			o.Migrate.Subcommand = sub.Active.Name
+		} else {
+			o.Migrate.Subcommand = sub.Name
+		}
 		if err := o.applyConfig(explicitOptions(parser.Command), command); err != nil {
 			return "", err
-		}
-		if o.Migrate.Subcommand == "torrents" {
-			if err := o.applyEnvTorrentsConfig(); err != nil {
-				return "", err
-			}
 		}
 	}
 

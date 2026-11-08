@@ -14,9 +14,10 @@ const (
 	envPrefix        = "MAGNETICO_CRAWL_"
 	migrateEnvPrefix = "MAGNETICO_MIGRATE_"
 
-	// migrationEnvPrefix configures `migrate torrents` outside the command
-	// line — most importantly the source DSN, which has no CLI flag so it
-	// can never appear in `ps` output.
+	// migrationEnvPrefix configures the migration source DSN outside the
+	// command line (it has no CLI flag, so it can never appear in `ps`
+	// output) and is validated — unknown names rejected — for every migrate
+	// subcommand.
 	migrationEnvPrefix = "MAGNETICO_MIGRATION_"
 
 	// migrateDatabaseYamlKey and migrateDatabaseEnvName configure the
@@ -155,7 +156,10 @@ func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 	case "crawl":
 		return o.applyEnvConfig(explicit)
 	case "migrate":
-		return o.applyEnvMigrateConfig(explicit)
+		if err := o.applyEnvMigrateConfig(explicit); err != nil {
+			return err
+		}
+		return o.applyEnvMigrationConfig()
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
@@ -196,12 +200,19 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 	if _, found := present[migrateDatabaseYamlKey]; found && !explicit["database"] {
 		o.Migrate.SchemaInit.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.Torrents.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.VerifyDecode.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.VerifyContent.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Torrents.RetryErrors.DatabaseURL = file.MigrateDatabaseURL
 	}
 
 	// The migration source DSN has no CLI flag, so there is no explicit
-	// guard: the file value always applies (env overrides it later).
+	// guard: the file value always applies to every source-connected command
+	// (env overrides it later). verify-decode is target-only and never reads
+	// it.
 	if _, found := present[migrateSourceDatabaseYamlKey]; found {
 		o.Migrate.Torrents.SourceDatabaseURL = file.MigrateSourceDatabaseURL
+		o.Migrate.VerifyContent.SourceDatabaseURL = file.MigrateSourceDatabaseURL
+		o.Migrate.Torrents.RetryErrors.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 	}
 
 	return nil
@@ -254,6 +265,9 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 		if value, ok := os.LookupEnv(migrateDatabaseEnvName); ok && value != "" {
 			o.Migrate.SchemaInit.DatabaseURL = value
 			o.Migrate.Torrents.DatabaseURL = value
+			o.Migrate.VerifyDecode.DatabaseURL = value
+			o.Migrate.VerifyContent.DatabaseURL = value
+			o.Migrate.Torrents.RetryErrors.DatabaseURL = value
 		}
 	}
 
@@ -271,13 +285,23 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 	return nil
 }
 
-// applyEnvTorrentsConfig applies MAGNETICO_MIGRATION_* variables for
-// `migrate torrents` and rejects unknown ones, with the same
+// applyEnvMigrationConfig applies MAGNETICO_MIGRATION_* variables for every
+// migrate subcommand and rejects unknown ones, with the same
 // empty-means-unset rule as the other namespaces. The source DSN has no CLI
-// flag, so the env value always applies (env over file, no explicit entry).
-func (o *OpFlags) applyEnvTorrentsConfig() error {
+// flag, so the env value always applies (env over file, no explicit entry)
+// — to torrents, the nested retry-errors pass and verify-content;
+// verify-decode is target-only and schema-init is schema-only, so there the
+// value is validated as a known variable and otherwise ignored.
+func (o *OpFlags) applyEnvMigrationConfig() error {
 	if value, ok := os.LookupEnv(migrationSourceEnvName); ok && value != "" {
-		o.Migrate.Torrents.SourceDatabaseURL = value
+		switch o.Migrate.Subcommand {
+		case "torrents":
+			o.Migrate.Torrents.SourceDatabaseURL = value
+		case "retry-errors":
+			o.Migrate.Torrents.RetryErrors.SourceDatabaseURL = value
+		case "verify-content":
+			o.Migrate.VerifyContent.SourceDatabaseURL = value
+		}
 	}
 
 	for _, kv := range os.Environ() {

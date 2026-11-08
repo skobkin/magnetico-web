@@ -25,6 +25,14 @@ import (
 // Progress (kept a separate type so neither package depends on the other;
 // main maps between them).
 type Snapshot struct {
+	// Title identifies non-import passes in the periodic log line (e.g.
+	// "verify-decode"). Empty keeps the legacy `migrate torrents` line
+	// byte-identical. The pass's own counters are mapped onto the fields
+	// below by the caller in main (verified→Successes, mismatched→Errors,
+	// …); the runner's final summary line carries the authoritative numbers
+	// with the pass's own vocabulary.
+	Title string
+
 	Phase         string
 	Checkpoint    int64
 	Scanned       int64
@@ -243,7 +251,11 @@ func ttyLine(s Snapshot, elapsed time.Duration, rate float64, hasETA bool, eta t
 
 func logLine(s Snapshot, elapsed time.Duration, rate float64, hasETA bool, eta time.Duration) string {
 	b := &strings.Builder{}
-	fmt.Fprintf(b, "migrate torrents: phase=%s", phaseLabel(s))
+	if s.Title != "" {
+		fmt.Fprintf(b, "%s: phase=%s", s.Title, phaseLabel(s))
+	} else {
+		fmt.Fprintf(b, "migrate torrents: phase=%s", phaseLabel(s))
+	}
 	if s.ExpectedTotal > 0 {
 		fmt.Fprintf(b, " scanned=%d/%d", s.Scanned, s.ExpectedTotal)
 	} else {
