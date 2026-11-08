@@ -693,6 +693,15 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			NewPhase:            state.VerificationPhaseExtras,
 		})
 		if err != nil {
+			// Cancellation while the extras commit waits (a lock, a stalled
+			// peer) is a resumable interruption, exactly like every scanning
+			// branch — not a fatal (Codex review iteration 4, finding 3).
+			if cause := fatalCause(runCtx); cause != nil {
+				return nil, cause
+			}
+			if runCtx.Err() != nil {
+				return nil, interruptScan(runCtx, pool, run)
+			}
 			return nil, verificationFatal("extras", targetAfter, err)
 		}
 		if !committed {

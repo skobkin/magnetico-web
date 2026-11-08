@@ -12,9 +12,12 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
@@ -796,5 +799,88 @@ func TestVerifyDecodeExtrasResumeKeepsOrphanCount(t *testing.T) {
 	}
 	if res2.OrphanTargetBlobs != 1 {
 		t.Fatalf("resumed orphan count = %d, want 1 (restored from the durable issue)", res2.OrphanTargetBlobs)
+	}
+}
+
+// waitExtrasCommitBlocked polls until some session is blocked on a row lock
+// while running a verification_runs UPDATE — with the test holding the run's
+// row lock from after the last page commit, that session is the pass under
+// test and the blocked statement is its extras commit (every page commit
+// landed before the lock was taken).
+func waitExtrasCommitBlocked(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%verification_runs%'`).Scan(&n)
+		if err != nil {
+			t.Errorf("poll pg_stat_activity: %v", err)
+			return
+		}
+		if n > 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Errorf("no blocked verification_runs UPDATE appeared — the extras commit never contended with the held row lock")
+}
+
+func TestVerifyDecodeExtrasCommitCancelPersists(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+
+	// Hold the verification_runs row locked from the first committed page
+	// (Checkpoint > 0): with a single-page fixture the pass then blocks at
+	// its extras commit. Cancel while that UPDATE waits — the interruption
+	// must take the resumable exit-2 path with a durable mark, not the fatal
+	// exit-1 mapping (Codex review iteration 4, finding 3).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := poolForRunner(t, tgt)
+	lockTX, err := pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lockOnce sync.Once
+	lockHeld := make(chan struct{})
+	go func() {
+		<-lockHeld
+		waitExtrasCommitBlocked(t, pool)
+		cancel()
+		// Let the cancellation reach the blocked UPDATE, then release the
+		// lock so the durable interrupted-mark can land.
+		time.Sleep(200 * time.Millisecond)
+		if err := lockTX.Rollback(context.Background()); err != nil {
+			t.Errorf("release the row lock: %v", err)
+		}
+	}()
+	_, err = verifyDecoded(t, ctx, tgt, func(in *VerifyDecodeInput) {
+		in.Progress = func(p VerifyProgress) {
+			if p.Checkpoint == 0 {
+				return // the pre-scan report
+			}
+			lockOnce.Do(func() {
+				if _, err := lockTX.Exec(context.Background(),
+					`SELECT verification_id FROM magnetico_migration.verification_runs WHERE state = 'running' FOR UPDATE`); err != nil {
+					t.Errorf("lock the verification run row: %v", err)
+				}
+				close(lockHeld)
+			})
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted (the extras-commit cancellation must take the exit-2 path)", err)
+	}
+	run, err := state.LatestVerification(context.Background(), pool, state.VerificationKindDecode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != state.VerificationInterrupted {
+		t.Fatalf("pass state = %s, want interrupted (the durable mark must survive an extras-commit cancellation)", run.State)
 	}
 }

@@ -16,7 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
@@ -1179,5 +1181,124 @@ func TestPageContentAccountingCoversFileArrays(t *testing.T) {
 		if retained > 1<<20 {
 			t.Fatalf("get(%d): retained decoded bytes = %d, budget %d", idx, retained, int64(1<<20))
 		}
+	}
+}
+
+func TestVerifyContentExtrasCommitCancelPersists(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+
+	// Same premise as the decode pass: hold the run's row locked from the
+	// first committed page, cancel while the extras commit's UPDATE waits —
+	// resumable exit 2 with a durable mark, not fatal exit 1 (Codex review
+	// iteration 4, finding 3).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := poolForRunner(t, tgt)
+	lockTX, err := pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lockOnce sync.Once
+	lockHeld := make(chan struct{})
+	go func() {
+		<-lockHeld
+		waitExtrasCommitBlocked(t, pool)
+		cancel()
+		time.Sleep(200 * time.Millisecond)
+		if err := lockTX.Rollback(context.Background()); err != nil {
+			t.Errorf("release the row lock: %v", err)
+		}
+	}()
+	_, err = verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.Progress = func(p VerifyProgress) {
+			if p.Checkpoint == 0 {
+				return // the pre-scan report
+			}
+			lockOnce.Do(func() {
+				if _, err := lockTX.Exec(context.Background(),
+					`SELECT verification_id FROM magnetico_migration.verification_runs WHERE state = 'running' FOR UPDATE`); err != nil {
+					t.Errorf("lock the verification run row: %v", err)
+				}
+				close(lockHeld)
+			})
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted (the extras-commit cancellation must take the exit-2 path)", err)
+	}
+	run, err := state.LatestVerification(context.Background(), pool, state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != state.VerificationInterrupted {
+		t.Fatalf("pass state = %s, want interrupted (the durable mark must survive an extras-commit cancellation)", run.State)
+	}
+}
+
+func TestVerifyContentExtrasResumeDoesNotDoubleCountDrift(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+	// Drift the source after the import: every invocation recomputes the
+	// provenance flag against the recorded IMPORT fingerprint, so run 1
+	// commits the drift issue (info) during its scan.
+	seedSourceTorrent(t, src, 99, "late.bin", 5, 1700000009)
+	seedSourceFile(t, src, 99, "late.bin", 5)
+
+	// Run 1: interrupt right after the extras phase commits.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, err := verifyContent(t, ctx, src, tgt, func(in *VerifyContentInput) {
+		in.Progress = func(p VerifyProgress) {
+			if p.Phase == state.VerificationPhaseExtras {
+				cancel()
+			}
+		}
+	})
+	if !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("error = %v, want ErrInterrupted", err)
+	}
+	pool := poolForRunner(t, tgt)
+	run1, err := state.LatestVerification(context.Background(), pool, state.VerificationKindContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run1.State != state.VerificationInterrupted || run1.Phase != state.VerificationPhaseExtras {
+		t.Fatalf("run 1 = %s/%s, want interrupted/extras", run1.State, run1.Phase)
+	}
+	seq1 := run1.Seq
+
+	// Resume: the run's own recorded fingerprint is unchanged (adopted), but
+	// the drift recomputation vs the import fingerprint fires again — the
+	// re-proposed issue dedupes in storage, and the reported severity split
+	// must count it once (Codex review iteration 4, finding 4).
+	res2, err := verifyContent(t, context.Background(), src, tgt, nil)
+	if !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("resume error = %v, want ErrVerificationFindings (row 99 is source-only)", err)
+	}
+	if !res2.Resumed || res2.Seq != seq1 {
+		t.Fatalf("resumed = %v seq %d, want the adopted run (seq %d)", res2.Resumed, res2.Seq, seq1)
+	}
+	if res2.IssuesBySeverity[state.IssueInfo] != 1 {
+		t.Fatalf("resumed info issue count = %d, want 1 (the drift issue is durable once; the recount after the finalize commit is authoritative)",
+			res2.IssuesBySeverity[state.IssueInfo])
+	}
+	var driftCount int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT COUNT(*) FROM magnetico_migration.verification_issues
+         WHERE verification_id = $1::uuid AND code = 'source_fingerprint_drift'`,
+		res2.VerificationID).Scan(&driftCount); err != nil {
+		t.Fatal(err)
+	}
+	if driftCount != 1 {
+		t.Fatalf("durable drift issues = %d, want 1", driftCount)
 	}
 }
