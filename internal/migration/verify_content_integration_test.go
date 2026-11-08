@@ -11,8 +11,10 @@ package migration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/skobkin/magnetico-web/codec"
@@ -181,7 +183,21 @@ func TestVerifyContentFindingsFail(t *testing.T) {
 		wantCode     string
 		wantSeverity string
 		wantMismatch int64
+		wantField    string // non-empty: the issue details must name this field
 	}{
+		{
+			name: "tampered stored file_count is a content mismatch naming the field",
+			corrupt: func(t *testing.T, src, tgt string) {
+				// The blob still decodes to the exact source file list, but
+				// the stored count desyncs from it — the compare must catch
+				// the column, not just the decoded content.
+				execTargetSQL(t, tgt, `UPDATE magneticod.torrents SET file_count = 9 WHERE id = 1`)
+			},
+			wantCode:     IssueCodeContentMismatch,
+			wantSeverity: state.IssueMismatch,
+			wantMismatch: 1,
+			wantField:    "file_count",
+		},
 		{
 			name: "missing target row not in the registry is missing_target_row",
 			corrupt: func(t *testing.T, src, tgt string) {
@@ -312,6 +328,20 @@ func TestVerifyContentFindingsFail(t *testing.T) {
 			for _, is := range issues {
 				if is.Code == tc.wantCode && is.Severity != tc.wantSeverity {
 					t.Fatalf("%s severity = %s, want %s", is.Code, is.Severity, tc.wantSeverity)
+				}
+			}
+			if tc.wantField != "" {
+				for _, is := range issues {
+					if is.Code != tc.wantCode {
+						continue
+					}
+					b, merr := json.Marshal(is.Details)
+					if merr != nil {
+						t.Fatal(merr)
+					}
+					if !strings.Contains(string(b), tc.wantField) {
+						t.Fatalf("%s details = %s, want the %s field named", tc.wantCode, b, tc.wantField)
+					}
 				}
 			}
 			if res.Mismatched != tc.wantMismatch {

@@ -921,7 +921,8 @@ func classifyMatched(srcRow *original.TorrentRow, files []original.FileRow, ov o
 			srcFiles[i] = codec.File{Path: f.Path, Size: f.Size}
 		}
 		fields := compareMetadata(srcRow, tr)
-		if len(srcFiles) != 1 || srcFiles[0].Path != tr.name || srcFiles[0].Size != tr.totalSize {
+		if int64(len(srcFiles)) != tr.fileCount || len(srcFiles) != 1 ||
+			srcFiles[0].Path != tr.name || srcFiles[0].Size != tr.totalSize {
 			fields = append(fields, "files")
 		}
 		if len(fields) > 0 {
@@ -961,11 +962,18 @@ func classifyMatched(srcRow *original.TorrentRow, files []original.FileRow, ov o
 	}
 
 	// Full compare: exact metadata fields + complete canonical multiset.
+	// The stored file_count is a real target column: the source's complete
+	// file list (overflowed records never reach here) must match it exactly
+	// like any other metadata field — a tampered count desyncs the row from
+	// its blob even when the decoded list itself still compares equal.
 	srcFiles := make([]codec.File, len(files))
 	for i, f := range files {
 		srcFiles[i] = codec.File{Path: f.Path, Size: f.Size}
 	}
 	fields := compareMetadata(srcRow, tr)
+	if int64(len(srcFiles)) != tr.fileCount {
+		fields = append(fields, "file_count")
+	}
 	if !pipeline.EqualCanonical(tc.files, srcFiles) {
 		fields = append(fields, "files")
 	}
