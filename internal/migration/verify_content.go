@@ -811,6 +811,11 @@ func prepareTargetContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePag
 		}
 	}
 
+	// Worker results land in a pre-sized slice indexed by the page-row index
+	// (each index written by exactly one worker — no shared map, no locks);
+	// the id-keyed map is merged single-threaded below.
+	decoded := make([]*tpContent, len(tp.rows))
+
 	for _, chunk := range packChunks(entries, maxInflight) {
 		ids := make([]int64, len(chunk))
 		for i, e := range chunk {
@@ -858,15 +863,15 @@ func prepareTargetContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePag
 					r := &tp.rows[e.idx]
 					blob, ok := blobs[r.id]
 					if !ok {
-						out[r.id] = &tpContent{missing: true}
+						decoded[e.idx] = &tpContent{missing: true}
 						continue
 					}
 					files, err := codec.Decode(blob, limits)
 					if err != nil {
-						out[r.id] = &tpContent{err: err}
+						decoded[e.idx] = &tpContent{err: err}
 						continue
 					}
-					out[r.id] = &tpContent{files: files}
+					decoded[e.idx] = &tpContent{files: files}
 				}
 			}()
 		}
@@ -875,6 +880,11 @@ func prepareTargetContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePag
 		}
 		close(jobs)
 		wg.Wait()
+	}
+	for i, c := range decoded {
+		if c != nil {
+			out[tp.rows[i].id] = c
+		}
 	}
 	return out, nil
 }
