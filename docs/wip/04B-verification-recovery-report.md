@@ -151,6 +151,52 @@ small binary smoke driving the real binary through the whole recovery lifecycle 
 04A smoke untouched), DSN secrecy assertions, target-unmodified assertions,
 TTY/non-TTY rendering, plus `-race` over the whole migration tree.
 
+## Codex review loop (owner-directed milestone 1)
+
+**Iteration 1** returned 9 findings; all were re-validated against the tree and fixed
+as individual commits, each with a regression test that fails without the fix:
+
+| # | Finding (validated) | Fix commit | Regression test |
+|---|---|---|---|
+| 9 | A losing checkpoint CAS still committed the page's issue rows (issue inserts committed without their checkpoint/counters) | `c777c2a7` — CAS loss rolls back the WHOLE page transaction | CAS-stale page commits nothing |
+| 2 | verify-content never compared the stored `file_count` against the decoded list length (two-file blob with `file_count=3` passed; verify-decode correctly failed the same data) | `ccb79e20` — compare the stored `file_count` in verify-content | file_count drift → mismatch finding |
+| 4 | Source-only rows incremented the target-side mismatch counter, corrupting `observed_target_ids` coverage accounting (and the persisted mirror) | `d2fdbaf3` — source-only rows carry severity on the issue alone; target counters/mirrors stay exact | `TestVerifyContentSourceOnlyRowsStayOutOfTargetCounters` |
+| 3 | On resume, the registry iterator restarted at the import minimum instead of the verification's source checkpoint, so registry IDs ≤ checkpoint re-blocked recognition of unresolved rows | `5ea99a58` — resume the registry walk at the source checkpoint | `TestVerifyContentResumeClassifiesRegistryIDsBeyondCheckpoint` |
+| 1 | Unresolved import errors could coexist with a content PASS (a vanished rejected source row left one unresolved error and an exit 0) | `ebe66052` — finalize fails coverage over registry entries with no per-row `unresolved_record_error` (aggregate `unresolved_record_coverage` finding with uncovered count + min/max source ID) | `TestVerifyContentVanishedSourceRecordFailsCoverage` |
+| 7 | A source-only prefix (first N imports rejected) accumulated arbitrarily many findings into one uncommitted unit, defeating bounded memory even at `--batch-size 1` | `2a8d7961` — commit units at bounded finding counts mid-page and mid-window, with certified checkpoint boundaries (a target checkpoint only ever advances past CLASSIFIED target rows) | `TestVerifyContentBoundedUnitsFlushMidPageAndMidWindow` |
+| 5 | verify-content retained every decoded file list until the whole page finished decoding — the byte budget bounded stored blobs, not retained decoded content | `9eff3123` — decode pages lazily one budget-bounded chunk at a time; only the current chunk's decoded lists live | `TestVerifyContentDecodesPerRowUnderTinyBudget` |
+| 6 | retry-errors reassembled FetchByIDs' budget-split windows into one in-memory batch before settling any ID, defeating the fetch-side memory limit | `ac2ebdfc` — settle retry IDs per fetch window (ascending per-window prefix + monotonic cursor) | `TestRetryErrorsSparseBatchSettlesPerWindow` |
+| 8 | `migrate torrents --database X retry-errors` silently ignored the parent-positioned `--database X` (the repair pass ran against the default target) | `325bc9fe` — opflags transfers parent-positioned shared flags (database/workers/batch-size/max-inflight-bytes) onto retry-errors when the parent position set them and the nested position did not | `TestParseArgs_RetryErrorsNested/ParentPositionedSharedFlagsTransfer`, `/NestedPositionWins` |
+
+All nine were validated before fixing (findings 1–5 and 8 reproduced by the reviewer;
+6–7 confirmed by retention analysis and then covered by fixtures).
+
+**Iteration 2** first validated the round-1 fixes (reversing each of the eight
+regression-tested fixes made its test fail; the parent-flag/yaml/env precedence matrix
+passed), then returned 5 findings — all reproduced — and all fixed as individual
+commits:
+
+| # | Finding (validated) | Fix commit | Regression test |
+|---|---|---|---|
+| 2 (P1) | YAML config diagnostics echoed neighboring config lines verbatim — a typo printed a DSN with its password (goccy renders errors with source context) | `bf7f1770` — redactSecrets masks URL userinfo and password/pwd key-value pairs at both config decode paths | live-leak check (unredacted diagnostic prints the DSN) + redaction unit tests |
+| 1 (P1) | verify-content chunk admission counted STORED bytes, but wire-format-v1 payloads are compressed: one chunk retained a whole compressed page's decoded lists (926 stored bytes → 1.92 MB decoded under a 1 MiB budget) | `56028605` — pageContent serves SEGMENTS: fetch bounded by stored bytes, decode cut so retained DECODED bytes stay within the budget; a single over-budget row is served solo (codec MaxUncompressedBytes bound) | `TestPageContentRetentionStaysWithinDecodedBudget` (7.2 MB retained pre-fix) |
+| 5 (P2) | The round-1 memory regressions passed against their pre-fix implementations (outcome checks only) | content half: the white-box retention test above; retry half: `8b2cd8dc` — the batch settlement loop extracted behind a seam with ordering-pinning unit tests (a second-fetch failure proves window one settled first) | `TestSettleBatchWindowsSettlesPerWindow`, `TestSettleBatchWindowsFullBatchOrdering` |
+| 3 (P2) | A registry entry whose source row vanished never left the iterator head: every later unresolved row compared against the stale entry and became missing_target_row; uncovered counts wrong (reproduced: live rejected ID 3 misclassified, uncovered:2) | `865721da` — registryIter.skipBelow advances past entries below the current source row; they stay covered by the finalize aggregate | `TestVerifyContentVanishedRegistryEntryDoesNotPoisonLaterRows` |
+| 4 (P2) | A pass interrupted after the extras checkpoint resumed with OrphanTargetBlobs=0 while the durable issue kept the real count (both verify-decode and verify-content) | `dc7603fa` — state.OrphanBlobIssueCount; both runners restore the result field when adopting a run already past its scan | `TestVerify{Decode,Content}ExtrasResumeKeepsOrphanCount` |
+
+**Iteration 3** returned 3 findings — all validated before fixing (finding 1 by live
+redacted-output reproduction, finding 2 by a white-box admission check, finding 3 by a
+cancel-point analysis proving the first regression draft exercised the wrong interrupt
+path) — and all fixed as individual commits:
+
+| # | Finding (validated) | Fix commit | Regression test |
+|---|---|---|---|
+| 1 (P2) | The round-2 redaction missed three credential shapes pgx accepts: empty-username userinfo URLs (`postgres://:SECRET@host`), quoted values with spaces (`password='HEAD SECRET_TAIL'`), percent-encoded keys (`%70assword=SECRET`) — each leaked verbatim in YAML diagnostics | `adde49c8` — urlPasswordPattern allows an empty username (still requires `@`); credentialKeyPattern enumerates password/pwd letters as case classes or percent escapes with bare/single/double-quoted values | `TestRedactSecrets` (7 cases) + live-leak yaml test covering the empty-username DSN |
+| 2 (P2) | decodedBytes charged only path bytes: each codec.File is a 24-byte Go value and slice capacity can exceed length — 30,000 one-byte-path rows charged ~510 KiB while the real arrays hold ~740 KiB, so a "budget" segment over-retained | `d3a3b7f0` — estimator charges `cap(files)*24 + sum(len(path))` | `TestPageContentAccountingCoversFileArrays` (pre-fix admits rows [0,2) into one window) |
+| 3 (P1) | The round-2 seam extraction gave the retry fetch closure its own error mapping whose graceful-interruption branch returned the bare ErrInterrupted sentinel — a cancel surfacing at the next-window FetchByIDs left `retry_runs.state='running'` behind an exit 2 | `35300b5f` — the closure returns interruptRetry() like every other interrupt path | `TestRetryErrorsInterruptDuringWindowFetchPersists` (fixture rows ~1.1 MiB each under a 1 MiB budget so the batch genuinely splits; verified failing with state 'running' against the bare sentinel) |
+
+Iterations are capped at 5; the loop continues until a round returns nothing validated.
+
 ## Hand-off requirements for 04C/04D
 
 - **04C (cleanup/export)**: verification/retry history is append-only and immutable —
