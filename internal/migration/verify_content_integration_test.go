@@ -1207,7 +1207,7 @@ func TestVerifyContentExtrasCommitCancelPersists(t *testing.T) {
 	lockHeld := make(chan struct{})
 	go func() {
 		<-lockHeld
-		waitExtrasCommitBlocked(t, pool)
+		waitLockBlocked(t, pool, "verification_runs")
 		cancel()
 		time.Sleep(200 * time.Millisecond)
 		if err := lockTX.Rollback(context.Background()); err != nil {

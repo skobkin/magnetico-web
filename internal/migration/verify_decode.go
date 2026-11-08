@@ -398,8 +398,15 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 	result.AssumedSingle = finished.AssumedSingleCount
 	result.IssuesBySeverity = counts
 
-	// Report-only: the 04A registry counts, stated without conflation.
-	result.UnresolvedRecordErrors, result.UnresolvedIntegrity, err = state.CountErrors(runCtx, pool, prog.RunID)
+	// Report-only: the 04A registry counts, stated without conflation. The
+	// verdict is already durable — like the post-finalize severity recount,
+	// the query runs detached from the run's cancellation, because a cancel
+	// here must neither fail the pass fatally nor misreport a resumable
+	// interruption on a run that can never resume (Codex review iteration 5,
+	// finding 2).
+	cctx, ccancel := context.WithTimeout(context.WithoutCancel(context.Background()), dbOpTimeout)
+	result.UnresolvedRecordErrors, result.UnresolvedIntegrity, err = state.CountErrors(cctx, pool, prog.RunID)
+	ccancel()
 	if err != nil {
 		return nil, verificationFatal("coverage", checkpoint, err)
 	}

@@ -802,18 +802,18 @@ func TestVerifyDecodeExtrasResumeKeepsOrphanCount(t *testing.T) {
 	}
 }
 
-// waitExtrasCommitBlocked polls until some session is blocked on a row lock
-// while running a verification_runs UPDATE — with the test holding the run's
-// row lock from after the last page commit, that session is the pass under
-// test and the blocked statement is its extras commit (every page commit
-// landed before the lock was taken).
-func waitExtrasCommitBlocked(t *testing.T, pool *pgxpool.Pool) {
+// waitLockBlocked polls until some session is blocked on a lock while
+// running a statement whose text contains queryFragment — with the test
+// holding that lock from a known sync point, that session is the pass under
+// test and the blocked statement is the one the test targets (every earlier
+// statement landed before the lock was taken).
+func waitLockBlocked(t *testing.T, pool *pgxpool.Pool, queryFragment string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		var n int
 		err := pool.QueryRow(context.Background(), `SELECT COUNT(*) FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%verification_runs%'`).Scan(&n)
+			WHERE wait_event_type = 'Lock' AND query LIKE $1`, "%"+queryFragment+"%").Scan(&n)
 		if err != nil {
 			t.Errorf("poll pg_stat_activity: %v", err)
 			return
@@ -823,7 +823,7 @@ func waitExtrasCommitBlocked(t *testing.T, pool *pgxpool.Pool) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Errorf("no blocked verification_runs UPDATE appeared — the extras commit never contended with the held row lock")
+	t.Errorf("no statement touching %s ever blocked on the held lock", queryFragment)
 }
 
 func TestVerifyDecodeExtrasCommitCancelPersists(t *testing.T) {
@@ -850,7 +850,7 @@ func TestVerifyDecodeExtrasCommitCancelPersists(t *testing.T) {
 	lockHeld := make(chan struct{})
 	go func() {
 		<-lockHeld
-		waitExtrasCommitBlocked(t, pool)
+		waitLockBlocked(t, pool, "verification_runs")
 		cancel()
 		// Let the cancellation reach the blocked UPDATE, then release the
 		// lock so the durable interrupted-mark can land.
@@ -882,5 +882,78 @@ func TestVerifyDecodeExtrasCommitCancelPersists(t *testing.T) {
 	}
 	if run.State != state.VerificationInterrupted {
 		t.Fatalf("pass state = %s, want interrupted (the durable mark must survive an extras-commit cancellation)", run.State)
+	}
+}
+
+func TestVerifyDecodeFinalizedRunNotInterruptedByCancel(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+
+	// Cancel exactly AFTER the durable verdict has committed: a poller flips
+	// the pass context the moment the run row turns terminal. To make the
+	// post-commit window wide enough to land in deterministically, the first
+	// progress callback bulk-inserts 100k issue rows for the run, so the
+	// post-finalize severity recount takes tens of milliseconds — the cancel
+	// then lands mid-recount. The recount is report-only bookkeeping on a run
+	// that can never resume: the pass must still return its completed verdict
+	// (Codex review iteration 5, finding 2).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := poolForRunner(t, tgt)
+	var seeded sync.Once
+	go func() {
+		deadline := time.Now().Add(30 * time.Second)
+		for time.Now().Before(deadline) {
+			var state string
+			err := pool.QueryRow(context.Background(),
+				`SELECT s.state FROM magnetico_migration.verification_runs s
+                 WHERE s.state IN ('running', 'completed_pass', 'completed_fail')
+                 ORDER BY s.seq DESC LIMIT 1`).Scan(&state)
+			if err == nil && state != "running" {
+				cancel()
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Errorf("the verification run never turned terminal")
+	}()
+	res, err := verifyDecoded(t, ctx, tgt, func(in *VerifyDecodeInput) {
+		in.Progress = func(p VerifyProgress) {
+			if p.Checkpoint == 0 {
+				return // the pre-scan report
+			}
+			seeded.Do(func() {
+				var vid string
+				if err := pool.QueryRow(context.Background(),
+					`SELECT verification_id FROM magnetico_migration.verification_runs WHERE state = 'running'`).Scan(&vid); err != nil {
+					t.Errorf("read the verification id: %v", err)
+					return
+				}
+				if _, err := pool.Exec(context.Background(),
+					`INSERT INTO magnetico_migration.verification_issues
+                     (verification_id, source_id, code, stage, severity, details)
+                     SELECT $1::uuid, g, 'probe_mismatch', 'scan', 'mismatch', 'null'
+                     FROM generate_series(1, 100000) g`, vid); err != nil {
+					t.Errorf("bulk-seed probe issues: %v", err)
+				}
+			})
+		}
+	})
+	if !errors.Is(err, ErrVerificationFindings) {
+		t.Fatalf("error = %v, want ErrVerificationFindings (the verdict committed before the cancellation landed)", err)
+	}
+	if res.Pass {
+		t.Fatal("pass = true, want completed_fail over the probe issues")
+	}
+	run, err := state.LatestVerification(context.Background(), pool, state.VerificationKindDecode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.State != state.VerificationCompletedFail {
+		t.Fatalf("durable state = %s, want completed_fail", run.State)
 	}
 }

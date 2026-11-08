@@ -221,7 +221,15 @@ func finishVerificationOutcome(
 	// authoritative (Codex review iteration 4, finding 4); the pre-commit
 	// recount above stays the pass decision's basis, with the finalize list's
 	// severity gate applied explicitly.
-	counts, err = verifyIssueSeverityCounts(ctx, pool, run.VerificationID)
+	//
+	// The recount is report-only bookkeeping AFTER the durable verdict has
+	// committed: it runs on a context detached from the run's cancellation,
+	// because a cancellation here must not classify the pass as interrupted
+	// — the run is already completed and can never resume (Codex review
+	// iteration 5, finding 2).
+	rctx, rcancel := context.WithTimeout(context.WithoutCancel(context.Background()), dbOpTimeout)
+	defer rcancel()
+	counts, err = verifyIssueSeverityCounts(rctx, pool, run.VerificationID)
 	if err != nil {
 		return nil, false, nil, err
 	}
