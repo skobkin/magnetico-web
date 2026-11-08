@@ -18,16 +18,16 @@ import (
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
-type processor struct {
+type Processor struct {
 	limits codec.Limits
 	enc    *codec.Encoder
 	verify bool
 }
 
-// newProcessor builds the record processor. The encoder is shared by all
+// NewProcessor builds the record Processor. The encoder is shared by all
 // worker goroutines and bounds encode concurrency internally.
-func newProcessor(limits codec.Limits, profile codec.Profile, workers int, verify bool) *processor {
-	return &processor{
+func NewProcessor(limits codec.Limits, profile codec.Profile, workers int, verify bool) *Processor {
+	return &Processor{
 		limits: limits,
 		enc:    codec.NewEncoder(profile, limits, workers),
 		verify: verify,
@@ -36,7 +36,7 @@ func newProcessor(limits codec.Limits, profile codec.Profile, workers int, verif
 
 // process validates, encodes and (optionally) verifies one record. It
 // returns exactly one of (success, nil) or (nil, failure).
-func (p *processor) process(rec *Record) (*Success, *Failure) {
+func (p *Processor) Process(rec *Record) (*Success, *Failure) {
 	files := make([]codec.File, len(rec.Files))
 	for i, f := range rec.Files {
 		files[i] = codec.File{Path: f.Path, Size: f.Size}
@@ -101,7 +101,7 @@ func (p *processor) process(rec *Record) (*Success, *Failure) {
 				Details:  details,
 			}
 		}
-		if !equalCanonical(decoded, files) {
+		if !EqualCanonical(decoded, files) {
 			return nil, &Failure{
 				SourceID: int64(rec.SourceID),
 				InfoHash: rec.InfoHash,
@@ -118,25 +118,25 @@ func (p *processor) process(rec *Record) (*Success, *Failure) {
 	return &Success{Record: rec, Blob: blob}, nil
 }
 
-// compareCanonical mirrors codec's canonical order (path bytes ascending,
+// CompareCanonical mirrors codec's canonical order (path bytes ascending,
 // then size ascending) so the verification compare is exact even for
 // duplicate paths.
-func compareCanonical(a, b codec.File) int {
+func CompareCanonical(a, b codec.File) int {
 	if c := strings.Compare(a.Path, b.Path); c != 0 {
 		return c
 	}
 	return cmp.Compare(a.Size, b.Size)
 }
 
-// equalCanonical reports whether decoded (already canonically sorted by
+// EqualCanonical reports whether decoded (already canonically sorted by
 // codec.Decode) equals the source file list under canonical ordering.
-func equalCanonical(decoded, source []codec.File) bool {
+func EqualCanonical(decoded, source []codec.File) bool {
 	if len(decoded) != len(source) {
 		return false
 	}
 	sorted := make([]codec.File, len(source))
 	copy(sorted, source)
-	slices.SortFunc(sorted, compareCanonical)
+	slices.SortFunc(sorted, CompareCanonical)
 	for i := range decoded {
 		if decoded[i] != sorted[i] {
 			return false

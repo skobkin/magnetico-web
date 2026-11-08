@@ -363,12 +363,12 @@ func TestWeightsAcquireReleaseAndSolo(t *testing.T) {
 func TestProcessorErrorTaxonomy(t *testing.T) {
 	t.Parallel()
 
-	p := newProcessor(codec.DefaultLimits(), codec.DefaultProfile(), 2, true)
+	p := NewProcessor(codec.DefaultLimits(), codec.DefaultProfile(), 2, true)
 
 	// Sum mismatch → invalid_metadata at the validate stage.
 	bad := mkRec(1, [2]int{4, 5})
 	bad.TotalSize = 99
-	_, fail := p.process(bad)
+	_, fail := p.Process(bad)
 	if fail == nil || fail.Stage != StageValidate || fail.Code != CodeInvalidMetadata {
 		t.Fatalf("sum mismatch failure = %+v", fail)
 	}
@@ -380,9 +380,9 @@ func TestProcessorErrorTaxonomy(t *testing.T) {
 	// structured limit detail.
 	small := codec.DefaultLimits()
 	small.MaxAggregatePathBytes = 16
-	pSmall := newProcessor(small, codec.DefaultProfile(), 1, true)
+	pSmall := NewProcessor(small, codec.DefaultProfile(), 1, true)
 	big := mkRec(2, [2]int{10, 1}, [2]int{10, 1})
-	_, fail = pSmall.process(big)
+	_, fail = pSmall.Process(big)
 	if fail == nil || fail.Stage != StageEncode || fail.Code != CodeCodecLimit {
 		t.Fatalf("aggregate-path failure = %+v", fail)
 	}
@@ -399,7 +399,7 @@ func TestProcessorErrorTaxonomy(t *testing.T) {
 		DiscoveredOn: 1700000000,
 		Files:        []FileEntry{{Path: "t3", Size: 7}},
 	}
-	success, fail := p.process(typical)
+	success, fail := p.Process(typical)
 	if fail != nil || success == nil || success.Blob != nil {
 		t.Fatalf("typical single = (%+v, %+v), want success without blob", success, fail)
 	}
@@ -411,7 +411,7 @@ func TestProcessorErrorTaxonomy(t *testing.T) {
 		DiscoveredOn: 1700000000,
 		Files:        []FileEntry{{Path: "f", Size: 7}},
 	}
-	success, fail = p.process(atypical)
+	success, fail = p.Process(atypical)
 	if fail != nil || success == nil || success.Blob == nil {
 		t.Fatalf("atypical single = (%+v, %+v), want success with blob", success, fail)
 	}
@@ -424,16 +424,16 @@ func TestEqualCanonicalWithDuplicates(t *testing.T) {
 	b := codec.File{Path: "b", Size: 2}
 	// decoded is canonically sorted (codec.Decode contract); source order
 	// is arbitrary until the internal sort.
-	if !equalCanonical([]codec.File{a, b}, []codec.File{b, a}) {
+	if !EqualCanonical([]codec.File{a, b}, []codec.File{b, a}) {
 		t.Fatal("equal sets in any source order must compare equal")
 	}
-	if equalCanonical([]codec.File{a, a}, []codec.File{a}) {
+	if EqualCanonical([]codec.File{a, a}, []codec.File{a}) {
 		t.Fatal("different lengths must not compare equal")
 	}
-	if equalCanonical([]codec.File{a, a}, []codec.File{a, b}) {
+	if EqualCanonical([]codec.File{a, a}, []codec.File{a, b}) {
 		t.Fatal("duplicate vs distinct must not compare equal")
 	}
-	if !equalCanonical([]codec.File{a, a}, []codec.File{a, a}) {
+	if !EqualCanonical([]codec.File{a, a}, []codec.File{a, a}) {
 		t.Fatal("identical duplicates must compare equal")
 	}
 }

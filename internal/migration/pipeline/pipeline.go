@@ -155,7 +155,7 @@ func Run(ctx context.Context, src Source, cfg Config, commit Committer) (Result,
 	}
 
 	sem := newWeights(cfg.MaxInflightBytes)
-	proc := newProcessor(cfg.Limits, cfg.Profile, cfg.Workers, cfg.VerifyDecode)
+	proc := NewProcessor(cfg.Limits, cfg.Profile, cfg.Workers, cfg.VerifyDecode)
 
 	jobs := make(chan job, cfg.Workers*2)
 	outcomes := make(chan outcome, cfg.Workers*2+8)
@@ -228,7 +228,7 @@ func Run(ctx context.Context, src Source, cfg Config, commit Committer) (Result,
 				if j.pre != nil {
 					o.failure = j.pre
 				} else {
-					s, f := proc.process(j.rec)
+					s, f := proc.Process(j.rec)
 					o.success, o.failure = s, f
 				}
 				select {
