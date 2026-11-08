@@ -90,6 +90,9 @@ var operationalSchemaV2DDL = []string{
 	`CREATE UNIQUE INDEX IF NOT EXISTS verification_issues_unique
         ON magnetico_migration.verification_issues (verification_id, source_id, code)
         WHERE source_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS verification_issues_run_code_unique
+        ON magnetico_migration.verification_issues (verification_id, code)
+        WHERE source_id IS NULL`,
 	`CREATE INDEX IF NOT EXISTS verification_issues_by_run
         ON magnetico_migration.verification_issues (verification_id)`,
 	`CREATE TABLE IF NOT EXISTS magnetico_migration.retry_runs (
@@ -311,6 +314,8 @@ var verificationIssuesTable = expectedTable{
 	indexes: []expectedDef{
 		{"verification_issues_by_run", 0, normalizeDef(
 			`CREATE INDEX verification_issues_by_run ON magnetico_migration.verification_issues USING btree (verification_id)`)},
+		{"verification_issues_run_code_unique", 0, normalizeDef(
+			`CREATE UNIQUE INDEX verification_issues_run_code_unique ON magnetico_migration.verification_issues USING btree (verification_id, code) WHERE (source_id IS NULL)`)},
 		{"verification_issues_unique", 0, normalizeDef(
 			`CREATE UNIQUE INDEX verification_issues_unique ON magnetico_migration.verification_issues USING btree (verification_id, source_id, code) WHERE (source_id IS NOT NULL)`)},
 	},

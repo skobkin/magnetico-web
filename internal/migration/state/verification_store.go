@@ -268,6 +268,11 @@ type VerificationPageCommit struct {
 	TargetCheckpoint    *int64
 	NewSourceCheckpoint *int64
 	NewTargetCheckpoint *int64
+	// NewPhase advances the run's phase atomically with this commit
+	// ("" leaves the phase unchanged). The extras phase transition commits
+	// together with the extras findings, so a resumed pass can tell the
+	// extras scan already ran durably.
+	NewPhase string
 }
 
 // CommitVerificationPage applies one page commit. It returns false when the
@@ -308,6 +313,7 @@ func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in Verifica
 		}
 
 		tag, err := tx.Exec(ctx, `UPDATE magnetico_migration.verification_runs SET
+            phase = COALESCE(NULLIF($11, ''), phase),
             source_checkpoint = $4,
             target_checkpoint = $5,
             verified_count = verified_count + $6,
@@ -322,7 +328,8 @@ func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in Verifica
 			in.VerificationID,
 			in.SourceCheckpoint, in.TargetCheckpoint,
 			in.NewSourceCheckpoint, in.NewTargetCheckpoint,
-			in.VerifiedDelta, in.MismatchDelta, in.UnverifiableDelta, in.AssumedSingleDelta, inserted,
+			in.VerifiedDelta, in.MismatchDelta, in.UnverifiableDelta, in.AssumedSingleDelta,
+			inserted, in.NewPhase,
 		)
 		if err != nil {
 			return err
@@ -337,12 +344,16 @@ func CommitVerificationPage(ctx context.Context, pool *pgxpool.Pool, in Verifica
 }
 
 // FinishVerificationInput closes a run: state completed_pass/completed_fail,
-// phase complete, observed coverage recorded.
+// phase complete, observed coverage recorded. Issues supplied here (e.g. the
+// finalize coverage finding) commit atomically with the state flip, so a
+// crash between the finding and the verdict replays idempotently (the
+// NULL-source partial unique index dedupes them).
 type FinishVerificationInput struct {
 	VerificationID    string
 	Pass              bool
 	ObservedSourceIDs *int64
 	ObservedTargetIDs *int64
+	Issues            []VerificationIssue
 }
 
 // FinishVerification completes a run atomically. The authoritative verdict
@@ -352,13 +363,46 @@ func FinishVerification(ctx context.Context, pool *pgxpool.Pool, in FinishVerifi
 	if in.Pass {
 		target = VerificationCompletedPass
 	}
-	row := pool.QueryRow(ctx, `UPDATE magnetico_migration.verification_runs SET
-        state = $2, phase = 'complete', completed_at = now(), updated_at = now(),
-        observed_source_ids = $3, observed_target_ids = $4
-    WHERE verification_id = $1::uuid AND state = 'running'
-    RETURNING `+verificationProjection,
-		in.VerificationID, target, in.ObservedSourceIDs, in.ObservedTargetIDs)
-	r, err := scanVerificationRow(row)
+	var r *VerificationRun
+	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		inserted := int64(0)
+		for _, issue := range in.Issues {
+			details := []byte("null")
+			if issue.Details != nil {
+				b, err := json.Marshal(issue.Details)
+				if err != nil {
+					return err
+				}
+				details = b
+			}
+			var sourceID, infoHash any
+			if issue.SourceID != nil {
+				sourceID = *issue.SourceID
+			}
+			if issue.InfoHash != nil {
+				infoHash = issue.InfoHash
+			}
+			tag, err := tx.Exec(ctx, `INSERT INTO magnetico_migration.verification_issues
+                (verification_id, source_id, info_hash, code, stage, severity, details)
+                VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT DO NOTHING`,
+				in.VerificationID, sourceID, infoHash, issue.Code, issue.Stage, issue.Severity, details)
+			if err != nil {
+				return err
+			}
+			inserted += tag.RowsAffected()
+		}
+		row := tx.QueryRow(ctx, `UPDATE magnetico_migration.verification_runs SET
+            state = $2, phase = 'complete', completed_at = now(), updated_at = now(),
+            observed_source_ids = $3, observed_target_ids = $4,
+            issue_count = issue_count + $5
+        WHERE verification_id = $1::uuid AND state = 'running'
+        RETURNING `+verificationProjection,
+			in.VerificationID, target, in.ObservedSourceIDs, in.ObservedTargetIDs, inserted)
+		var err error
+		r, err = scanVerificationRow(row)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
