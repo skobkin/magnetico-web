@@ -375,9 +375,12 @@ var (
 	// in PostgreSQL key-value DSNs, URL query parameters and YAML keys
 	// alike (`password=secret`, `pwd: secret`). The key may be spelled in
 	// either case or percent-encoded (`%70assword=secret`, as URLs encode
-	// query keys), and the value may be bare, or quoted with single or
-	// double quotes — quoted values may contain spaces.
-	credentialKeyPattern = regexp.MustCompile(`((?:[pP]|%70|%50)(?:[aA]|%61|%41)(?:[sS]|%73|%53)(?:[sS]|%73|%53)(?:[wW]|%77|%57)(?:[oO]|%6[fF])(?:[rR]|%72|%52)(?:[dD]|%64|%44)|(?:[pP]|%70|%50)(?:[uU]|%75|%55)(?:[dD]|%64|%44))(\s*[=:]\s*)(?:'[^']*'|"[^"]*"|[^\s]+)`)
+	// query keys). The value may be bare — with backslash-escaped characters,
+	// as conninfo spells them (`password=HEAD\ SECRET_TAIL`) — or quoted
+	// with single or double quotes; quoted values may contain spaces and
+	// backslash escapes (`password='HEAD\' SECRET_TAIL'`), all accepted by
+	// pgx (Codex review iteration 4, finding 1).
+	credentialKeyPattern = regexp.MustCompile(`((?:[pP]|%70|%50)(?:[aA]|%61|%41)(?:[sS]|%73|%53)(?:[sS]|%73|%53)(?:[wW]|%77|%57)(?:[oO]|%6[fF])(?:[rR]|%72|%52)(?:[dD]|%64|%44)|(?:[pP]|%70|%50)(?:[wW]|%77|%57)(?:[dD]|%64|%44))(\s*[=:]\s*)(?:'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|(?:\\.|[^\s\\])+)`)
 )
 
 // redactSecrets masks credential material that YAML diagnostics echo from

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // defaults returns CrawlOptions equivalent to the built-in flag defaults.
@@ -387,6 +389,21 @@ func TestRedactSecrets(t *testing.T) {
 			in:   `source: postgres://h/db?%70assword=SECRET`,
 			want: `source: postgres://h/db?%70assword=xxxxx`,
 		},
+		{
+			name: "single-quoted value with escaped quote",
+			in:   `source: host=localhost password='HEAD\' SECRET_TAIL'`,
+			want: `source: host=localhost password=xxxxx`,
+		},
+		{
+			name: "unquoted value with escaped space",
+			in:   `source: host=localhost password=HEAD\ SECRET_TAIL`,
+			want: `source: host=localhost password=xxxxx`,
+		},
+		{
+			name: "pwd key spelled correctly",
+			in:   `source: host=localhost pwd=Sup3rSecret sslmode=disable`,
+			want: `source: host=localhost pwd=xxxxx sslmode=disable`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -394,5 +411,28 @@ func TestRedactSecrets(t *testing.T) {
 				t.Errorf("redactSecrets() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestKeyValueDSNEscapeShapesAcceptedByPgx pins the premise of the escape
+// cases above: the backslash-escaped value shapes (an escaped quote inside
+// single quotes, an escaped space in a bare value) are valid conninfo for
+// pgx — so a diagnostic that leaked their tails would leak a usable secret.
+func TestKeyValueDSNEscapeShapesAcceptedByPgx(t *testing.T) {
+	t.Parallel()
+
+	quoted, err := pgx.ParseConfig(`host=localhost user=u password='HEAD\' SECRET_TAIL' dbname=d`)
+	if err != nil {
+		t.Fatalf("ParseConfig(escaped quote) error = %v", err)
+	}
+	if quoted.Password != `HEAD' SECRET_TAIL` {
+		t.Fatalf("quoted password = %q, want %q", quoted.Password, `HEAD' SECRET_TAIL`)
+	}
+	bare, err := pgx.ParseConfig(`host=localhost user=u password=HEAD\ SECRET_TAIL dbname=d`)
+	if err != nil {
+		t.Fatalf("ParseConfig(escaped space) error = %v", err)
+	}
+	if bare.Password != `HEAD SECRET_TAIL` {
+		t.Fatalf("bare password = %q, want %q", bare.Password, `HEAD SECRET_TAIL`)
 	}
 }
