@@ -110,6 +110,39 @@ func contentFixture(t *testing.T) (string, string) {
 	return src, tgt
 }
 
+// TestVerifyContentDecodesPerRowUnderTinyBudget: the lazy content window
+// decodes one budget-bounded chunk at a time as the merge walks the page —
+// never the whole decoded page at once. Two over-budget blobs (each a solo
+// chunk at a 1 MiB budget) with a no-blob row between them: the merge must
+// cross both chunk boundaries, resolve the between-chunk row by
+// reconstruction, and classify identically to the page-wide baseline
+// (Codex review iteration 1, finding 5).
+func TestVerifyContentDecodesPerRowUnderTinyBudget(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	seedBlobbyTorrent(t, src, 1, 60, 50_000)
+	seedSourceTorrent(t, src, 2, "typical.bin", 40, 1700000002)
+	seedSourceFile(t, src, 2, "typical.bin", 40)
+	seedBlobbyTorrent(t, src, 3, 60, 50_000)
+	importAll(t, src, tgt)
+
+	if n := blobLen(t, tgt, 1); n <= 1<<20 {
+		t.Fatalf("fixture assumption broken: blob = %d bytes, want >1MiB", n)
+	}
+
+	res, err := verifyContent(t, context.Background(), src, tgt, func(in *VerifyContentInput) {
+		in.MaxInflightBytes = 1 << 20
+	})
+	if err != nil {
+		t.Fatalf("VerifyContent() error = %v", err)
+	}
+	if !res.Pass || res.Verified != 3 || res.ObservedTargets != 3 || res.SourceObserved != 3 {
+		t.Fatalf("result = pass %v %d/%d/%d, want clean 3/3/3",
+			res.Pass, res.Verified, res.ObservedTargets, res.SourceObserved)
+	}
+}
+
 func TestVerifyContentCleanPass(t *testing.T) {
 	t.Parallel()
 

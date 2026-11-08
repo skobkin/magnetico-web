@@ -418,16 +418,11 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			}
 			pageMax := tp.rows[len(tp.rows)-1].id
 
-			content, err := prepareTargetContent(runCtx, pool, tp, limits, in.Workers, in.MaxInflightBytes)
-			if err != nil {
-				if cause := fatalCause(runCtx); cause != nil {
-					return nil, cause
-				}
-				if runCtx.Err() != nil {
-					return nil, interruptScan(runCtx, pool, run)
-				}
-				return nil, verificationFatal("scan", targetAfter, err)
-			}
+			// Decoded target content loads lazily, one budget-bounded chunk
+			// at a time as the merge walks the page ascending — never
+			// page-wide (the inflight budget bounds raw blob bytes, not the
+			// decoded file lists, so a whole decoded page is unbounded).
+			content := newPageContent(runCtx, pool, tp, limits, in.Workers, in.MaxInflightBytes)
 
 			unit := &contentUnitResult{issues: []state.VerificationIssue{}}
 			lastSrc := int64(0)
@@ -469,7 +464,8 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			}
 			lastTr := int64(0)
 			haveTr := false
-			for _, tr := range tp.rows {
+			for idx := range tp.rows {
+				tr := &tp.rows[idx]
 				// Source rows strictly below the target row: source-only
 				// classification (pull windows on demand while the buffer
 				// is empty and the source is not exhausted).
@@ -528,7 +524,11 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 					buf = buf[1:]
 					lastSrc = int64(srcRow.ID)
 					haveSrc = true
-					classifyMatched(&srcRow, files, ov, overflowing, &tr, content[tr.id], unit)
+					tc, err := content.get(idx)
+					if err != nil {
+						return scanFatal("scan", err)
+					}
+					classifyMatched(&srcRow, files, ov, overflowing, tr, tc, unit)
 				} else {
 					// Target-only row (the source has no such ID).
 					unit.mismatch++
@@ -859,14 +859,41 @@ type tpContent struct {
 	missing bool                     // blob vanished between probe and fetch
 }
 
-// prepareTargetContent fetches and decodes the page's blob rows under the
-// same budget discipline as the decode pass (octet_length probe already
-// done by readDecodePage; oversized/NULL blobs never fetched; chunks
-// sequential, solo admission over budget). Infrastructure failures return
-// an error; structural anomalies and decode failures become per-row state.
-func prepareTargetContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePage, limits codec.Limits, workers int, maxInflight int64) (map[int64]*tpContent, error) {
-	out := make(map[int64]*tpContent, len(tp.rows))
-	var entries []blobEntry
+// pageContent lazily fetches and decodes one target page's blob rows in
+// ascending row order. Rows that resolve without content (NULL data,
+// over-limit blobs) are precomputed as broken findings; blob-backed rows
+// load one budget-bounded chunk at a time and only the CURRENT chunk's
+// decoded lists stay live — the inflight budget bounds raw blob bytes, not
+// decoded file lists, so a whole decoded page held at once would be
+// unbounded (Codex review iteration 1, finding 5). The merge accesses rows
+// strictly ascending, which the chunk window follows; a no-fetch row whose
+// index falls between chunks resolves to nil without disturbing the window.
+type pageContent struct {
+	ctx         context.Context
+	pool        *pgxpool.Pool
+	tp          *decodePage
+	limits      codec.Limits
+	workers     int
+	maxInflight int64
+
+	broken  map[int64]*tpContent // content-independent resolutions, by row id
+	entries []blobEntry          // fetch+decode rows, ascending page index
+	chunks  [][]blobEntry        // precomputed budget-bounded chunks
+	next    int                  // next chunk to load
+	cur     map[int64]*tpContent // decoded contents of the loaded chunk, by row id
+	curLo   int                  // inclusive page-index bound of cur
+	curHi   int                  // exclusive page-index bound of cur
+}
+
+// newPageContent probes the page's blob rows by octet_length (never
+// materializing content) and precomputes the chunk plan. No database I/O
+// beyond the length probe happens here — content loads on demand.
+func newPageContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePage, limits codec.Limits, workers int, maxInflight int64) *pageContent {
+	pc := &pageContent{
+		ctx: ctx, pool: pool, tp: tp, limits: limits,
+		workers: workers, maxInflight: maxInflight,
+		broken: map[int64]*tpContent{},
+	}
 	for i := range tp.rows {
 		r := &tp.rows[i]
 		if !r.hasBlobRow {
@@ -874,14 +901,14 @@ func prepareTargetContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePag
 		}
 		switch {
 		case r.blobLen == nil:
-			out[r.id] = &tpContent{broken: &state.VerificationIssue{
+			pc.broken[r.id] = &tpContent{broken: &state.VerificationIssue{
 				SourceID: i64ptr(r.id), InfoHash: r.infoHash,
 				Code: IssueCodeBlobNullData, Stage: IssueStageContent, Severity: state.IssueMismatch,
 				Details: map[string]any{"reason": "blob data is NULL"},
 			}}
 		case *r.blobLen > int64(limits.MaxStoredBytes):
 			// Never materialize a possibly-corrupted oversized BYTEA.
-			out[r.id] = &tpContent{broken: &state.VerificationIssue{
+			pc.broken[r.id] = &tpContent{broken: &state.VerificationIssue{
 				SourceID: i64ptr(r.id), InfoHash: r.infoHash,
 				Code: IssueCodeBlobOverLimit, Stage: IssueStageContent, Severity: state.IssueMismatch,
 				Details: map[string]any{
@@ -891,83 +918,120 @@ func prepareTargetContent(ctx context.Context, pool *pgxpool.Pool, tp *decodePag
 				},
 			}}
 		default:
-			entries = append(entries, blobEntry{idx: i, length: *r.blobLen})
+			pc.entries = append(pc.entries, blobEntry{idx: i, length: *r.blobLen})
 		}
 	}
+	pc.chunks = packChunks(pc.entries, maxInflight)
+	return pc
+}
 
-	// Worker results land in a pre-sized slice indexed by the page-row index
-	// (each index written by exactly one worker — no shared map, no locks);
-	// the id-keyed map is merged single-threaded below.
-	decoded := make([]*tpContent, len(tp.rows))
-
-	for _, chunk := range packChunks(entries, maxInflight) {
-		ids := make([]int64, len(chunk))
-		for i, e := range chunk {
-			ids[i] = tp.rows[e.idx].id
+// get returns the decoded content for the page row at index idx (nil for
+// no-blob rows). Each access past the loaded window loads the next chunk,
+// releasing the previous one's decoded lists for garbage collection.
+func (pc *pageContent) get(idx int) (*tpContent, error) {
+	if c, ok := pc.broken[pc.tp.rows[idx].id]; ok {
+		return c, nil
+	}
+	if pc.cur != nil && idx >= pc.curLo && idx < pc.curHi {
+		return pc.cur[pc.tp.rows[idx].id], nil
+	}
+	for pc.next < len(pc.chunks) {
+		ch := pc.chunks[pc.next]
+		lo, hi := ch[0].idx, ch[len(ch)-1].idx+1
+		if hi <= idx {
+			// Stale chunk (only reachable on non-ascending access).
+			pc.next++
+			continue
 		}
-		tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if lo > idx {
+			return nil, nil // no fetch entry at or before idx: not blob-backed
+		}
+		cur, err := pc.load(ch)
 		if err != nil {
 			return nil, err
 		}
-		rows, err := tx.Query(ctx, `SELECT torrent_id, data FROM magneticod.torrent_file_blobs
-            WHERE torrent_id = ANY($1::bigint[])`, ids)
-		if err != nil {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-			return nil, err
-		}
-		blobs := make(map[int64][]byte, len(chunk))
-		for rows.Next() {
-			var id int64
-			var data []byte
-			if err := rows.Scan(&id, &data); err != nil {
-				_ = tx.Rollback(context.WithoutCancel(ctx))
-				return nil, err
-			}
-			blobs[id] = data
-		}
-		if err := rows.Err(); err != nil {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
-			return nil, err
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return nil, err
-		}
+		pc.next++
+		pc.cur, pc.curLo, pc.curHi = cur, lo, hi
+		return pc.cur[pc.tp.rows[idx].id], nil
+	}
+	pc.cur = nil
+	return nil, nil
+}
 
-		jobs := make(chan int)
-		var wg sync.WaitGroup
-		if workers <= 0 {
-			workers = 1
+// load fetches one chunk's blob contents (one snapshot transaction,
+// bounded by construction) and decodes its rows in parallel. Worker results
+// land in a pre-sized slice indexed by the chunk position (each index
+// written by exactly one worker — no shared map, no locks); the id-keyed
+// map is merged single-threaded.
+func (pc *pageContent) load(chunk []blobEntry) (map[int64]*tpContent, error) {
+	ids := make([]int64, len(chunk))
+	for i, e := range chunk {
+		ids[i] = pc.tp.rows[e.idx].id
+	}
+	tx, err := pc.pool.BeginTx(pc.ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(pc.ctx)) }()
+	rows, err := tx.Query(pc.ctx, `SELECT torrent_id, data FROM magneticod.torrent_file_blobs
+        WHERE torrent_id = ANY($1::bigint[])`, ids)
+	if err != nil {
+		return nil, err
+	}
+	blobs := make(map[int64][]byte, len(chunk))
+	for rows.Next() {
+		var id int64
+		var data []byte
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
 		}
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for i := range jobs {
-					e := chunk[i]
-					r := &tp.rows[e.idx]
-					blob, ok := blobs[r.id]
-					if !ok {
-						decoded[e.idx] = &tpContent{missing: true}
-						continue
-					}
-					files, err := codec.Decode(blob, limits)
-					if err != nil {
-						decoded[e.idx] = &tpContent{err: err}
-						continue
-					}
-					decoded[e.idx] = &tpContent{files: files}
+		blobs[id] = data
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	decoded := make([]*tpContent, len(chunk))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	workers := pc.workers
+	if workers <= 0 {
+		workers = 1
+	}
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				e := chunk[i]
+				r := &pc.tp.rows[e.idx]
+				blob, ok := blobs[r.id]
+				if !ok {
+					// The blob row vanished between the length probe and the
+					// content fetch: the operator-immutability assumption is
+					// broken — fail the row, never guess.
+					decoded[i] = &tpContent{missing: true}
+					continue
 				}
-			}()
-		}
-		for i := range chunk {
-			jobs <- i
-		}
-		close(jobs)
-		wg.Wait()
+				files, derr := codec.Decode(blob, pc.limits)
+				if derr != nil {
+					decoded[i] = &tpContent{err: derr}
+					continue
+				}
+				decoded[i] = &tpContent{files: files}
+			}
+		}()
 	}
+	for i := range chunk {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	out := make(map[int64]*tpContent, len(chunk))
 	for i, c := range decoded {
 		if c != nil {
-			out[tp.rows[i].id] = c
+			out[pc.tp.rows[chunk[i].idx].id] = c
 		}
 	}
 	return out, nil
