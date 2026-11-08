@@ -261,3 +261,36 @@ func bytesEqual(a, b []byte) bool {
 	}
 	return true
 }
+
+func TestFetchByIDsBudgetChargesInfohashBytes(t *testing.T) {
+	t.Parallel()
+
+	dsn := createLegacySource(t)
+	// 32 torrents with distinct 65,538-byte infohash bytea (the legacy
+	// schema imposes no hash-length constraint) and short names: the
+	// retained hash bytes alone are ~2 MiB against a 1 MiB window budget,
+	// so the budget must stop the metadata scan well before the last row.
+	// Not charging the hash retained every torrent while reporting a
+	// fraction of the real bytes (Codex review iteration 4, finding 2).
+	big := strings.Repeat("ab", 65536) // the shared tail; the id prefixes it
+	ids := make([]int64, 0, 32)
+	for id := int32(1); id <= 32; id++ {
+		seedTorrent(t, dsn, id, fmt.Sprintf("%02xab", id)+big, fmt.Sprintf("t%d", id), 1, 1700000000+id)
+		ids = append(ids, int64(id))
+	}
+	src := openSource(t, dsn)
+	ctx := context.Background()
+
+	w, remaining, err := src.FetchByIDs(ctx, ids,
+		WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("FetchByIDs() error = %v", err)
+	}
+	if len(w.Torrents) >= 32 || len(remaining) == 0 {
+		t.Fatalf("window kept %d of 32 torrents with remaining %d — infohash bytes were not charged to the window budget",
+			len(w.Torrents), len(remaining))
+	}
+	if w.RetainedBytes > 1<<20 {
+		t.Fatalf("retained %d bytes over the 1 MiB window budget", w.RetainedBytes)
+	}
+}

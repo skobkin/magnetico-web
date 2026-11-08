@@ -106,10 +106,10 @@ type Window struct {
 	// it read a complete list.
 	Overflow map[int32]Overflow
 
-	// RetainedBytes is the retention WEIGHT the window kept: path and name
-	// bytes plus the structural overhead of every retained row (see the
-	// WindowLimits budget discussion). The window truncates early once it
-	// reaches WindowLimits.WindowMaxBytes.
+	// RetainedBytes is the retention WEIGHT the window kept: infohash and
+	// path and name bytes plus the structural overhead of every retained row
+	// (see the WindowLimits budget discussion). The window truncates early
+	// once it reaches WindowLimits.WindowMaxBytes.
 	RetainedBytes int64
 
 	truncated bool
@@ -354,10 +354,12 @@ func scanMetadata(rows pgx.Rows, w *Window, limits WindowLimits) (map[int32]bool
 		}
 		// The window budget bounds the METADATA scan too, not just the file
 		// rows: with a keyset page far larger than the budget, torrents with
-		// long names — above all torrents with no files, which never reach
-		// the file-row pass — would otherwise be retained in full before any
-		// budget check.
-		weight := retainedTorrentOverhead + int64(len(t.Name))
+		// long names or oversized infohash bytea — above all torrents with no
+		// files, which never reach the file-row pass — would otherwise be
+		// retained in full before any budget check. The hash is retained with
+		// the row, so its bytes are charged like the name's (Codex review
+		// iteration 4, finding 2).
+		weight := retainedTorrentOverhead + int64(len(t.InfoHash)) + int64(len(t.Name))
 		if limits.WindowMaxBytes > 0 && len(w.Torrents) > 0 &&
 			w.RetainedBytes+weight > limits.WindowMaxBytes {
 			return scanned, true, nil

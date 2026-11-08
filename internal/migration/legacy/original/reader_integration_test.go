@@ -375,15 +375,15 @@ func TestReaderWindowBudgetBoundsMetadataScan(t *testing.T) {
 	src := openSource(t, dsn)
 	ctx := context.Background()
 
-	// 60 file-less torrents with 512-byte names: 128+512 = 640 B of
-	// metadata weight each, zero file rows.
+	// 60 file-less torrents with 512-byte names and 20-byte infohash bytea:
+	// 128+20+512 = 660 B of metadata weight each, zero file rows.
 	name := strings.Repeat("n", 512)
 	for id := int32(1); id <= 60; id++ {
 		seedTorrent(t, dsn, id, fmt.Sprintf("%040x", id), name, 1, 1700000000+id)
 	}
 
-	const budget = 16384 // 16 KiB: floor(budget/640) = 25 torrents per window
-	perTorrent := int64(retainedTorrentOverhead + 512)
+	const budget = 16384 // 16 KiB: floor(budget/660) = 24 torrents per window
+	perTorrent := int64(retainedTorrentOverhead + 512 + 20)
 	limits := WindowLimits{MaxFiles: 100, MaxPathBytes: 1 << 20, WindowMaxBytes: budget}
 	var got []TorrentRow
 	after := int64(0)
@@ -518,9 +518,10 @@ func TestReaderEmptyWindowAdmitsOversizedMetadata(t *testing.T) {
 	if len(w.Torrents) != 1 || w.Torrents[0].ID != 1 || w.Torrents[0].Name != huge {
 		t.Fatalf("window = %+v, want exactly the oversized torrent admitted alone", w.Torrents)
 	}
-	if w.RetainedBytes != int64(retainedTorrentOverhead+len(huge)) {
+	// The weight includes the torrent's infohash bytea (hashAA = 20 bytes).
+	if w.RetainedBytes != int64(retainedTorrentOverhead+len(huge)+len(hashAA)/2) {
 		t.Fatalf("retained %d bytes, want exactly the oversized torrent's weight %d",
-			w.RetainedBytes, retainedTorrentOverhead+len(huge))
+			w.RetainedBytes, retainedTorrentOverhead+len(huge)+len(hashAA)/2)
 	}
 	if !w.Truncated() {
 		t.Fatal("the follow-up torrent must be left for the next window (truncated)")
