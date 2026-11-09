@@ -204,15 +204,16 @@ func ValidateManifestFile(manifestPath string) (*Manifest, error) {
 // validateAgainstRegistry is the live-registry half of manifest validation:
 // run identity, revision and per-collection counts must match the export
 // context. (The registry-state DIGEST recompute runs inside the drop
-// transaction in cleanup.go.)
-func validateAgainstRegistry(m *Manifest, f *Forensics, counts state.RegistryCounts) error {
-	if m.RunID != f.Progress.RunID {
+// transaction in cleanup.go.) Decoupled from Forensics so the drop
+// transaction can recheck against its own in-transaction reads.
+func validateAgainstRegistry(m *Manifest, runID string, dataRevision int64, counts state.RegistryCounts) error {
+	if m.RunID != runID {
 		return fmt.Errorf("%w: manifest run_id %s is not this run (%s)",
-			ErrEvidenceRejected, m.RunID, f.Progress.RunID)
+			ErrEvidenceRejected, m.RunID, runID)
 	}
-	if m.DataRevision != f.Progress.DataRevision {
+	if m.DataRevision != dataRevision {
 		return fmt.Errorf("%w: manifest data_revision %d does not match the live progress row (%d) — state moved since the export",
-			ErrEvidenceRejected, m.DataRevision, f.Progress.DataRevision)
+			ErrEvidenceRejected, m.DataRevision, dataRevision)
 	}
 	if m.EventCounts[CollectionImportError] != counts.Errors {
 		return fmt.Errorf("%w: manifest records %d import_error events, registry holds %d error rows",

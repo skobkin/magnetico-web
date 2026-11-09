@@ -169,7 +169,7 @@ func TestManifestBindsRegistryState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateAgainstRegistry(m, live, counts); err != nil {
+	if err := validateAgainstRegistry(m, live.Progress.RunID, live.Progress.DataRevision, counts); err != nil {
 		t.Fatalf("validateAgainstRegistry() error = %v", err)
 	}
 	digest, err := ComputeRegistryDigest(ctx, pool, runID, state.SchemaV2)
@@ -251,7 +251,7 @@ func TestManifestBindsRegistryState(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer live2.Release()
-	if err := validateAgainstRegistry(&stale, live2, counts2); !errors.Is(err, ErrEvidenceRejected) {
+	if err := validateAgainstRegistry(&stale, live2.Progress.RunID, live2.Progress.DataRevision, counts2); !errors.Is(err, ErrEvidenceRejected) {
 		t.Fatalf("count-drift error = %v, want ErrEvidenceRejected", err)
 	}
 }
