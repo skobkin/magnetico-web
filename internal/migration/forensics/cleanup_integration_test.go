@@ -944,3 +944,44 @@ func TestCleanupRefusesDropAfterLockLoss(t *testing.T) {
 		t.Fatalf("registry tables damaged after the lock-loss refusal: %v", err)
 	}
 }
+
+// TestCleanupRefusesDropAfterSilentBackendKill (review round 2, finding 1):
+// Lost() only reports a PREVIOUSLY detected loss — a backend killed between
+// the monitor's idle pings leaves deadErr unset, and the round-1 Lost()
+// checks would have run the destructive DDL unprotected. No monitor runs
+// here, the lock is never marked dead and no liveness probe runs in the
+// setup: killing the backend and calling runDropTransaction directly must
+// still refuse (the ACTIVE pre-DDL ping), before any DDL — the round-1
+// code drops the schema in exactly this scenario.
+func TestCleanupRefusesDropAfterSilentBackendKill(t *testing.T) {
+	t.Parallel()
+	pool, dsn, runID := seedCleanupTarget(t)
+	defer pool.Close()
+	seedGreenVerification(t, pool, runID)
+	manifest := exportEvidence(t, dsn)
+
+	lock, err := state.AcquireRunLock(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("AcquireRunLock: %v", err)
+	}
+	defer lock.Release(context.Background())
+	killAdvisoryBackend(t, dsn)
+	// The kill is SILENT as far as the lock object knows: no ping, no
+	// monitor, no marking — Lost() must still report nothing here.
+	if err := lock.Lost(); err != nil {
+		t.Fatalf("Lost() reported a loss without any detection step — the test setup is wrong: %v", err)
+	}
+
+	opts := cleanupInput(dsn, manifest, nil).Options
+	dropped, err := runDropTransaction(context.Background(), pool, lock, dsn, opts)
+	if dropped || err == nil {
+		t.Fatalf("runDropTransaction = (dropped=%v, err=%v) — the silent kill must refuse the drop", dropped, err)
+	}
+	if !errors.Is(err, ErrCleanupRefused) || !strings.Contains(err.Error(), "lock was lost") {
+		t.Fatalf("error = %v, want the lock-loss refusal from the active pre-DDL ping", err)
+	}
+	assertSchemaIntact(t, pool)
+	if _, err := state.CountRegistry(context.Background(), pool, runID); err != nil {
+		t.Fatalf("registry tables damaged after the silent-kill refusal: %v", err)
+	}
+}

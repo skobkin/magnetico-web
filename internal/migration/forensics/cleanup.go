@@ -254,14 +254,17 @@ func Cleanup(ctx context.Context, in CleanupInput) (res *CleanupResult, err erro
 		return nil, err // G10: configuration errors precede any connection
 	}
 
-	// Lock-connection liveness (review round 1, finding 5): the destructive
-	// side must NEVER run after exclusion is lost. The monitor pings while
-	// the lock connection is idle and cancels the run with a typed cause on
-	// loss; runDropTransaction additionally re-checks the lock synchronously
-	// immediately before the DDL and again before COMMIT. A lock loss is a
-	// SAFETY failure (fatal), never an operator interrupt — the deferred
-	// rewrite replaces a cancellation-shaped error with the cause, so the
-	// wrapper can tell the two apart.
+	// Lock-connection liveness (review round 1 finding 5, round 2 finding 1):
+	// the destructive side must NEVER run after exclusion is lost. The
+	// monitor pings while the lock connection is idle and cancels the run
+	// with a typed cause on loss; runDropTransaction additionally PINGS the
+	// lock connection synchronously immediately before the DDL and again
+	// before COMMIT — an active probe, not just a check of a previously
+	// detected loss, so a backend killed between the monitor's idle pings
+	// is still caught. A lock loss is a SAFETY failure (fatal), never an
+	// operator interrupt — the deferred rewrite replaces a
+	// cancellation-shaped error with the cause, so the wrapper can tell the
+	// two apart.
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 	defer func() {
@@ -703,11 +706,13 @@ func coverageHolds(run *state.VerificationRun) (bool, string) {
 // runDropTransaction opens the drop transaction, rechecks every gate
 // against the transaction's own snapshot, drops, and commits. A lost
 // COMMIT acknowledgment is classified — never assumed success. The lock
-// is re-checked synchronously immediately before the destructive DDL and
-// again before COMMIT (review round 1, finding 5): the monitor usually
-// cancels ctx on loss, but these checks close the race between the last
-// idle ping and the destructive work — a lost lock voids exclusion, so
-// nothing destructive runs and a detected loss refuses to COMMIT.
+// is ACTIVELY pinged immediately before the destructive DDL and again
+// before COMMIT (review round 1 finding 5, tightened in round 2 finding
+// 1): Lost() only reports a previously DETECTED loss — a backend killed
+// between the monitor's idle pings is invisible to it — while a synchronous
+// Ping on the lock connection fails immediately on a dead connection, is
+// recorded as loss (fail-closed), and voids exclusion. A cancelled context
+// is the operator interrupt, never a safety failure.
 func runDropTransaction(ctx context.Context, pool *pgxpool.Pool, lock *state.RunLock,
 	targetDSN string, opts CleanupOptions,
 ) (bool, error) {
@@ -744,7 +749,17 @@ func runDropTransaction(ctx context.Context, pool *pgxpool.Pool, lock *state.Run
 			"(rolled back; nothing dropped)", ErrCleanupRefused, strings.Join(blockers, "; "))
 	}
 
-	if err := lock.Lost(); err != nil {
+	// Active liveness (review round 2, finding 1): Lost() only reports a
+	// PREVIOUSLY detected loss — a backend killed between the monitor's
+	// idle pings leaves deadErr unset. Ping the lock connection here and
+	// before COMMIT: any failure is recorded as loss and refuses the drop.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := lock.Ping(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr // operator interrupt, not a safety failure
+		}
 		return false, fmt.Errorf("%w: the migration run lock was lost before the drop — "+
 			"rolled back; nothing dropped (%s)", ErrCleanupRefused, sanitizeDetailText(err.Error()))
 	}
@@ -753,7 +768,13 @@ func runDropTransaction(ctx context.Context, pool *pgxpool.Pool, lock *state.Run
 			ErrCleanupRefused, err)
 	}
 
-	if err := lock.Lost(); err != nil {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := lock.Ping(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr // operator interrupt, not a safety failure
+		}
 		return false, fmt.Errorf("%w: the migration run lock was lost during the drop — refusing "+
 			"to commit; rolled back; nothing dropped (%s)", ErrCleanupRefused, sanitizeDetailText(err.Error()))
 	}

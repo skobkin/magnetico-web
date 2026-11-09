@@ -272,6 +272,24 @@ func ExportErrors(ctx context.Context, in ExportInput) (res *ExportResult, err e
 		return fail(err)
 	}
 
+	// Liveness and cancellation before the artifact is committed to its
+	// final path (review round 2, finding 1): a lock-connection death since
+	// the last monitor tick is invisible to Lost(), so the check is an
+	// ACTIVE ping — any failure voids exclusion, aborts the temp and
+	// refuses the publish, leaving no final file. A cancelled context is
+	// the operator interrupt, never a safety failure.
+	if err := runCtx.Err(); err != nil {
+		return fail(err)
+	}
+	if err := f.Lock.Ping(runCtx); err != nil {
+		if ctxErr := runCtx.Err(); ctxErr != nil {
+			return fail(ctxErr) // operator interrupt, not a safety failure
+		}
+		return fail(fmt.Errorf("%w: the migration run lock was lost before the artifact "+
+			"was published — temp removed, no final file (%s)",
+			ErrLockLost, sanitizeDetailText(err.Error())))
+	}
+
 	if err := out.publish(); err != nil {
 		return nil, err
 	}

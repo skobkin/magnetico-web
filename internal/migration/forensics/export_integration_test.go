@@ -747,6 +747,52 @@ func TestExportLockLossAborts(t *testing.T) {
 	assertSchemaIntact(t, pool)
 }
 
+// TestExportRefusesPublishAfterSilentBackendKill (review round 2, finding
+// 1): the artifact publish is ACTIVELY guarded. The lock backend is killed
+// between the monitor's idle pings — invisible to Lost(), and the hook
+// deliberately never sleeps, so the monitor's 5 s tick cannot have fired
+// before the short walk finishes. Only the pre-publish liveness ping can
+// catch this: the publish must be refused, the temp removed, and no final
+// file may appear under a lost lock. The round-1 code (no pre-publish
+// check) publishes the artifact in exactly this scenario.
+func TestExportRefusesPublishAfterSilentBackendKill(t *testing.T) {
+	t.Parallel()
+	srcDSN := seedRecordSource(t)
+	pool, dsn := seedRecordsTarget(t, []int64{1, 2})
+	blob := encodeTestBlob(t, []codec.File{{Path: "a", Size: 10}})
+	seedTargetRecord(t, pool, recordTarget{id: 1, name: "one", totalSize: 10, fileCount: 1, blob: blob})
+	seedTargetRecord(t, pool, recordTarget{id: 2, name: "two", totalSize: 20, fileCount: 1, blob: blob})
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "silentkill.jsonl")
+	killed := false
+	_, err := ExportErrors(context.Background(), ExportInput{
+		Options: ExportOptions{
+			OutputPath: out, IncludeRecords: true, SourceDatabaseURL: srcDSN,
+			Limits: DefaultLimits(),
+		},
+		TargetDSN: dsn,
+		Progress: func(p ExportProgress) {
+			if killed {
+				return
+			}
+			killed = true
+			killAdvisoryBackend(t, dsn)
+			// Deliberately NO hold: the walk finishes well inside the
+			// monitor's 5 s cadence, so only the active pre-publish
+			// liveness check can detect the dead backend.
+		},
+	})
+	if !killed {
+		t.Fatal("the progress hook never ran — the test proves nothing")
+	}
+	if !errors.Is(err, ErrLockLost) {
+		t.Fatalf("error = %v, want ErrLockLost from the pre-publish liveness check", err)
+	}
+	assertNoOutput(t, dir, filepath.Base(out))
+	assertSchemaIntact(t, pool)
+}
+
 func TestExportErrorsFiltersMakePartial(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
