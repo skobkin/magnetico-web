@@ -450,9 +450,10 @@ func GetVerification(ctx context.Context, pool *pgxpool.Pool, verificationID str
 // `state = 'completed_pass' AND start_data_revision = progress.data_revision`;
 // a newer completed_fail supersedes any older pass at the same revision,
 // and a newer interrupted/aborted run leaves NO current verdict. Nil when
-// the kind has no runs.
-func LatestVerification(ctx context.Context, pool *pgxpool.Pool, kind string) (*VerificationRun, error) {
-	return scanVerificationRow(pool.QueryRow(ctx, `SELECT `+verificationProjection+` FROM magnetico_migration.verification_runs
+// the kind has no runs. Accepts the Queryer seam so the cleanup gates can
+// call it inside the drop transaction.
+func LatestVerification(ctx context.Context, q Queryer, kind string) (*VerificationRun, error) {
+	return scanVerificationRow(q.QueryRow(ctx, `SELECT `+verificationProjection+` FROM magnetico_migration.verification_runs
         WHERE kind = $1 ORDER BY seq DESC LIMIT 1`, kind))
 }
 

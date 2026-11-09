@@ -473,8 +473,8 @@ func EnsureOperationalSchema(ctx context.Context, pool *pgxpool.Pool) error {
 // non-table relation outright. Identity columns' owned sequences are
 // excluded (they are structural, proven by the column identity flags);
 // stray sequences count as foreign objects.
-func readInventory(ctx context.Context, pool *pgxpool.Pool) (map[string]string, []string) {
-	rows, err := pool.Query(ctx, `SELECT c.relname, c.relkind::text
+func readInventory(ctx context.Context, q Queryer) (map[string]string, []string) {
+	rows, err := q.Query(ctx, `SELECT c.relname, c.relkind::text
         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'magnetico_migration' AND c.relkind IN ('r','p','v','m','f','S')
           AND NOT (c.relkind = 'S' AND EXISTS (
@@ -557,13 +557,13 @@ func appendDetails(head, tail []string) []string {
 // validateOperationalSchema compares every expected relation's full
 // definitions against the catalog. Read-only: it never issues DDL, so a
 // refusal leaves the database untouched. Returns sorted mismatch details.
-func validateOperationalSchema(ctx context.Context, pool *pgxpool.Pool, expected map[string]expectedTable) []string {
+func validateOperationalSchema(ctx context.Context, q Queryer, expected map[string]expectedTable) []string {
 	var details []string
 	for _, name := range sortedDefNames(expected) {
 		want := expected[name]
 		regclass := "magnetico_migration." + name
 
-		rows, err := pool.Query(ctx, `SELECT column_name, data_type, is_nullable,
+		rows, err := q.Query(ctx, `SELECT column_name, data_type, is_nullable,
                 COALESCE(column_default, ''), is_identity
             FROM information_schema.columns
             WHERE table_schema = 'magnetico_migration' AND table_name = $1
@@ -589,7 +589,7 @@ func validateOperationalSchema(ctx context.Context, pool *pgxpool.Pool, expected
 		rows.Close()
 		details = appendColumnDetails(details, name, want.columns, haveCols)
 
-		rows, err = pool.Query(ctx, `SELECT conname, contype::text, pg_get_constraintdef(oid)
+		rows, err = q.Query(ctx, `SELECT conname, contype::text, pg_get_constraintdef(oid)
             FROM pg_constraint WHERE conrelid = to_regclass($1) ORDER BY conname`, regclass)
 		if err != nil {
 			details = append(details, err.Error())
@@ -613,7 +613,7 @@ func validateOperationalSchema(ctx context.Context, pool *pgxpool.Pool, expected
 		rows.Close()
 		details = appendDefDetails(details, name, "constraint", want.constraints, haveCons)
 
-		rows, err = pool.Query(ctx, `SELECT i.relname, ''::text, pg_get_indexdef(i.oid)
+		rows, err = q.Query(ctx, `SELECT i.relname, ''::text, pg_get_indexdef(i.oid)
             FROM pg_index ix
             JOIN pg_class i ON i.oid = ix.indexrelid
             WHERE ix.indrelid = to_regclass($1) AND NOT ix.indisprimary

@@ -6,16 +6,16 @@ package target
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 )
 
 // TargetFacts aggregates the consistency facts of a partially imported
 // target: data counts, the no-blob shape invariant, checkpoint honesty and
-// the error registry.
-func TargetFacts(ctx context.Context, pool *pgxpool.Pool, checkpoint int64, runID string) (state.Facts, error) {
+// the error registry. Accepts the state.Queryer seam so the cleanup gates
+// can call it inside the drop transaction.
+func TargetFacts(ctx context.Context, q state.Queryer, checkpoint int64, runID string) (state.Facts, error) {
 	var f state.Facts
-	if err := pool.QueryRow(ctx, `SELECT
+	if err := q.QueryRow(ctx, `SELECT
             (SELECT COUNT(*) FROM magneticod.torrents),
             (SELECT COUNT(*) FROM magneticod.torrent_file_blobs),
             (SELECT COUNT(*) FROM magneticod.torrents t
@@ -25,7 +25,7 @@ func TargetFacts(ctx context.Context, pool *pgxpool.Pool, checkpoint int64, runI
         `, checkpoint).Scan(&f.Torrents, &f.Blobs, &f.BloblessMultiFile, &f.RowsBeyondCheckpoint); err != nil {
 		return state.Facts{}, err
 	}
-	recordErrors, unresolvedIntegrity, err := state.CountErrors(ctx, pool, runID)
+	recordErrors, unresolvedIntegrity, err := state.CountErrors(ctx, q, runID)
 	if err != nil {
 		return state.Facts{}, err
 	}

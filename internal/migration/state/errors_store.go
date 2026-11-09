@@ -161,10 +161,8 @@ func UnresolvedRecordIDs(ctx context.Context, q queryer, runID string, afterID i
 	return ids, rows.Err()
 }
 
-type queryer interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-}
+// queryer is the internal alias of the exported read interface (forensics_read.go).
+type queryer = Queryer
 
 // UncoveredUnresolvedRecords counts the unresolved record-scope registry
 // entries of the import run that carry NO per-row unresolved_record_error
