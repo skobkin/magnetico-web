@@ -326,6 +326,46 @@ and the raw restore log are preserved under the experiment's scratch directory.
 resolve. That is a procedure change beyond the approved directive, so it waits for the
 owner's explicit go-ahead; the export/import procedure itself is unchanged.
 
+### Real-data experiment (directive ⑥): the corrected attempt SUCCEEDED
+
+The owner authorized the role-creation prerequisite after the two review fixes landed
+(both committed with reversal-proven regression tests), and the full battery was green
+on that tree (build, vet, gofmt, `golangci-lint run`, `go test ./... -p 2 -parallel 4`
+— 21 packages, zero failures) before the attempt. No other suite ran concurrently;
+217 GB free against the restored footprint. The one procedure change: `CREATE ROLE
+magneticod NOLOGIN` in the pinned container, so the dump's ownership statements resolve.
+
+**Restore**: exactly once, `ON_ERROR_STOP=1`, exit 0 in 566 s. The disposable source
+database holds **3,457,046 torrents, 123,460,039 files, 17 GB**.
+
+**Phases** (production defaults: `--workers 4 --batch-size 256 --max-inflight-bytes
+64 MiB`; one note: `/usr/bin/time` is not installed on this host, so peak memory was
+sampled at 1 Hz from `/proc/<pid>/status` `VmHWM` of the binary — same measurement,
+wall time recorded separately):
+
+| Phase | Exit | Wall | Peak RSS | Result |
+|---|---|---|---|---|
+| schema-init | 0 | 1 s | 4 MB | target schema ready |
+| torrents | 0 | 33 m 41 s | 931 MB | 3,457,046 scanned, **0 errors**, 2,247,594 blobs; `import_complete` |
+| verify-decode | 0 | 58 m 23 s | **45 MB** | **PASS** — 2,247,594 verified, 0 mismatched, 0 unverifiable, 1,209,452 assumed single-file (the reported blind spot), 0 issues |
+| verify-content | 0 | 61 m 40 s | **66 MB** | **PASS full equality** — 3,457,046/3,457,046 source rows verified against 3,457,046 target rows, 0 mismatched, 0 unverifiable, 0 issues; verdict at data revision 0 |
+
+**Findings vs scale**: zero. The real 3.46 M-row extract imports and verifies clean
+end to end.
+
+**Memory**: the verification passes peaked at 45 MB and 66 MB — far under the 64 MiB
+in-flight budget plus codec caps, confirming the structural byte budgets (source
+windows, target metadata pages, fetch chunks, decoded segments) hold at real scale and
+real corruption shapes. The import peaked at 931 MB (its own bounded pipeline queueing,
+by design). Storage: the no-blob single representation compresses the dataset ~5.9× —
+target 2.9 GB vs source 17 GB.
+
+**Cleanup**: both experiment databases dropped `WITH (FORCE)` on normal completion,
+plus a 7.9 MB empty `magnetico_04b_scratch` left over from earlier loop testing. Zero
+`magnetico_04b*`/`magnetico_test_*` databases remain; the dump file is untouched
+(2,409,777,887 bytes, original 2026-10-27 mtime). Timeline, per-phase logs and disk
+snapshots are preserved in the experiment's scratch directory.
+
 ## Deviations from the plan
 
 - None of substance. The plan's commit 7 gained the 7b infra-error fix (`8c28dedc`)
