@@ -582,6 +582,11 @@ func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limi
 	if err != nil {
 		return nil, err
 	}
+	// An unfinished result set is never left to the transaction rollback:
+	// pgxpool destroys a connection released mid-query, which with a
+	// single-connection pool means a fresh dial per affected page. Close is
+	// idempotent (Next closes by itself when the result set drains).
+	defer rows.Close()
 	page := &decodePage{}
 	for rows.Next() {
 		var r decodeRow
@@ -595,6 +600,15 @@ func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limi
 			// Occupied page at the budget: stop before this row. The next
 			// keyset page re-reads it — nothing is lost, the checkpoint
 			// never skips it.
+			//
+			// The result set is unfinished: close it HERE, before the
+			// deferred rollback, and surface the outcome — Close drains the
+			// unread rows and stores any discard error in Err (owner review
+			// round 2, finding 1).
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return nil, err
+			}
 			break
 		}
 		r.hasBlobRow = blobID != nil

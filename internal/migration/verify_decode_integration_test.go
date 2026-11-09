@@ -5,7 +5,10 @@ package migration
 // classification and a real oversized corrupted blob), solo admission of a
 // valid over-budget blob, collectively-over-budget chunk splitting,
 // interrupt/resume with issue dedupe, repeated invocations, pass-with-
-// legacy-errors and incomplete-import refusals.
+// legacy-errors and incomplete-import refusals, the metadata byte budget
+// (row-boundary cuts, exact keyset coverage — on a single-connection pool
+// too, pinning the explicit result-set closure) and the pinned decode-
+// worker concurrency.
 
 import (
 	"context"
@@ -1048,6 +1051,92 @@ func TestReadDecodePageByteBudgetCutsAtRowBoundary(t *testing.T) {
 	}
 }
 
+// TestReadDecodePageBudgetCutClosesRowsSingleConnection: a budget-cut page
+// stops MID-RESULT-SET (limit 100 rows read, capacity 10 admitted), so the
+// reader must close the unfinished query explicitly instead of leaving it
+// to the transaction rollback (owner review round 2, finding 1). On a
+// single-connection pool a released-busy connection is DESTROYED by
+// pgxpool — a fresh dial per cut page — which the connection-creation
+// count exposes; a hung connection would dead-lock the next page's
+// acquire (bounded by the context deadline below).
+func TestReadDecodePageBudgetCutClosesRowsSingleConnection(t *testing.T) {
+	t.Parallel()
+
+	_, tgt := decodeFixture(t)
+	const nameLen = 100_000
+	const rows = 25 // capacity 10 per 1 MiB page: cuts on pages 1 and 2, drained tail on page 3
+	name := strings.Repeat("n", nameLen)
+	for id := int32(1); id <= rows; id++ {
+		execTargetSQL(t, tgt, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on, file_count)
+            VALUES ($1, decode($2,'hex'), $3, 10, 1700000000, 1)`,
+			id, fmt.Sprintf("%040x", id), name)
+	}
+
+	// One-connection pool: the walk only completes cleanly if every cut
+	// page hands its connection back drained. Maintenance destroys are
+	// excluded (MinConns, huge health-check period) so the creation count
+	// isolates exactly the busy-release churn.
+	cfg, err := pgxpool.ParseConfig(tgt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.MaxConns = 1
+	cfg.MinConns = 1
+	cfg.HealthCheckPeriod = time.Hour
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	// A leaked result set would stall the next page's acquire until this
+	// deadline instead of wedging the suite.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	const budget = 1 << 20
+	weight := int64(retainedDecodeRowOverhead) + 20 + int64(nameLen)
+	wantPerPage := int(budget / weight) // floor: 10 rows of uniform weight
+
+	after := int64(0)
+	seen := map[int64]bool{}
+	var sizes []int
+	for {
+		page, err := readDecodePage(ctx, pool, after, 100, budget)
+		if err != nil {
+			t.Fatalf("readDecodePage(after=%d) error = %v", after, err)
+		}
+		if len(page.rows) == 0 {
+			break
+		}
+		sizes = append(sizes, len(page.rows))
+		for _, r := range page.rows {
+			if seen[r.id] {
+				t.Fatalf("row %d visited twice — the budget cut broke keyset coverage", r.id)
+			}
+			seen[r.id] = true
+		}
+		after = page.rows[len(page.rows)-1].id
+	}
+	// The limit (100) far exceeds the per-page capacity: pages 1 and 2 were
+	// each cut with rows still unread in their result sets, page 3 drained.
+	if len(sizes) != 3 || sizes[0] != wantPerPage || sizes[1] != wantPerPage || sizes[2] != rows-2*wantPerPage {
+		t.Fatalf("page sizes = %v, want [%d %d %d] (two consecutive budget cuts then the drained tail)",
+			sizes, wantPerPage, wantPerPage, rows-2*wantPerPage)
+	}
+	if len(seen) != rows {
+		t.Fatalf("covered %d rows, want all %d", len(seen), rows)
+	}
+	// MaxConns=1: a clean walk creates exactly ONE connection. A released-
+	// busy connection is destroyed by pgxpool, forcing a fresh dial per cut
+	// page — the churn this test exists to catch.
+	if st := pool.Stat(); st.NewConnsCount() != 1 || st.TotalConns() != 1 {
+		t.Fatalf("pool churned connections: created %d, total %d, want exactly one surviving connection — "+
+			"a budget-cut page released its connection busy (unfinished result set)",
+			st.NewConnsCount(), st.TotalConns())
+	}
+}
+
 // TestVerifyDecodeMetadataBudgetPreservesCoverage: the end-to-end decode
 // pass over metadata-heavy target rows under a tiny page budget — the
 // budget, not --batch-size, must cut every page (observable through the
@@ -1136,6 +1225,7 @@ func TestVerifyContentMetadataBudgetPreservesCoverage(t *testing.T) {
 // real concurrency wherever they claim to): the blob decoders of one fetch
 // chunk run CONCURRENTLY. The hook gate fails the test unless --workers
 // goroutines hold decode work at the same instant.
+//
 func TestVerifyDecodeWorkersDecodeConcurrently(t *testing.T) {
 	t.Parallel()
 
