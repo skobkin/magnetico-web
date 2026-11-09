@@ -961,7 +961,10 @@ func TestPageContentRetentionStaysWithinDecodedBudget(t *testing.T) {
 	pool := poolForRunner(t, tgt)
 	defer pool.Close()
 	ctx := context.Background()
-	tp, err := readDecodePage(ctx, pool, 0, rows*2)
+	// The metadata-page budget is irrelevant here (this test pins the
+	// DECODED-side segment bound); disable it with an effectively
+	// unbounded budget.
+	tp, err := readDecodePage(ctx, pool, 0, rows*2, 1<<62)
 	if err != nil {
 		t.Fatalf("readDecodePage() error = %v", err)
 	}
@@ -1143,7 +1146,9 @@ func TestPageContentAccountingCoversFileArrays(t *testing.T) {
 	pool := poolForRunner(t, tgt)
 	defer pool.Close()
 	ctx := context.Background()
-	tp, err := readDecodePage(ctx, pool, 0, 4)
+	// Effectively unbounded metadata-page budget (this test pins the
+	// decoded-side segment bound, not the page budget).
+	tp, err := readDecodePage(ctx, pool, 0, 4, 1<<62)
 	if err != nil {
 		t.Fatalf("readDecodePage() error = %v", err)
 	}

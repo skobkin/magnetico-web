@@ -202,7 +202,7 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 			if runCtx.Err() != nil {
 				return nil, interruptScan(runCtx, pool, run)
 			}
-			page, err := readDecodePage(runCtx, pool, checkpoint, in.BatchSize)
+			page, err := readDecodePage(runCtx, pool, checkpoint, in.BatchSize, in.MaxInflightBytes)
 			if err != nil {
 				if cause := fatalCause(runCtx); cause != nil {
 					return nil, cause
@@ -522,8 +522,22 @@ type decodeRow struct {
 	blobLen    *int64
 }
 
+// retainedDecodeRowOverhead covers one retained decodeRow: the struct, the
+// info-hash slice (header + 20-byte hash), the name header and its share of
+// the page's slice bookkeeping — the target-side mirror of the source
+// reader's retainedTorrentOverhead (a retention budget charges structure,
+// not just string bytes).
+const retainedDecodeRowOverhead = 128
+
 type decodePage struct {
 	rows []decodeRow
+
+	// retainedBytes is the retention WEIGHT the page kept: infohash and
+	// name bytes plus the structural overhead of every retained row. An
+	// occupied page never admits a row that would push it past the page
+	// budget; an empty page always admits its first row whatever it weighs
+	// (readDecodePage — the target-side mirror of the source window).
+	retainedBytes int64
 }
 
 // decodePageResult aggregates one page's verdicts.
@@ -536,7 +550,18 @@ type decodePageResult struct {
 // readDecodePage reads one keyset metadata page in a bounded
 // REPEATABLE READ READ ONLY transaction: the torrents row left-joined with
 // its blob's octet_length — no BYTEA is materialized here.
-func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limit int) (*decodePage, error) {
+//
+// Row count alone does not bound the page's retention: names are unbounded
+// text in the target schema, so the page enforces the same structural byte
+// budget as the source reader (windowMaxBytes; 0 disables it). The weight
+// charged per row is retainedDecodeRowOverhead + infohash + name bytes. An
+// OCCUPIED page stops BEFORE the first row that would push it past the
+// budget — that row and everything after it arrive in the next keyset page,
+// so coverage and checkpoint resumability are unchanged (the page just got
+// smaller under backpressure). An EMPTY page admits its first row whatever
+// it weighs: a single oversized row is bounded by itself alone, never
+// skipped for scheduling reasons.
+func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limit int, windowMaxBytes int64) (*decodePage, error) {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		return nil, err
@@ -560,8 +585,16 @@ func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limi
 			&r.fileCount, &blobID, &r.blobLen); err != nil {
 			return nil, err
 		}
+		weight := retainedDecodeRowOverhead + int64(len(r.infoHash)) + int64(len(r.name))
+		if windowMaxBytes > 0 && len(page.rows) > 0 && page.retainedBytes+weight > windowMaxBytes {
+			// Occupied page at the budget: stop before this row. The next
+			// keyset page re-reads it — nothing is lost, the checkpoint
+			// never skips it.
+			break
+		}
 		r.hasBlobRow = blobID != nil
 		page.rows = append(page.rows, r)
+		page.retainedBytes += weight
 	}
 	return page, rows.Err()
 }

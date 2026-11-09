@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -955,5 +956,176 @@ func TestVerifyDecodeFinalizedRunNotInterruptedByCancel(t *testing.T) {
 	}
 	if run.State != state.VerificationCompletedFail {
 		t.Fatalf("durable state = %s, want completed_fail", run.State)
+	}
+}
+
+// TestReadDecodePageByteBudgetCutsAtRowBoundary pins the target-side
+// metadata retention budget (owner review: readDecodePage bounded row count
+// only, so unbounded target names could balloon a page). With uniform
+// 100 KB names against a 1 MiB budget, an occupied page must stop BEFORE
+// the first row that would overflow it, the next keyset page must resume
+// exactly there (no coverage gap), and an empty page must admit a single
+// oversized row alone — never skip it.
+func TestReadDecodePageByteBudgetCutsAtRowBoundary(t *testing.T) {
+	t.Parallel()
+
+	_, tgt := decodeFixture(t)
+	const nameLen = 100_000
+	const rows = 13
+	name := strings.Repeat("n", nameLen)
+	for id := int32(1); id <= rows; id++ {
+		execTargetSQL(t, tgt, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on, file_count)
+            VALUES ($1, decode($2,'hex'), $3, 10, 1700000000, 1)`,
+			id, fmt.Sprintf("%040x", id), name)
+	}
+	// One oversized row beyond the rest: an EMPTY page must admit it alone.
+	execTargetSQL(t, tgt, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on, file_count)
+        VALUES ($1, decode($2,'hex'), $3, 10, 1700000000, 1)`,
+		rows+1, fmt.Sprintf("%040x", rows+1), strings.Repeat("h", 2<<20))
+
+	pool := poolForRunner(t, tgt)
+	defer pool.Close()
+	ctx := context.Background()
+
+	const budget = 1 << 20
+	weight := int64(retainedDecodeRowOverhead) + 20 + int64(nameLen)
+	wantPerPage := int(budget / weight) // floor: 10 rows of uniform weight
+
+	// Occupied page: cut BEFORE the overflowing row.
+	first, err := readDecodePage(ctx, pool, 0, 100, budget)
+	if err != nil {
+		t.Fatalf("readDecodePage() error = %v", err)
+	}
+	if len(first.rows) != wantPerPage {
+		t.Fatalf("first page rows = %d, want %d (budget %d / weight %d)", len(first.rows), wantPerPage, budget, weight)
+	}
+	if first.retainedBytes > budget {
+		t.Fatalf("retained = %d, budget %d — the page leaked past the budget", first.retainedBytes, budget)
+	}
+	lastID := first.rows[len(first.rows)-1].id
+
+	// Keyset continuation from the cut point, walked to exhaustion: every
+	// row is covered exactly once.
+	seen := map[int64]bool{}
+	for _, r := range first.rows {
+		seen[r.id] = true
+	}
+	after := lastID
+	pages := 1
+	for {
+		page, err := readDecodePage(ctx, pool, after, 100, budget)
+		if err != nil {
+			t.Fatalf("continuation page error = %v", err)
+		}
+		if len(page.rows) == 0 {
+			break
+		}
+		pages++
+		for _, r := range page.rows {
+			if seen[r.id] {
+				t.Fatalf("row %d visited twice — the budget cut broke keyset coverage", r.id)
+			}
+			seen[r.id] = true
+		}
+		after = page.rows[len(page.rows)-1].id
+	}
+	if len(seen) != rows+1 {
+		t.Fatalf("covered %d rows over %d pages, want all %d", len(seen), pages, rows+1)
+	}
+
+	// Empty page at the cut cursor: the single oversized row is admitted
+	// alone (weight beyond the budget is not a scheduling skip).
+	solo, err := readDecodePage(ctx, pool, rows, 100, budget)
+	if err != nil {
+		t.Fatalf("solo page error = %v", err)
+	}
+	if len(solo.rows) != 1 || solo.rows[0].id != rows+1 {
+		t.Fatalf("solo page = %+v, want exactly the oversized row %d", solo.rows, rows+1)
+	}
+	if solo.retainedBytes <= budget {
+		t.Fatalf("solo retained = %d, want beyond the budget %d (oversized row admitted, not skipped)", solo.retainedBytes, budget)
+	}
+}
+
+// TestVerifyDecodeMetadataBudgetPreservesCoverage: the end-to-end decode
+// pass over metadata-heavy target rows under a tiny page budget — the
+// budget, not --batch-size, must cut every page (observable through the
+// committed checkpoint deltas), and exact coverage with a clean verdict
+// must survive the smaller pages.
+func TestVerifyDecodeMetadataBudgetPreservesCoverage(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	const rows = 25
+	for id := int32(1); id <= rows; id++ {
+		seedMultiFileTorrent(t, src, id, strings.Repeat("d", 100_000),
+			[][2]any{{"f.bin", int64(10)}})
+	}
+	importAll(t, src, tgt)
+
+	var jumps []int64
+	prev := int64(0)
+	in := VerifyDecodeInput{TargetDSN: tgt, Workers: 2, BatchSize: 1000, MaxInflightBytes: 1 << 20}
+	in.Progress = func(p VerifyProgress) {
+		jumps = append(jumps, p.Checkpoint-prev)
+		prev = p.Checkpoint
+	}
+	res, err := VerifyDecode(context.Background(), in)
+	if err != nil {
+		t.Fatalf("VerifyDecode() error = %v", err)
+	}
+	if !res.Pass || res.Verified != rows {
+		t.Fatalf("pass = %v verified = %d, want clean pass over %d rows", res.Pass, res.Verified, rows)
+	}
+	// Uniform row weight 100148 against the 1 MiB page budget: every scan
+	// page held at most 10 rows although --batch-size allowed 1000.
+	for _, j := range jumps {
+		if j > 10 {
+			t.Fatalf("a committed page advanced the checkpoint by %d rows — the metadata budget did not cut it (jumps %v)", j, jumps)
+		}
+	}
+}
+
+// TestVerifyContentMetadataBudgetPreservesCoverage: the same budget at the
+// verify-content call site — metadata-heavy pages shrink under the budget
+// and the merge stays exact (full equality verdict over every row).
+func TestVerifyContentMetadataBudgetPreservesCoverage(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	const rows = 25
+	for id := int32(1); id <= rows; id++ {
+		seedMultiFileTorrent(t, src, id, strings.Repeat("c", 100_000),
+			[][2]any{{"f.bin", int64(10)}})
+	}
+	importAll(t, src, tgt)
+
+	var jumps []int64
+	prev := int64(0)
+	res, err := verifyContent(t, context.Background(), src, tgt, func(c *VerifyContentInput) {
+		c.BatchSize = 1000
+		c.MaxInflightBytes = 1 << 20
+		c.Progress = func(p VerifyProgress) {
+			jumps = append(jumps, p.Checkpoint-prev)
+			prev = p.Checkpoint
+		}
+	})
+	if err != nil {
+		t.Fatalf("VerifyContent() error = %v", err)
+	}
+	if !res.Pass {
+		t.Fatal("pass = false, want full equality")
+	}
+	if res.Verified != rows || res.SourceObserved != rows || res.ObservedTargets != rows {
+		t.Fatalf("result = verified %d source %d targets %d, want %d/%d/%d",
+			res.Verified, res.SourceObserved, res.ObservedTargets, rows, rows, rows)
+	}
+	// Uniform target-row weight 100148 against the 1 MiB page budget: the
+	// metadata budget, not --batch-size (1000), cut every target page —
+	// no committed unit boundary advanced past 10 rows.
+	for _, j := range jumps {
+		if j > 10 {
+			t.Fatalf("a committed unit advanced the target checkpoint by %d rows — the metadata budget did not cut the page (jumps %v)", j, jumps)
+		}
 	}
 }

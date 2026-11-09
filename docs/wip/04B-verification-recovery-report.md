@@ -235,6 +235,30 @@ credential-bearing lines) after three rounds of value-shape hardening kept findi
 escape layers. Round 5 validated all round-4 fixes by reversal before hunting, so the
 regression net is self-consistent as of HEAD.
 
+## Owner review round (post-loop)
+
+Two findings from the owner's review of the loop-closed HEAD, both fixed with
+reversal-proven regression tests.
+
+**1. Target metadata pages are byte-budgeted.** `readDecodePage` — the shared
+target reader of both verification commands — bounded row count only, so
+unbounded target `name` text could balloon one page's retention regardless of
+`--batch-size`. It now enforces the same structural budget as the 04A source
+reader, fed from `--max-inflight-bytes` (the command's existing one in-flight
+tunable): each row is charged `retainedDecodeRowOverhead + infohash + name`
+bytes; an OCCUPIED page stops BEFORE the first row that would overflow it (that
+row and everything after it arrive in the next keyset page — coverage and
+checkpoint resumability are unchanged, a page just gets smaller under
+backpressure); an EMPTY page admits its first row whatever it weighs (a single
+oversized row is bounded by itself alone, never skipped for scheduling
+reasons). Tests: `TestReadDecodePageByteBudgetCutsAtRowBoundary` (cut point,
+keyset continuation to exact coverage, oversized solo admission),
+`TestVerifyDecodeMetadataBudgetPreservesCoverage` and
+`TestVerifyContentMetadataBudgetPreservesCoverage` (end-to-end: 25 rows of
+100 KB names under a 1 MiB budget — every committed checkpoint jump ≤ 10 rows
+although `--batch-size` allowed 1000, full clean verdicts on both commands).
+All three proven to fail on the pre-fix tree.
+
 ## Hand-off requirements for 04C/04D
 
 - **04C (cleanup/export)**: verification/retry history is append-only and immutable —

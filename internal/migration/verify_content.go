@@ -421,7 +421,7 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 			if runCtx.Err() != nil {
 				return nil, interruptScan(runCtx, pool, run)
 			}
-			tp, err := readDecodePage(runCtx, pool, targetAfter, in.BatchSize)
+			tp, err := readDecodePage(runCtx, pool, targetAfter, in.BatchSize, in.MaxInflightBytes)
 			if err != nil {
 				if cause := fatalCause(runCtx); cause != nil {
 					return nil, cause
