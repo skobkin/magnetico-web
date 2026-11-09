@@ -92,7 +92,7 @@ func (s *jsonlSink) emit(evType string, ev any) error {
 }
 
 func capError(name string, got, allowed int64) error {
-	return fmt.Errorf("%w: %s %d exceeds the configured limit %d (raise the flag or narrow the export)",
+	return fmt.Errorf("%w: --%s %d exceeds the configured limit %d (raise the flag or narrow the export)",
 		ErrExportCapExceeded, name, got, allowed)
 }
 
