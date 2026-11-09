@@ -278,6 +278,55 @@ verify-decode's advertised concurrency is pinned by
 fail with the worker pool forced to one). `normalizeVerifyConfig` documents
 the per-command split.
 
+## Owner review round 2 (post-experiment)
+
+Two follow-up findings on the experiment HEAD, both fixed with reversal-proven
+tests. No re-run of the real-data experiment (owner directive: not needed).
+
+**1. Budget-cut pages close their query explicitly.** The round-1 byte budget
+made `readDecodePage` stop mid-result-set — but left `pgx.Rows` open on that
+break path, relying on the deferred transaction rollback to clean up. Grounded
+in the pgx v5.11 source: `Rows.Next` only closes by itself on natural
+exhaustion; `Rows.Close` stores any drain error in `Rows.Err` (so `Err` must
+be checked after an explicit `Close`); and pgxpool's `Conn.Release` DESTROYS a
+connection released busy (`PgConn().IsBusy()` or `TxStatus() != 'I'`) — with a
+one-connection pool every budget-cut page would destroy its connection and
+force a fresh dial, and the unfinished result's completion error was never
+surfaced. The reader now closes the result set explicitly at the break and
+checks `Err` before continuing, with an idempotent `defer rows.Close()`
+covering every other early return (e.g. a mid-loop scan error) — no path
+defers result-set teardown to the transaction rollback. Regression
+`TestReadDecodePageBudgetCutClosesRowsSingleConnection`: a `MaxConns=1` pool
+(maintenance destroys excluded via `MinConns=1` and a 1-hour health-check
+period, so the pool's `NewConnsCount` isolates exactly the busy-release
+churn), 25 uniform 100 KB-name rows against the 1 MiB budget — page sizes
+pinned 10/10/5, i.e. two consecutive pages cut with rows still unread in their
+result sets — exact keyset coverage, and the churn pin: a clean walk creates
+exactly ONE connection. Reversal-proven: with the fix reverted to the pre-fix
+tree the test fails (`pool churned connections: created 3, total 1` — one
+fresh dial per cut page); with the fix it passes.
+
+**2. The decode-concurrency gate no longer rides the parallel batch.**
+`TestVerifyDecodeWorkersDecodeConcurrently` called `t.Parallel()` while
+driving the package-global `decodeWorkHook`: unrelated parallel tests of the
+same package process (every verify/import decode) invoked the hook too, so
+they could satisfy the gate without this test's own chunk reaching full
+occupancy — a false pass — or block on this test's gate for the 2 s timeout
+per invocation, and a `t.Errorf` could fire on an already-finished test's
+`t`. The test now runs serially, which is deterministic isolation by Go's
+scheduler semantics: a serial test runs to completion in the sequential
+phase, before any parallel test of the package is released, so the hook is
+provably exclusive to this test's own decode workers. The forced-one-worker
+reversal was re-proven after the change: with the decode worker pool clamped
+to 1 the test fails (`decode concurrency never reached 2 workers — --workers
+did not parallelize the chunk`); restored, it passes.
+
+Round-2 verification: build, vet, gofmt, golangci-lint clean; focused
+`internal/migration` package green (115.8 s); `-race` green on
+`./internal/migration/... ./opflags/...` (all 8 packages; migration root
+154.1 s under race); full `go test ./... -p 2 -parallel 4` green (21
+packages, exit 0).
+
 ## Hand-off requirements for 04C/04D
 
 - **04C (cleanup/export)**: verification/retry history is append-only and immutable —
