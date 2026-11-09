@@ -1,7 +1,8 @@
 # Task 04C implementation report — forensic error export and safe migration-state cleanup
 
 Branch `refactor/0.8.0-unify-and-new-storage`, the 8 commits of the approved plan
-(base `cd5d0c5b`, the pushed 04B tip). Normative contract:
+(base `cd5d0c5b`, the 04B tip; pushed as `cd5d0c5b..69ece9e8`) plus the owner-review-
+round-1 fixes (five commits, listed in the review section below). Normative contract:
 [`docs/specs/legacy-torrent-forensics-cleanup-v1.md`](../specs/legacy-torrent-forensics-cleanup-v1.md)
 (committed as received); assignment:
 [`docs/wip/04C-forensics-cleanup.md`](04C-forensics-cleanup.md). No spec file was
@@ -9,8 +10,11 @@ edited. No `magneticod` schema DDL, wire-format or crawler code was changed. The
 original sample dump was never touched and the 10% extract was never restored (04B's
 experiment is complete). No production database was contacted — every integration test
 ran against disposable per-test databases from the one pinned `postgres:17` container
-(maintained across 04B/04C, dropped at session end). Nothing was pushed while the task
-ran; the branch is pushed at the end on the owner's explicit instruction.
+(maintained across 04B/04C, dropped at session end). The plan's 8 commits were pushed
+at the end on the owner's explicit instruction (`cd5d0c5b..69ece9e8`, CI green on the
+tip). The review-round fix commits were pushed on the owner's explicit mid-round
+command (`69ece9e8..fdb967ac`); this report commit remains local until the next
+explicit push.
 
 ## What shipped
 
@@ -66,7 +70,7 @@ fingerprints, identities, options) is NEVER echoed raw — see redaction below.
 
 A per-kind whitelist maps each KNOWN key (enumerated from what 04A/04B actually write)
 to an explicit value constraint (`int`, `bool`, `enum(set)`, `hex40`, `rfc3339`,
-`dbident`, `hostport`, bounded credential-screened `safetext`, `sqlstate`). Unknown
+`dbident`, `hostport`, `sqlstate`). Unknown
 keys are dropped entirely (a hostile key NAME itself can carry a secret; only a count
 survives); a known key whose value fails its constraint becomes
 `{"redacted":"constraint"}`; a non-object top level becomes `{"redacted":"shape"}`;
@@ -76,12 +80,29 @@ identically in metadata-only and record-expansion modes — the records opt-in g
 source/target ROW content only. Table-driven tests cover credential shapes, hostile
 key names, nested objects, oversize strings and safe-value preservation.
 
+Review round 1 (finding 6) closed the free-text hole: the original
+bounded-credential-screened `safetext` constraint accepted ANY short control-free
+value under known keys — an unmarked secret like `hunter2` passed unchanged. Free
+text cannot be proven safe by shape, so the `safetext` constraint no longer exists
+and the free-text detail keys (`reason`, `error`, `stage`) are not whitelisted at
+all: they drop with the unknown keys and only a count survives. Numeric, boolean,
+enum, `sqlstate`, `hex40`, `rfc3339`, `dbident`, `hostport` and `port` diagnostics
+are preserved.
+
 ## Record expansion and the decode-vs-raw split (owner finding ⑤)
 
-Selection is set-oriented keyset pages of 64 (batch bounded by `--max-records`);
-expansion is one target snapshot + one source snapshot per batch, with per-ID emission
-inside the source snapshot so the contract block order holds while file rows still
-stream with O(1) retention. Source read failures are classified
+Selection is set-oriented keyset pages of 64 (batch bounded by `--max-records`; a cap
+overrun past a batch boundary is a typed hard error — never truncation, never a panic —
+and the exact-fit boundary succeeds across the split, review round 1 finding 2).
+Expansion is ONE `REPEATABLE READ READ ONLY` target transaction + one source snapshot
+per batch. Each blob is fetched ONE RECORD AT A TIME inside the target transaction,
+immediately before that record's block is emitted — peak retention is a single blob
+plus one chunk regardless of batch size, never a prefetched per-batch map (review
+round 1, finding 1) — while file rows still stream with O(1) retention and the contract
+block order holds. Under `--include-blobs` an over-cap blob is rejected from the
+batch's `octet_length` metadata probe BEFORE any blob byte is fetched. The RR target
+snapshot makes a concurrent target commit mid-batch invisible (proven by a mid-batch
+`UPDATE` test whose export still delivers the snapshot's original bytes). Source read failures are classified
 `ErrSourceUnavailable` (sanitized) while sink/cap failures pass verbatim; context
 cancellation is an interrupt, never a source-unavailable claim. The decode verdict and
 the raw export are decided independently: `missing_blob` (no row, `file_count≠1`),
@@ -142,7 +163,7 @@ refuses cleanup as stale evidence (re-export required), tested with a post-expor
 
 | Gate | Check | In-tx | Waivable? |
 |---|---|---|---|
-| G1 | advisory run lock held for the whole command | held | no |
+| G1 | advisory run lock held AND liveness-monitored for the whole command (`MonitorLockLoss`; a lost lock aborts with typed `ErrLockLost` — a SAFETY failure, exit 1, never the interrupt contract) | held | no |
 | G2 | operational schema exactly v2 (re-classified) | yes | no |
 | G3 | one progress row, completion phase (`import_complete_with_errors` only via override AND reconciled) | yes | override |
 | G4 | strict `magneticod` schema via `persistence.MakeDatabase` | **pre-tx only** (deviation A6) | no |
@@ -179,7 +200,11 @@ irrecoverable); any cross-combination is a config error before any connection.
 
 Execution opens an explicit transaction, re-loads the state and re-runs every gate on
 the transaction's own snapshot (drift → rollback + typed refusal "rolled back;
-nothing dropped"), executes the 8 fixed DDL statements (FK order, no `CASCADE`, no
+nothing dropped"), re-checks the run lock's liveness immediately BEFORE the DDL and
+again BEFORE the COMMIT (`lock.Lost()` — a lost exclusion rolls the transaction back
+and refuses with `ErrCleanupRefused`; the destructive DDL is never executed after
+exclusion is lost; review round 1, finding 5), executes the 8 fixed DDL statements
+(FK order, no `CASCADE`, no
 `IF EXISTS` — a missing object or a foreign dependent object trips
 `DROP SCHEMA … RESTRICT` and rolls the WHOLE transaction back, pinned by test), and
 commits. A lost COMMIT acknowledgment is never success: a fresh read-only connection
@@ -325,6 +350,119 @@ databases from an earlier interrupted run were dropped before the final battery.
   smoke above (secret redaction asserted via `redactDatabaseURL` everywhere, stdout
   JSONL purity, 0600 modes, `--help` registration). `go test -race` over the whole
   migration tree and opflags.
+
+## Owner review round 1 (tip `69ece9e8`)
+
+The owner reviewed the pushed tip and reported six findings; all six are fixed without
+redesigning the module, each with regression tests, in five commits:
+
+| Commit | Finding(s) | Fix |
+|---|---|---|
+| `8a5f9433` | 4 | `verification_issue` envelopes stamp `progress.RunID` (was `""`); a test asserts EVERY emitted event carries the exact migration run_id |
+| `a9d31959` | 1, 2 | Batch blob streaming redesign + RR target snapshot + pre-fetch cap rejection; `--max-records` overrun is a typed cap error, never a panic |
+| `f163f88a` | 3 | NULL verification coverage is corrupt state, never valid |
+| `7f73848b` | 5 | Advisory-lock liveness monitoring for export and cleanup |
+| `fdb967ac` | 6 | Free-text metadata values are no longer whitelisted at all |
+
+**Finding 1 — record-batch memory budget.** `expandBatch` no longer prefetches every
+blob into a per-batch map (64 records × a 64 MiB cap ≈ 4 GiB worst case). The batch is
+now ONE `REPEATABLE READ READ ONLY READ ONLY`-isolation target transaction spanning the
+metadata scan, the per-record blob fetches and the emission: each blob's
+`SELECT data` runs immediately before that record's block is emitted, so peak retention
+is a single blob plus one chunk. Record ordering and snapshot consistency are preserved
+— the target tx nests the source `WithSnapshot` (a READ ONLY tx holds no row locks, so
+no deadlock), and the contract block order is unchanged. Over-cap blobs under
+`--include-blobs` are rejected from the batch's `octet_length` probe BEFORE any blob
+byte is fetched (zero fetches, zero events on rejection). Both properties are directly
+observable: a pgx `QueryTracer` and an event-recording sink writer share one
+mutex-guarded timeline — the test asserts `blobfetch:1 < target_blob:1 < blobfetch:2 <
+target_blob:2` and exactly one metadata scan (the old prefetch-map code fails this),
+and a concurrent `UPDATE` committed from the event hook MID-batch (different length AND
+content) leaves the export delivering the snapshot's original bytes (sha256 + lossless
+Base64 round-trip) — under READ COMMITTED the fetch would return the new bytes and the
+assertions would fail.
+
+**Finding 2 — `--max-records` panic.** When the previous batch consumed exactly
+`MaxRecords` and more IDs remained, the next page was sliced to zero elements and
+indexed `take[len(take)-1]` → panic. The exhausted budget is now checked BEFORE any
+slicing or indexing: exactly-at-cap succeeds, one-past-cap is `ErrExportCapExceeded`
+naming `--max-records`. Regression: 65 selected IDs with `--max-records=64` → typed
+cap error and no output file; the exact fit (65 IDs, cap 65) succeeds across the batch
+split with all 65 record blocks.
+
+**Finding 3 — NULL coverage accepted.** `coverageHolds` treated NULL
+`expected_target_ids`/`observed_target_ids` as valid coverage. NULL required coverage
+columns are now corrupt verification state (`ErrRunStateCorrupt` inside
+`ErrCleanupRefused`) — never waivable; verify-content runs additionally require
+non-NULL `expected_source_ids`/`observed_source_ids`. Zero recorded counts remain
+valid coverage: NULL is not zero (the green-path drop still passes with zero rows).
+
+**Finding 4 — empty run_id.** `walkVerification` constructed
+`newEnvelope(TypeVerificationIssue, "")`; every envelope now carries `progress.RunID`.
+`TestExportEnvelopeRunIDOnEveryEvent` decodes every emitted line of a full export and
+asserts the exact migration run_id on all of them.
+
+**Finding 5 — lock liveness.** Both `ExportErrors` and `Cleanup` now monitor the
+advisory lock after acquiring it (the accepted 04B runner pattern): a
+`MonitorLockLoss` goroutine watches the lock connection; a lost lock cancels the run
+context with a typed `ErrLockLost` cause, the work aborts, and the failure surfaces as
+a SAFETY failure (exit 1) — never as the operator-interrupt contract (exit 2), pinned
+at the wrapper level for both runners. Cleanup additionally re-checks `lock.Lost()`
+immediately before the destructive DDL and again before the COMMIT: a lost exclusion
+rolls back and refuses with `ErrCleanupRefused` ("nothing dropped") — the drop is
+never executed or committed after exclusion is lost. Tests: lock loss MID-export
+(the advisory backend is `pg_terminate_backend`-killed via a Progress hook; the export
+aborts with `ErrLockLost`, no output, operational schema intact); lock loss BEFORE the
+DROP (direct `runDropTransaction` with a killed + marked-dead lock → typed refusal,
+nothing dropped, `CountRegistry` still works on the intact schema). The advisory-lock
+kill query is database-scoped (`pg_locks` joined to `current_database()`) so paired
+lock-loss tests on one shared cluster cannot terminate each other's backends.
+
+**Finding 6 — free-text redaction hole.** The `safetext` constraint accepted any
+short control-free value under known keys (`reason`, `error`, `stage`) — an unmarked
+secret like `hunter2` passed unchanged. Free text cannot be proven safe by shape, so
+the constraint was removed entirely and those keys are no longer whitelisted: they
+drop with the unknown keys (deny-by-default) and only a count survives; the
+`credentialish` screen survives only inside the `hostport` constraint. Numeric,
+boolean, enum, `sqlstate`, `hex40`, `rfc3339`, `dbident`, `hostport` and `port`
+diagnostics are preserved. Regressions: `{"reason":"hunter2","error":"short",
+"stage":"decode"}` → all three dropped with `unknown_keys:3`; credential-grammar
+values under former safetext keys → dropped.
+
+New test families (8 new top-level test functions): the traced fetch/emit timeline
+(batch budget), the mid-batch concurrent `UPDATE` (RR snapshot), over-cap pre-fetch
+rejection, the 65/64 cap overrun + exact-fit pair, NULL coverage corrupt-vs-valid
+(three subtests), the lock-loss trio (mid-export, pre-DROP, wrapper mapping),
+every-event run_id, and the redaction regressions.
+
+### Round-1 verification battery
+
+Ran against the same pinned disposable `postgres:17` container (per-test databases,
+small KiB-scale fixtures only; the 10% extract was never restored):
+
+- Per-commit gates (all five commits): `go build ./...`, `go vet ./...`, `gofmt -l .`
+  clean, `golangci-lint run` — 0 issues — plus each commit's focused regression tests
+  (the round-1 test families above, run as they landed) against the pinned container.
+- First combined verification run (00:59–01:12 local): race suite — every package `ok`
+  except ONE infra-shaped failure, `TestStreamFileRowsBeyondCodecLimits`
+  (`internal/migration/legacy/original`, "context deadline exceeded" at 40.2 s — the
+  04B-era source-streaming test, untouched by every round-1 commit; it passed in the
+  pre-push battery at `69ece9e8`); full battery `-p 2 -parallel 4` — ZERO failure
+  lines with build/vet/gofmt/lint clean. Honest logging note: that run's recorded
+  `RACE-EXIT=0`/`BATTERY-EXIT=1` were both artifacts of my log-filter pipes
+  (`| tail` and `| grep -v` exit codes, the latter's "no lines selected"), so the
+  true exit codes were re-established by rerun, not inferred.
+- Clean rerun with true exit codes: `legacy/original` standalone under `-race` —
+  `ok` 18.9 s, exit 0 (vs the 40.2 s deadline it exceeded under full-tree load);
+  complete race suite rerun — all 9 packages `ok`, exit 0 (migration root 215.9 s,
+  forensics 115.8 s, original 96.8 s, state 128.2 s, target 134.4 s). The incident is
+  the documented load class (deadline pressure under full-tree `-race -parallel 4` on
+  this 16-CPU host), not a regression.
+- Full battery at `-p 2 -parallel 4` on the final tree: zero failures across all
+  packages (the log filter passes through every non-`ok` line; none appeared),
+  build OK, vet OK, gofmt clean, `golangci-lint run` 0 issues.
+- Census: 535 top-level test functions repo-wide — 527 before the round plus exactly
+  the 8 new round-1 test functions.
 
 ## Hand-off notes for 04D
 
