@@ -363,7 +363,7 @@ func walkVerification(ctx context.Context, f *Forensics, sink *jsonlSink, filter
 			}
 			details, _ := RedactJSON("issue_details", r.Details)
 			ev := verificationIssueEvent{
-				envelope:       newEnvelope(TypeVerificationIssue, ""),
+				envelope:       newEnvelope(TypeVerificationIssue, progress.RunID),
 				IssueID:        r.ID,
 				VerificationID: r.VerificationID,
 				SourceID:       r.SourceID,

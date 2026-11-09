@@ -665,6 +665,44 @@ func TestExportErrorsShapeOrderAuthority(t *testing.T) {
 	}
 }
 
+// TestExportEnvelopeRunIDOnEveryEvent (owner review round 1, finding 4):
+// the JSONL contract stamps the migration run_id on EVERY event — the
+// verification_issue walker once emitted an empty one.
+func TestExportEnvelopeRunIDOnEveryEvent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
+	pool := forensicsPool(t, dsn)
+	runID := seedV2Forensics(t, pool)
+	seedV2Registry(t, pool, runID)
+
+	out := filepath.Join(t.TempDir(), "envelope.jsonl")
+	if _, err := ExportErrors(ctx, ExportInput{
+		Options:   ExportOptions{OutputPath: out, Limits: DefaultLimits()},
+		TargetDSN: dsn,
+	}); err != nil {
+		t.Fatalf("ExportErrors() error = %v", err)
+	}
+	lines := jsonLines(t, out)
+	if len(lines) == 0 {
+		t.Fatal("empty export")
+	}
+	// Every line — including the verification_issue events whose walker
+	// regressed — must carry the exact migration run_id.
+	for i, l := range lines {
+		if got := str(t, l, "run_id"); got != runID {
+			t.Fatalf("line %d (%s) run_id = %q, want %q", i, str(t, l, "type"), got, runID)
+		}
+	}
+	// The exercised set must include the regressed event type.
+	for _, l := range lines {
+		if str(t, l, "type") == TypeVerificationIssue {
+			return
+		}
+	}
+	t.Fatal("fixture produced no verification_issue events — the regression is not exercised")
+}
+
 func TestExportErrorsFiltersMakePartial(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
