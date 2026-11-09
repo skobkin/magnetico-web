@@ -43,7 +43,7 @@ type MigrateOptions struct {
 type VerifyOptions struct {
 	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to verify." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
 
-	Workers          uint  `long:"workers" description:"Number of parallel blob decoders (1-64)." default:"4"`
+	Workers          uint  `long:"workers" description:"verify-decode: number of parallel blob decoders (1-64). verify-content: accepted but has no effect — the content scan decodes strictly sequentially to hold its decoded-content memory bound." default:"4"`
 	BatchSize        uint  `long:"batch-size" description:"Maximum target rows per committed page (1-10000)." default:"256"`
 	MaxInflightBytes int64 `long:"max-inflight-bytes" description:"Upper bound on in-flight blob bytes." default:"67108864"`
 
@@ -83,7 +83,7 @@ type TorrentsOptions struct {
 type RetryErrorsOptions struct {
 	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to repair." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
 
-	Workers          uint  `long:"workers" description:"Number of parallel record processors (1-64)." default:"4"`
+	Workers          uint  `long:"workers" description:"Accepted for symmetry with the import; repair attempts settle strictly sequentially (one transaction per record), so this value provides no concurrency (1-64)." default:"4"`
 	BatchSize        uint  `long:"batch-size" description:"Maximum records attempted per committed batch (1-10000)." default:"256"`
 	MaxInflightBytes int64 `long:"max-inflight-bytes" description:"Upper bound on decoded in-flight record bytes." default:"67108864"`
 

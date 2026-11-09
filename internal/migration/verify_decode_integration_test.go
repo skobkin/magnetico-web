@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1127,5 +1128,62 @@ func TestVerifyContentMetadataBudgetPreservesCoverage(t *testing.T) {
 		if j > 10 {
 			t.Fatalf("a committed unit advanced the target checkpoint by %d rows — the metadata budget did not cut the page (jumps %v)", j, jumps)
 		}
+	}
+}
+
+// TestVerifyDecodeWorkersDecodeConcurrently pins the advertised --workers
+// semantics of verify-decode (owner review, finding 2: workers must control
+// real concurrency wherever they claim to): the blob decoders of one fetch
+// chunk run CONCURRENTLY. The hook gate fails the test unless --workers
+// goroutines hold decode work at the same instant.
+func TestVerifyDecodeWorkersDecodeConcurrently(t *testing.T) {
+	t.Parallel()
+
+	src, tgt := decodeFixture(t)
+	const rows = 8
+	for id := int32(1); id <= rows; id++ {
+		seedMultiFileTorrent(t, src, id, fmt.Sprintf("w%d", id),
+			[][2]any{{"a.bin", int64(1)}, {"b.bin", int64(2)}})
+	}
+	importAll(t, src, tgt)
+
+	const workers = 2
+	var (
+		mu     sync.Mutex
+		inside int
+		once   sync.Once
+		failed atomic.Bool
+	)
+	allIn := make(chan struct{})
+	gate := func() {
+		mu.Lock()
+		inside++
+		if inside == workers {
+			once.Do(func() { close(allIn) })
+		}
+		mu.Unlock()
+		select {
+		case <-allIn:
+		case <-time.After(2 * time.Second):
+			if failed.CompareAndSwap(false, true) {
+				t.Errorf("decode concurrency never reached %d workers — --workers did not parallelize the chunk", workers)
+			}
+		}
+	}
+	f := gate
+	decodeWorkHook.Store(&f)
+	defer decodeWorkHook.Store(nil)
+
+	// BatchSize == rows: all rows land on one page, tiny blobs keep them in
+	// one fetch chunk — one worker cohort must reach full occupancy.
+	res, err := verifyDecoded(t, context.Background(), tgt, func(c *VerifyDecodeInput) {
+		c.Workers = workers
+		c.BatchSize = rows
+	})
+	if err != nil {
+		t.Fatalf("VerifyDecode() error = %v", err)
+	}
+	if !res.Pass || res.Verified != rows {
+		t.Fatalf("pass = %v verified = %d, want clean pass over %d rows", res.Pass, res.Verified, rows)
 	}
 }

@@ -259,6 +259,25 @@ keyset continuation to exact coverage, oversized solo admission),
 although `--batch-size` allowed 1000, full clean verdicts on both commands).
 All three proven to fail on the pre-fix tree.
 
+**2. `--workers` is now truthful per command.** The flag claimed parallel
+processing everywhere, but only verify-decode actually parallelizes (blob
+decoders across one fetch chunk). verify-content never used the value — its
+decoded-content segment cut needs each row's decoded size before admitting
+the next row, so concurrent admission would recreate the unbounded retention
+the segment design exists to prevent; parallelizing it would sacrifice the
+memory-safety fix, which the review forbade. retry-errors passed the value to
+the shared encoder's semaphore, which a one-record-at-a-time feed never
+fills — attempts settle strictly sequentially ON PURPOSE (every attempt is
+one per-ID transaction advancing the revision-tracked cursor in order).
+Decision: documentation and flag-description adjustment, not parallelism —
+the value stays accepted (validated 1..64, recorded in run settings) and each
+input struct / flag now states exactly what it does and does not control.
+verify-decode's advertised concurrency is pinned by
+`TestVerifyDecodeWorkersDecodeConcurrently`: a hook gate fails the run unless
+`--workers` goroutines hold blob-decode work at the same instant (proven to
+fail with the worker pool forced to one). `normalizeVerifyConfig` documents
+the per-command split.
+
 ## Hand-off requirements for 04C/04D
 
 - **04C (cleanup/export)**: verification/retry history is append-only and immutable —

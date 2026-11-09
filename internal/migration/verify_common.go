@@ -237,8 +237,13 @@ func finishVerificationOutcome(
 }
 
 // normalizeVerifyConfig applies the shared verification tunable defaults
-// and bounds (workers, batch size, in-flight budget) for both verification
-// passes.
+// and bounds (workers, batch size, in-flight budget) for the verification
+// passes and the retry pass. Per-command concurrency semantics differ and
+// are documented on each input struct: workers controls real parallelism
+// only in verify-decode's blob decoding; verify-content and retry-errors
+// accept it (validated, recorded in run settings) without any concurrency —
+// their sequential settlement is what holds their memory and
+// ordering guarantees.
 func normalizeVerifyConfig(workers, batchSize int, maxInflight int64) (int, int, int64, error) {
 	if workers <= 0 {
 		workers = DefaultWorkers

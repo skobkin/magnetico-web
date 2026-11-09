@@ -93,6 +93,13 @@ type RetryErrorsInput struct {
 	SourceDSN string
 	TargetDSN string
 
+	// Workers is accepted and validated for CLI symmetry with the import
+	// (and recorded in the pass settings), but provides NO concurrency: it
+	// is passed only to the shared processor's encoder semaphore, which a
+	// one-record-at-a-time feed never fills. Attempts settle strictly
+	// sequentially ON PURPOSE — every attempt is one per-ID transaction
+	// that increments the pass's revision-tracked cursor in order, and
+	// unordered settlement would break that ledger.
 	Workers          int
 	BatchSize        int
 	MaxInflightBytes int64

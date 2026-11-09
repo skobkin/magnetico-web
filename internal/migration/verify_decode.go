@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -59,6 +60,10 @@ const (
 type VerifyDecodeInput struct {
 	TargetDSN string
 
+	// Workers sets the blob-decoder parallelism: fetchAndDecodeChunk runs
+	// this many goroutines decoding one chunk's blobs concurrently — real,
+	// observable concurrency (pinned by
+	// TestVerifyDecodeWorkersDecodeConcurrently).
 	Workers          int
 	BatchSize        int
 	MaxInflightBytes int64
@@ -757,6 +762,14 @@ func packChunks(entries []blobEntry, maxInflight int64) [][]blobEntry {
 	return chunks
 }
 
+// decodeWorkHook is a test-only seam: when non-nil, every blob-decode
+// worker invokes it immediately before decoding one blob, making the
+// worker pool's actual concurrency deterministically observable (the
+// advertised --workers semantics are pinned by
+// TestVerifyDecodeWorkersDecodeConcurrently). Production keeps it nil —
+// the per-row cost is one atomic load.
+var decodeWorkHook atomic.Pointer[func()]
+
 // fetchAndDecodeChunk fetches one chunk's blob contents (one snapshot
 // transaction, bounded by construction) and decodes its rows in parallel.
 // Infrastructure failures return an error — the caller aborts the page
@@ -816,6 +829,9 @@ func fetchAndDecodeChunk(ctx context.Context, pool *pgxpool.Pool, page *decodePa
 						}},
 					}}
 					continue
+				}
+				if hook := decodeWorkHook.Load(); hook != nil {
+					(*hook)()
 				}
 				out[i] = indexedVerdict{idx: e.idx, verdict: verifyBlobRow(r, blob, limits)}
 			}

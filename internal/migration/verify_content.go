@@ -78,6 +78,12 @@ type VerifyContentInput struct {
 	SourceDSN string
 	TargetDSN string
 
+	// Workers is accepted and validated for CLI symmetry with verify-decode
+	// (and recorded in the run settings), but provides NO concurrency: the
+	// merge decodes strictly sequentially ON PURPOSE — the decoded-content
+	// segment cut needs each row's decoded size before admitting the next
+	// row, and concurrent admission would recreate the unbounded retention
+	// the segment design exists to prevent (see pageContent.loadSegment).
 	Workers          int
 	BatchSize        int
 	MaxInflightBytes int64
