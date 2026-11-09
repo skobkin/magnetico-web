@@ -48,6 +48,18 @@ type ExportInput struct {
 	TargetDSN string
 	// Now overrides the generated-at clock (tests); nil uses time.Now.
 	Now func() time.Time
+	// Progress receives cumulative snapshots (phase transitions, and once
+	// per record-expansion batch); nil disables reporting.
+	Progress func(ExportProgress)
+}
+
+// ExportProgress is one cumulative export snapshot for reporting. Events is
+// the number of JSONL events emitted so far; Records counts expanded
+// source-ID snapshots (records phase only).
+type ExportProgress struct {
+	Phase   string // metadata | records
+	Events  int64
+	Records int64
 }
 
 // ExportResult reports what was produced. On error the fields describe how
@@ -100,6 +112,10 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 
 	progress := f.Progress
 	v1 := f.Class == state.SchemaV1
+
+	if in.Progress != nil {
+		in.Progress(ExportProgress{Phase: "metadata"})
+	}
 
 	// Records mode: the source opens BEFORE the header so the sanitized
 	// source identity lands in the header and the manifest; the typed
@@ -206,7 +222,7 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 	// Record/blob expansion (records mode): per selected source_id, the
 	// full source/target record blocks.
 	if src != nil {
-		if err := expandRecords(ctx, f, src, sink, opts); err != nil {
+		if err := expandRecords(ctx, f, src, sink, opts, in.Progress); err != nil {
 			return fail(err)
 		}
 	}

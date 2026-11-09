@@ -716,17 +716,20 @@ func classifyCommitOutcome(ctx context.Context, targetDSN string, facts state.Fa
 	defer cancel()
 	conn, err := pgx.Connect(insCtx, targetDSN)
 	if err != nil {
+		// The driver fragment is sanitized at composition so the CLI's
+		// bounded wrap-detail rendering stays controlled content (the same
+		// trust rule as the 04B engine-composed wrap suffixes).
 		return fmt.Errorf("%w: the COMMIT acknowledgment was lost and the target could not "+
-			"be re-inspected (%v) — inspect the target before relying on the result; do not re-run blindly",
-			ErrCleanupAmbiguous, err)
+			"be re-inspected (%s) — inspect the target before relying on the result; do not re-run blindly",
+			ErrCleanupAmbiguous, sanitizeDetailText(err.Error()))
 	}
 	defer conn.Close(insCtx)
 
 	insp, err := state.InspectOperationalSchema(insCtx, conn)
 	if err != nil {
 		return fmt.Errorf("%w: the COMMIT acknowledgment was lost and the schema inspection "+
-			"failed (%v) — inspect the target before relying on the result; do not re-run blindly",
-			ErrCleanupAmbiguous, err)
+			"failed (%s) — inspect the target before relying on the result; do not re-run blindly",
+			ErrCleanupAmbiguous, sanitizeDetailText(err.Error()))
 	}
 	if insp.Class != state.SchemaAbsent {
 		return fmt.Errorf("%w: the operational schema is still present (%s), so the drop "+
@@ -737,7 +740,7 @@ func classifyCommitOutcome(ctx context.Context, targetDSN string, facts state.Fa
 	if !consistent {
 		return fmt.Errorf("%w: the COMMIT acknowledgment was lost; the operational schema is "+
 			"gone but the production postconditions are SUSPICIOUS (%s) — inspect the target "+
-			"immediately; do not re-run", ErrCleanupAmbiguous, why)
+			"immediately; do not re-run", ErrCleanupAmbiguous, sanitizeDetailText(why))
 	}
 	return fmt.Errorf("%w: the COMMIT acknowledgment was lost; catalog postconditions are "+
 		"consistent with success (schema gone, production counts unchanged) but do not prove "+

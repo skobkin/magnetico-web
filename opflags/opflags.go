@@ -25,11 +25,13 @@ type MigrateOptions struct {
 	Torrents      TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)." subcommands-optional:"true"`
 	VerifyDecode  VerifyOptions     `command:"verify-decode" description:"Full target-only decode scan of an imported database: every stored torrent is fetched and decoded, metadata revalidated, orphan blobs reported. The source database is never contacted."`
 	VerifyContent VerifyOptions     `command:"verify-content" description:"Full source↔target equality scan of an imported database: every source row is compared against its target counterpart. Read-only on both databases."`
+	Errors        ErrorsOptions     `command:"errors" description:"Forensic access to the migration error/verification registry."`
+	Cleanup       CleanupOptions    `command:"cleanup" description:"Gated, fail-closed teardown of the magnetico_migration operational schema. The default is a non-destructive gate-by-gate preview; --execute drops the schema in one transaction after every gate passes."`
 
 	// Subcommand records the selected migrate subcommand for main's
-	// dispatch (the nested repair pass records "retry-errors"); it is never
-	// user-settable, and yaml:"-" keeps strict config decoding from
-	// accepting a key for it.
+	// dispatch (the nested repair pass records "retry-errors"; the nested
+	// forensic export records "export"); it is never user-settable, and
+	// yaml:"-" keeps strict config decoding from accepting a key for it.
 	Subcommand string `yaml:"-"`
 }
 
@@ -100,6 +102,67 @@ type RetryErrorsOptions struct {
 // password-bearing URL is forced onto the command line.
 type SchemaInitOptions struct {
 	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to initialize." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+}
+
+// ErrorsOptions carries the `migrate errors` command group. Export is its
+// only (required) subcommand: bare `migrate errors` is a usage error.
+// DatabaseURL exists so an operator-positioned shared flag
+// (`migrate errors --database X export`) parses and transfers, exactly like
+// the retry-errors precedent.
+type ErrorsOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database whose migration state is exported." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	Export ErrorsExportOptions `command:"export" description:"Forensic, fail-open JSONL export of the migration operational state (run history, errors, verification and retry collections; full record blocks with --include-records). Read-only unless records are requested; the source database is contacted only then."`
+}
+
+// ErrorsExportOptions carries the options of `migrate errors export`. The
+// four Max* caps are safety limits: a breach is a hard error naming the cap,
+// never a truncation. SourceDatabaseURL has no CLI flag — config file and
+// MAGNETICO_MIGRATION_SOURCE_DSN only, consumed only with --include-records.
+type ErrorsExportOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database whose migration state is exported." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	Output         string `long:"output" description:"Output path of the JSONL export ('-' writes the metadata-only export to stdout; record expansion requires a file)." default:"-"`
+	Manifest       bool   `long:"manifest" description:"Write <output>.manifest.json (SHA-256, event counts, run binding, registry-state digests) after a successful publish — the artifact cleanup validates as evidence."`
+	OnlyUnresolved bool   `long:"only-unresolved" description:"Export only unresolved import errors in the error collection (makes the export partial — never usable as cleanup evidence)."`
+	VerificationID string `long:"verification-id" description:"Filter the verification collections to this verification's ID (makes the export partial — never usable as cleanup evidence)."`
+	IncludeRecords bool   `long:"include-records" description:"Expand every selected source ID with its full source and target record blocks (contacts the source database read-only)."`
+	IncludeBlobs   bool   `long:"include-blobs" description:"Include each stored blob's exact bytes as ordered Base64 chunks (requires --include-records)."`
+
+	MaxEvents      int64 `long:"max-events" description:"Safety cap: total emitted JSONL events, blob chunks included." default:"10000000"`
+	MaxRecords     int64 `long:"max-records" description:"Safety cap: expanded source-ID record snapshots." default:"1000000"`
+	MaxOutputBytes int64 `long:"max-output-bytes" description:"Safety cap: total JSONL output bytes." default:"8589934592"`
+	MaxBlobBytes   int64 `long:"max-blob-bytes" description:"Safety cap: raw bytes per exported blob; a larger blob fails the export (raise it or drop --include-blobs)." default:"67108864"`
+
+	// SourceDatabaseURL is the read-only v0.12.0 source database, consumed
+	// only with --include-records. Config file and MAGNETICO_MIGRATION_SOURCE_DSN
+	// only — no flag, no default, and it never falls back to the target DSN.
+	SourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
+}
+
+// CleanupOptions carries the options of `migrate cleanup`. The authorization
+// flags (ConfirmBackup, ConfirmExport, ForceUnverified, Reason,
+// AllowMissingExportEvidence, ConfirmHistoryLoss) are deliberately CLI-only
+// (no config-file keys): authorizations must be given explicitly per
+// invocation, never inherited from a file.
+type CleanupOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database to clean up." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	DryRun  bool `long:"dry-run" description:"Explicit non-destructive preview (the default without --execute): every gate is evaluated and reported, nothing is dropped."`
+	Execute bool `long:"execute" description:"Run the gated teardown (the single confirmation): the magnetico_migration schema is dropped in one transaction after every gate passes on the transaction's own snapshot."`
+
+	ConfirmBackup    bool   `long:"confirm-backup" description:"Attest that an independent backup of the target database exists (the drop irreversibly destroys the migration history)."`
+	ConfirmExport    bool   `long:"confirm-export" description:"Attest that a COMPLETE metadata export of this run, with a validated SHA-256 manifest, is independently retained (the normal evidence path; paired with --evidence-manifest)."`
+	EvidenceManifest string `long:"evidence-manifest" description:"Path of the retained export's manifest file, validated (structure, artifact hash, run binding, registry-state digests) before anything is dropped."`
+	ForceUnverified  bool   `long:"force-unverified" description:"Waive ORDINARY gate failures (stale or failed verification verdicts, unresolved findings). It never waives corrupt state, reconciliation failures or missing attestations."`
+	Reason           string `long:"reason" description:"Mandatory audit reason when --force-unverified is used (1-512 bytes, recorded on the result)."`
+	// AllowMissingExportEvidence + ConfirmHistoryLoss form the exceptional,
+	// path-exclusive evidence attestation: NO complete export exists and all
+	// migration history will be irrecoverably destroyed. Requires
+	// --force-unverified --reason; mutually exclusive with --confirm-export /
+	// --evidence-manifest.
+	AllowMissingExportEvidence bool `long:"allow-missing-export-evidence" description:"Exceptional evidence path: no complete export evidence exists (must be paired with --confirm-history-loss and --force-unverified --reason)."`
+	ConfirmHistoryLoss         bool `long:"confirm-history-loss" description:"Attest that NO complete export evidence exists and ALL migration history will be irrecoverably destroyed (paired with --allow-missing-export-evidence)."`
 }
 
 // StubOptions carries the options of reserved, not-yet-implemented commands.

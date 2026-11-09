@@ -204,16 +204,20 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		o.Migrate.VerifyDecode.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.VerifyContent.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.Torrents.RetryErrors.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Errors.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Errors.Export.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Cleanup.DatabaseURL = file.MigrateDatabaseURL
 	}
 
 	// The migration source DSN has no CLI flag, so there is no explicit
 	// guard: the file value always applies to every source-connected command
 	// (env overrides it later). verify-decode is target-only and never reads
-	// it.
+	// it; cleanup consumes no source either.
 	if _, found := present[migrateSourceDatabaseYamlKey]; found {
 		o.Migrate.Torrents.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 		o.Migrate.VerifyContent.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 		o.Migrate.Torrents.RetryErrors.SourceDatabaseURL = file.MigrateSourceDatabaseURL
+		o.Migrate.Errors.Export.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 	}
 
 	return nil
@@ -269,6 +273,9 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 			o.Migrate.VerifyDecode.DatabaseURL = value
 			o.Migrate.VerifyContent.DatabaseURL = value
 			o.Migrate.Torrents.RetryErrors.DatabaseURL = value
+			o.Migrate.Errors.DatabaseURL = value
+			o.Migrate.Errors.Export.DatabaseURL = value
+			o.Migrate.Cleanup.DatabaseURL = value
 		}
 	}
 
@@ -290,9 +297,10 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 // migrate subcommand and rejects unknown ones, with the same
 // empty-means-unset rule as the other namespaces. The source DSN has no CLI
 // flag, so the env value always applies (env over file, no explicit entry)
-// — to torrents, the nested retry-errors pass and verify-content;
-// verify-decode is target-only and schema-init is schema-only, so there the
-// value is validated as a known variable and otherwise ignored.
+// — to torrents, the nested retry-errors pass, verify-content and the
+// nested errors export; verify-decode is target-only, schema-init is
+// schema-only and cleanup consumes no source, so there the value is
+// validated as a known variable and otherwise ignored.
 func (o *OpFlags) applyEnvMigrationConfig() error {
 	if value, ok := os.LookupEnv(migrationSourceEnvName); ok && value != "" {
 		switch o.Migrate.Subcommand {
@@ -302,6 +310,8 @@ func (o *OpFlags) applyEnvMigrationConfig() error {
 			o.Migrate.Torrents.RetryErrors.SourceDatabaseURL = value
 		case "verify-content":
 			o.Migrate.VerifyContent.SourceDatabaseURL = value
+		case "export":
+			o.Migrate.Errors.Export.SourceDatabaseURL = value
 		}
 	}
 

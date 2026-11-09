@@ -42,16 +42,25 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		}
 	case "migrate":
 		if active.Active == nil {
-			return "", errors.New("migrate: expected a subcommand; expected: schema-init, torrents, verify-decode, verify-content (see --help)")
+			return "", errors.New("migrate: expected a subcommand; expected: schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 		sub := active.Active
-		if sub.Name == "torrents" && sub.Active != nil {
+		switch {
+		case sub.Name == "torrents" && sub.Active != nil:
 			// `migrate torrents retry-errors` — the nested repair pass is
 			// the effective subcommand (go-flags only ever activates the
 			// known nested command, so the name check is belt and braces).
 			o.Migrate.Subcommand = sub.Active.Name
 			o.transferSharedFlagsToRetry(sub, sub.Active)
-		} else {
+		case sub.Name == "errors":
+			// `migrate errors export` — the nested forensic export is the
+			// effective subcommand; bare `migrate errors` is a usage error.
+			if sub.Active == nil {
+				return "", errors.New("migrate errors: expected a subcommand; expected: export (see --help)")
+			}
+			o.Migrate.Subcommand = sub.Active.Name
+			o.transferSharedFlagsToExport(sub, sub.Active)
+		default:
 			o.Migrate.Subcommand = sub.Name
 		}
 		if err := o.applyConfig(explicitOptions(parser.Command), command); err != nil {
@@ -88,5 +97,20 @@ func (o *OpFlags) transferSharedFlagsToRetry(parent, nested *flags.Command) {
 	}
 	if pset["max-inflight-bytes"] && !nset["max-inflight-bytes"] {
 		r.MaxInflightBytes = t.MaxInflightBytes
+	}
+}
+
+// transferSharedFlagsToExport moves the shared --database the operator
+// positioned before the nested export command onto ErrorsExport:
+// `migrate errors --database X export` parses `--database X` into the errors
+// command and leaves the export's own field at its tag default — the same
+// parent/nested precedence rule as transferSharedFlagsToRetry (the nested
+// position always wins; this runs before the config layers).
+func (o *OpFlags) transferSharedFlagsToExport(parent, nested *flags.Command) {
+	pset, nset := explicitInCommand(parent), explicitInCommand(nested)
+	e := &o.Migrate.Errors
+	x := &e.Export
+	if pset["database"] && !nset["database"] {
+		x.DatabaseURL = e.DatabaseURL
 	}
 }

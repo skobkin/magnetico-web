@@ -149,7 +149,8 @@ func TestParseArgs_MigrateSubcommands(t *testing.T) {
 		o := &OpFlags{}
 		_, err := o.parseArgs([]string{"migrate"})
 		if err == nil || !strings.Contains(err.Error(), "schema-init") || !strings.Contains(err.Error(), "torrents") ||
-			!strings.Contains(err.Error(), "verify-decode") || !strings.Contains(err.Error(), "verify-content") {
+			!strings.Contains(err.Error(), "verify-decode") || !strings.Contains(err.Error(), "verify-content") ||
+			!strings.Contains(err.Error(), "errors") || !strings.Contains(err.Error(), "cleanup") {
 			t.Errorf("parseArgs([migrate]) error = %v, want a usage error naming the subcommands", err)
 		}
 	})
@@ -620,6 +621,8 @@ func TestApplyYamlConfig_FansOutToAllMigrateCommands(t *testing.T) {
 			Torrents:      torrentsDefaults(),
 			VerifyDecode:  verifyDefaults(),
 			VerifyContent: verifyDefaults(),
+			Errors:        errorsDefaults(),
+			Cleanup:       cleanupDefaults(),
 		},
 	}
 	if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
@@ -635,6 +638,9 @@ func TestApplyYamlConfig_FansOutToAllMigrateCommands(t *testing.T) {
 		{"VerifyDecode", o.Migrate.VerifyDecode.DatabaseURL},
 		{"VerifyContent", o.Migrate.VerifyContent.DatabaseURL},
 		{"RetryErrors", o.Migrate.Torrents.RetryErrors.DatabaseURL},
+		{"Errors", o.Migrate.Errors.DatabaseURL},
+		{"ErrorsExport", o.Migrate.Errors.Export.DatabaseURL},
+		{"Cleanup", o.Migrate.Cleanup.DatabaseURL},
 	} {
 		if tc.url != "postgres://target-file@localhost/db" {
 			t.Errorf("%s.DatabaseURL = %s, want the file value", tc.name, tc.url)
@@ -642,12 +648,227 @@ func TestApplyYamlConfig_FansOutToAllMigrateCommands(t *testing.T) {
 	}
 	if o.Migrate.Torrents.SourceDatabaseURL != "postgres://source-file@localhost/legacy" ||
 		o.Migrate.VerifyContent.SourceDatabaseURL != "postgres://source-file@localhost/legacy" ||
-		o.Migrate.Torrents.RetryErrors.SourceDatabaseURL != "postgres://source-file@localhost/legacy" {
-		t.Errorf("source fan-out missed a field: torrents=%q verify-content=%q retry=%q",
+		o.Migrate.Torrents.RetryErrors.SourceDatabaseURL != "postgres://source-file@localhost/legacy" ||
+		o.Migrate.Errors.Export.SourceDatabaseURL != "postgres://source-file@localhost/legacy" {
+		t.Errorf("source fan-out missed a field: torrents=%q verify-content=%q retry=%q export=%q",
 			o.Migrate.Torrents.SourceDatabaseURL, o.Migrate.VerifyContent.SourceDatabaseURL,
-			o.Migrate.Torrents.RetryErrors.SourceDatabaseURL)
+			o.Migrate.Torrents.RetryErrors.SourceDatabaseURL, o.Migrate.Errors.Export.SourceDatabaseURL)
 	}
 	if o.Crawl.DatabaseURL != defaults().DatabaseURL {
 		t.Errorf("Crawl.DatabaseURL = %s, want the default (crawl key is separate)", o.Crawl.DatabaseURL)
 	}
+}
+
+// errorsDefaults returns ErrorsOptions equivalent to the built-in flag
+// defaults of `migrate errors`.
+func errorsDefaults() ErrorsOptions {
+	return ErrorsOptions{
+		DatabaseURL: "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
+		Export:      errorsExportDefaults(),
+	}
+}
+
+// errorsExportDefaults returns ErrorsExportOptions equivalent to the
+// built-in flag defaults of `migrate errors export`.
+func errorsExportDefaults() ErrorsExportOptions {
+	return ErrorsExportOptions{
+		DatabaseURL:    "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
+		Output:         "-",
+		MaxEvents:      10000000,
+		MaxRecords:     1000000,
+		MaxOutputBytes: 8589934592,
+		MaxBlobBytes:   67108864,
+	}
+}
+
+// cleanupDefaults returns CleanupOptions equivalent to the built-in flag
+// defaults of `migrate cleanup`.
+func cleanupDefaults() CleanupOptions {
+	return CleanupOptions{
+		DatabaseURL: "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
+	}
+}
+
+func TestParseArgs_ErrorsExportNested(t *testing.T) {
+	t.Run("NestedDefaultsAndSubcommandRecording", func(t *testing.T) {
+		o := &OpFlags{}
+		command, err := o.parseArgs([]string{"migrate", "errors", "export"})
+		if err != nil {
+			t.Fatalf("parseArgs([migrate errors export]) error = %v", err)
+		}
+		if command != "migrate" {
+			t.Errorf("command = %q, want migrate", command)
+		}
+		if o.Migrate.Subcommand != "export" {
+			t.Errorf("Migrate.Subcommand = %q, want export", o.Migrate.Subcommand)
+		}
+		if o.Migrate.Errors.Export != errorsExportDefaults() {
+			t.Errorf("Errors.Export = %+v, want the built-in defaults", o.Migrate.Errors.Export)
+		}
+	})
+
+	t.Run("BareErrorsIsAUsageError", func(t *testing.T) {
+		o := &OpFlags{}
+		_, err := o.parseArgs([]string{"migrate", "errors"})
+		if err == nil || !strings.Contains(err.Error(), "export") {
+			t.Errorf("parseArgs([migrate errors]) error = %v, want a usage error naming export", err)
+		}
+	})
+
+	t.Run("Flags", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "errors", "export",
+			"--database", "postgres://cli@localhost/db",
+			"--output", "/tmp/export.jsonl",
+			"--manifest",
+			"--include-records",
+			"--include-blobs",
+			"--only-unresolved",
+			"--verification-id", "abc",
+			"--max-events", "100",
+			"--max-records", "10",
+			"--max-output-bytes", "1000000",
+			"--max-blob-bytes", "4096",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		got := o.Migrate.Errors.Export
+		if got.DatabaseURL != "postgres://cli@localhost/db" ||
+			got.Output != "/tmp/export.jsonl" || !got.Manifest ||
+			!got.IncludeRecords || !got.IncludeBlobs || !got.OnlyUnresolved ||
+			got.VerificationID != "abc" ||
+			got.MaxEvents != 100 || got.MaxRecords != 10 ||
+			got.MaxOutputBytes != 1000000 || got.MaxBlobBytes != 4096 {
+			t.Errorf("Errors.Export = %+v, want the CLI values", got)
+		}
+	})
+
+	// Shared --database positioned before the nested command lands on the
+	// errors command; the export must receive it anyway (retry-errors
+	// precedent).
+	t.Run("ParentPositionedDatabaseTransfers", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "errors",
+			"--database", "postgres://parent@localhost/db",
+			"export",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if got := o.Migrate.Errors.Export.DatabaseURL; got != "postgres://parent@localhost/db" {
+			t.Errorf("Errors.Export.DatabaseURL = %q, want the parent-positioned value", got)
+		}
+	})
+
+	t.Run("NestedPositionWins", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "errors",
+			"--database", "postgres://parent@localhost/db",
+			"export",
+			"--database", "postgres://nested@localhost/db",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.Errors.DatabaseURL != "postgres://parent@localhost/db" {
+			t.Errorf("Errors.DatabaseURL = %q, want the parent-positioned value", o.Migrate.Errors.DatabaseURL)
+		}
+		if got := o.Migrate.Errors.Export.DatabaseURL; got != "postgres://nested@localhost/db" {
+			t.Errorf("Errors.Export.DatabaseURL = %q, want the nested-positioned value", got)
+		}
+	})
+
+	t.Run("SourceEnvApplies", func(t *testing.T) {
+		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "errors", "export"}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.Errors.Export.SourceDatabaseURL != "postgres://source-env@localhost/legacy" {
+			t.Errorf("Export.SourceDatabaseURL = %s, want the env value", o.Migrate.Errors.Export.SourceDatabaseURL)
+		}
+	})
+
+	// The target DSN env feeds the export like every other migrate command.
+	t.Run("TargetEnvApplies", func(t *testing.T) {
+		t.Setenv(migrateDatabaseEnvName, "postgres://migrate-env@localhost/db")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "errors", "export"}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.Errors.Export.DatabaseURL != "postgres://migrate-env@localhost/db" {
+			t.Errorf("Export.DatabaseURL = %s, want the env value", o.Migrate.Errors.Export.DatabaseURL)
+		}
+	})
+
+	// The source DSN is validated as a known variable on cleanup but never
+	// applied (cleanup consumes no source).
+	t.Run("SourceEnvValidatedButIgnoredOnCleanup", func(t *testing.T) {
+		t.Setenv(migrationSourceEnvName, "postgres://source-env@localhost/legacy")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "cleanup"}); err != nil {
+			t.Fatalf("parseArgs([migrate cleanup]) error = %v (a set source DSN is accepted and ignored)", err)
+		}
+		if o.Migrate.Cleanup.DatabaseURL != cleanupDefaults().DatabaseURL {
+			t.Errorf("Cleanup.DatabaseURL = %s, want the default", o.Migrate.Cleanup.DatabaseURL)
+		}
+	})
+}
+
+func TestParseArgs_Cleanup(t *testing.T) {
+	t.Run("DefaultsAndSubcommandRecording", func(t *testing.T) {
+		o := &OpFlags{}
+		command, err := o.parseArgs([]string{"migrate", "cleanup"})
+		if err != nil {
+			t.Fatalf("parseArgs([migrate cleanup]) error = %v", err)
+		}
+		if command != "migrate" {
+			t.Errorf("command = %q, want migrate", command)
+		}
+		if o.Migrate.Subcommand != "cleanup" {
+			t.Errorf("Migrate.Subcommand = %q, want cleanup", o.Migrate.Subcommand)
+		}
+		if o.Migrate.Cleanup != cleanupDefaults() {
+			t.Errorf("Cleanup = %+v, want the built-in defaults (no authorization defaults to true)", o.Migrate.Cleanup)
+		}
+	})
+
+	t.Run("FlagsAndAttestations", func(t *testing.T) {
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "cleanup",
+			"--database", "postgres://cli@localhost/db",
+			"--dry-run",
+			"--execute",
+			"--confirm-backup",
+			"--confirm-export",
+			"--evidence-manifest", "/tmp/export.manifest.json",
+			"--force-unverified",
+			"--reason", "operator-approved teardown",
+			"--allow-missing-export-evidence",
+			"--confirm-history-loss",
+		}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		got := o.Migrate.Cleanup
+		if got.DatabaseURL != "postgres://cli@localhost/db" ||
+			!got.DryRun || !got.Execute || !got.ConfirmBackup || !got.ConfirmExport ||
+			got.EvidenceManifest != "/tmp/export.manifest.json" ||
+			!got.ForceUnverified || got.Reason != "operator-approved teardown" ||
+			!got.AllowMissingExportEvidence || !got.ConfirmHistoryLoss {
+			t.Errorf("Cleanup = %+v, want the CLI values", got)
+		}
+	})
+
+	t.Run("TargetEnvApplies", func(t *testing.T) {
+		t.Setenv(migrateDatabaseEnvName, "postgres://migrate-env@localhost/db")
+
+		o := &OpFlags{}
+		if _, err := o.parseArgs([]string{"migrate", "cleanup"}); err != nil {
+			t.Fatalf("parseArgs() error = %v", err)
+		}
+		if o.Migrate.Cleanup.DatabaseURL != "postgres://migrate-env@localhost/db" {
+			t.Errorf("Cleanup.DatabaseURL = %s, want the env value", o.Migrate.Cleanup.DatabaseURL)
+		}
+	})
 }

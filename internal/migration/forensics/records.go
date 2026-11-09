@@ -116,8 +116,9 @@ func openRecordSource(ctx context.Context, f *Forensics, sourceDSN string) (*ori
 
 // expandRecords runs the record/blob pass. The caller has already validated
 // the flags and opened the source; every error is terminal (fail-open
-// applies to record CONTENT, never to infrastructure).
-func expandRecords(ctx context.Context, f *Forensics, src *original.Source, sink *jsonlSink, opts ExportOptions) error {
+// applies to record CONTENT, never to infrastructure). progress, when
+// non-nil, receives a cumulative snapshot after every expanded batch.
+func expandRecords(ctx context.Context, f *Forensics, src *original.Source, sink *jsonlSink, opts ExportOptions, progress func(ExportProgress)) error {
 	records := int64(0)
 	after := int64(0)
 	for {
@@ -140,6 +141,9 @@ func expandRecords(ctx context.Context, f *Forensics, src *original.Source, sink
 		}
 		records += int64(len(take))
 		after = take[len(take)-1]
+		if progress != nil {
+			progress(ExportProgress{Phase: "records", Events: sink.events, Records: records})
+		}
 		if len(take) < len(ids) {
 			// The cap stopped this page mid-batch: a hard error (never a
 			// silent stop).

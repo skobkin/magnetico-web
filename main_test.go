@@ -9,6 +9,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -576,4 +577,214 @@ func TestMigrateVerifyRetryBinarySmoke(t *testing.T) {
 	if code, _ := runMigrateBinary(t, bin, "", "migrate", "verify-decode", "--help"); code != 0 {
 		t.Fatalf("verify-decode --help exit = %d, want 0", code)
 	}
+}
+
+// runMigrateBinarySplit runs one magnetico invocation and returns its exit
+// code, stdout and stderr SEPARATELY (the export stdout-purity assertion
+// needs the JSONL stream uncontaminated by progress lines, which always go
+// to stderr).
+func runMigrateBinarySplit(t *testing.T, bin, sourceDSN string, args ...string) (int, string, string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = append(os.Environ(), "MAGNETICO_MIGRATION_SOURCE_DSN="+sourceDSN)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	t.Logf("magnetico %v exit; stderr: %s", args, stderr.String())
+	if err == nil {
+		return 0, stdout.String(), stderr.String()
+	}
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok {
+		t.Fatalf("wait: %v", err)
+	}
+	return exitErr.ExitCode(), stdout.String(), stderr.String()
+}
+
+// Small end-to-end exit-code smoke for the 04C commands (the 50k import
+// smoke stays untouched): a clean two-torrent source drives the real binary
+// through the whole 04C lifecycle:
+//
+//	import (exit 0) → verify-decode PASS, verify-content PASS (exit 0 each)
+//	→ errors export to stdout (pure JSONL, no progress lines on stdout)
+//	→ errors export to a file with --manifest (exit 0; both files 0600)
+//	→ cleanup dry-run (exit 0; the preview prints the blocking gates)
+//	→ cleanup execute without attestations (exit 1, refusal)
+//	→ tampered artifact → cleanup execute (exit 1, evidence rejected)
+//	→ fresh export → cleanup execute (exit 0; schema gone, data intact)
+//	→ second cleanup (exit 0 no-op)
+//	→ verify-decode after cleanup (exit 1: no migration run state)
+//
+// The exit-2 interrupted path is exercised at the runner level (the
+// wrapper maps context cancellation to ErrInterrupted; the forensics layer
+// removes the temp file / rolls back pre-COMMIT) — a two-torrent export and
+// a small-schema drop finish too fast to interrupt reliably.
+func TestMigrateExportCleanupBinarySmoke(t *testing.T) {
+	pgtest.IntegrationCluster(t) // skip when no disposable test PostgreSQL is available
+
+	src := pgtest.IntegrationCluster(t).TestDatabase(t)
+	execSmokeSQL(t, src, smokeSourceDDL)
+	execSmokeSQL(t, src, `
+        INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (1, decode(lpad(to_hex(1), 40, '0'), 'hex'), 't1', 4, 1700000001),
+               (2, decode(lpad(to_hex(2), 40, '0'), 'hex'), 't2', 2, 1700000002);
+        INSERT INTO magneticod.files (torrent_id, path, size)
+        VALUES (1, 'a.bin', 2), (1, 'b.bin', 2),
+               (2, 'f2.bin', 2);`)
+
+	tgt := pgtest.IntegrationCluster(t).TestDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	if err := persistence.InitSchema(ctx, tgt); err != nil {
+		t.Fatalf("InitSchema() error = %v", err)
+	}
+
+	bin := buildBinary(t)
+	dir := t.TempDir()
+	exportPath := filepath.Join(dir, "forensics.jsonl")
+	manifestPath := exportPath + ".manifest.json"
+
+	// Import: a clean source completes without record errors.
+	if code, _ := runMigrateBinary(t, bin, src, "migrate", "torrents", "--database", tgt, "--batch-size", "10"); code != 0 {
+		t.Fatalf("import exit code = %d, want 0", code)
+	}
+	// Both verification kinds pass, satisfying cleanup's G7.
+	if code, out := runMigrateBinary(t, bin, "", "migrate", "verify-decode", "--database", tgt); code != 0 || !strings.Contains(out, "PASS") {
+		t.Fatalf("verify-decode exit = %d, output = %s; want exit 0 PASS", code, out)
+	}
+	if code, out := runMigrateBinary(t, bin, src, "migrate", "verify-content", "--database", tgt); code != 0 || !strings.Contains(out, "PASS") {
+		t.Fatalf("verify-content exit = %d, output = %s; want exit 0 PASS", code, out)
+	}
+
+	// Stdout export: pure JSONL on stdout — every line parses as JSON with
+	// the forensic format field — with the progress/summary on stderr.
+	code, stdout, _ := runMigrateBinarySplit(t, bin, "", "migrate", "errors", "export", "--database", tgt)
+	if code != 0 {
+		t.Fatalf("stdout export exit = %d, want 0", code)
+	}
+	lines := strings.Split(strings.TrimSpace(stdout), "\n")
+	if len(lines) < 2 { // header + import_run (+ footer)
+		t.Fatalf("stdout export has %d lines, want at least 2", len(lines))
+	}
+	for i, line := range lines {
+		dec := json.NewDecoder(strings.NewReader(line))
+		var ev map[string]any
+		if err := dec.Decode(&ev); err != nil || ev["format"] != "magnetico-migration-forensics" {
+			t.Fatalf("stdout line %d is not a forensic event (%v): %.80s", i, err, line)
+		}
+	}
+
+	// File export with a manifest: exit 0, both files 0600.
+	code, _ = runMigrateBinary(t, bin, "", "migrate", "errors", "export",
+		"--database", tgt, "--output", exportPath, "--manifest")
+	if code != 0 {
+		t.Fatalf("file export exit = %d, want 0", code)
+	}
+	for _, path := range []string{exportPath, manifestPath} {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("os.Stat(%s) error = %v", filepath.Base(path), err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %o, want 600", filepath.Base(path), fi.Mode().Perm())
+		}
+	}
+
+	// Dry-run: exit 0 (blockers are printed findings); the preview names
+	// the missing backup and evidence attestations.
+	code, out := runMigrateBinary(t, bin, "", "migrate", "cleanup", "--database", tgt)
+	if code != 0 || !strings.Contains(out, "cleanup preview") || !strings.Contains(out, "FAIL") {
+		t.Fatalf("cleanup dry-run exit = %d, output = %s; want exit 0 with a preview listing FAIL gates", code, out)
+	}
+
+	// Execute without the attestations refuses: nothing dropped.
+	code, out = runMigrateBinary(t, bin, "", "migrate", "cleanup", "--database", tgt, "--execute")
+	if code != 1 || !strings.Contains(out, "confirm-backup") {
+		t.Fatalf("cleanup execute without attestations exit = %d, output = %s; want exit 1 naming confirm-backup", code, out)
+	}
+	if !schemaPresent(t, tgt) {
+		t.Fatalf("the refused execute dropped the schema")
+	}
+
+	// A tampered artifact fails the evidence gate: the re-hash no longer
+	// matches the manifest SHA-256.
+	f, err := os.OpenFile(exportPath, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatalf("open artifact: %v", err)
+	}
+	if _, err := f.WriteString("{}\n"); err != nil {
+		t.Fatalf("append to artifact: %v", err)
+	}
+	f.Close()
+	code, out = runMigrateBinary(t, bin, "", "migrate", "cleanup", "--database", tgt, "--execute",
+		"--confirm-backup", "--confirm-export", "--evidence-manifest", manifestPath)
+	if code != 1 || !strings.Contains(out, "rejected") {
+		t.Fatalf("cleanup with tampered evidence exit = %d, output = %s; want exit 1 evidence rejected", code, out)
+	}
+	if !schemaPresent(t, tgt) {
+		t.Fatalf("the refused execute dropped the schema")
+	}
+
+	// Fresh evidence: re-export (the no-clobber lifecycle refuses the
+	// tampered path, so the test removes its own artifacts first) and the
+	// gated teardown commits; exit 0, schema gone, production data intact.
+	os.Remove(exportPath)
+	os.Remove(manifestPath)
+	if code, _ := runMigrateBinary(t, bin, "", "migrate", "errors", "export",
+		"--database", tgt, "--output", exportPath, "--manifest"); code != 0 {
+		t.Fatalf("fresh export exit code = %d, want 0", code)
+	}
+	code, out = runMigrateBinary(t, bin, "", "migrate", "cleanup", "--database", tgt, "--execute",
+		"--confirm-backup", "--confirm-export", "--evidence-manifest", manifestPath)
+	if code != 0 || !strings.Contains(out, "dropped the magnetico_migration schema") {
+		t.Fatalf("cleanup execute exit = %d, output = %s; want exit 0 with the drop summary", code, out)
+	}
+	if schemaPresent(t, tgt) {
+		t.Fatalf("the committed cleanup left the schema behind")
+	}
+	if n := smokeScalar(t, tgt, `SELECT COUNT(*) FROM magneticod.torrents`); n != 2 {
+		t.Fatalf("torrents after cleanup = %d, want 2 (production data untouched)", n)
+	}
+
+	// Second cleanup: absence is a harmless no-op, exit 0.
+	code, out = runMigrateBinary(t, bin, "", "migrate", "cleanup", "--database", tgt)
+	if code != 0 || !strings.Contains(out, "nothing to clean up") {
+		t.Fatalf("second cleanup exit = %d, output = %s; want exit 0 no-op", code, out)
+	}
+
+	// Post-cleanup, the migration state is gone: verify-decode exits 1.
+	code, out = runMigrateBinary(t, bin, "", "migrate", "verify-decode", "--database", tgt)
+	if code != 1 || !strings.Contains(out, "no migration run state") {
+		t.Fatalf("verify-decode after cleanup exit = %d, output = %s; want exit 1 no-run-state", code, out)
+	}
+
+	// The new subcommands are registered: --help exits 0.
+	for _, args := range [][]string{
+		{"migrate", "errors", "export", "--help"},
+		{"migrate", "cleanup", "--help"},
+	} {
+		if code, _ := runMigrateBinary(t, bin, "", args...); code != 0 {
+			t.Fatalf("%v --help exit = %d, want 0", args, code)
+		}
+	}
+}
+
+// schemaPresent reports whether the magnetico_migration schema exists.
+func schemaPresent(t *testing.T, dsn string) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("schema-present connect: %v", err)
+	}
+	defer conn.Close(context.Background())
+	var reg *string
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('magnetico_migration.progress')::text`).Scan(&reg); err != nil {
+		t.Fatalf("schema-present probe: %v", err)
+	}
+	return reg != nil
 }
