@@ -1226,9 +1226,14 @@ func TestVerifyContentMetadataBudgetPreservesCoverage(t *testing.T) {
 // chunk run CONCURRENTLY. The hook gate fails the test unless --workers
 // goroutines hold decode work at the same instant.
 //
+// This test deliberately does NOT run in parallel: decodeWorkHook is a
+// package-global, so a concurrent unrelated decode (any other test in this
+// package process) could satisfy the gate without this test's own chunk
+// reaching full occupancy — or be blocked by this test's gate. Go's test
+// scheduler runs a serial test to completion before releasing any parallel
+// test of the package, which isolates the hook exactly (owner review
+// round 2, finding 2).
 func TestVerifyDecodeWorkersDecodeConcurrently(t *testing.T) {
-	t.Parallel()
-
 	src, tgt := decodeFixture(t)
 	const rows = 8
 	for id := int32(1); id <= rows; id++ {
