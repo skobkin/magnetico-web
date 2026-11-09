@@ -107,6 +107,69 @@ func TestRedactJSONOwnerAdversarialCases(t *testing.T) {
 	})
 }
 
+// TestRedactJSONExactInt64Preservation (review round 2, finding 2): the
+// redactor decodes with UseNumber — numbers keep their exact digits — and
+// conInt validates via exact signed int64 parsing. Integers past the
+// float64 mantissa (2^53) used to be silently MANGLED by the float64
+// decode, and ±MaxInt64 used to be refused by the float range check. The
+// assertions compare the OUTPUT BYTES: re-unmarshaling into float64 would
+// reproduce exactly the bug under test.
+func TestRedactJSONExactInt64Preservation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("integers beyond the float64 mantissa survive byte-exact", func(t *testing.T) {
+		t.Parallel()
+		raw := `{"count":9007199254740993,"actual":9223372036854775807,"observed":-9223372036854775808}`
+		out, stats := RedactJSON("error_details", json.RawMessage(raw))
+		if stats.ConstraintFailures != 0 || stats.UnknownKeys != 0 {
+			t.Fatalf("exact int64 values refused: %+v", stats)
+		}
+		s := string(out)
+		for _, want := range []string{
+			`"count":9007199254740993`,
+			`"actual":9223372036854775807`,
+			`"observed":-9223372036854775808`,
+		} {
+			if !strings.Contains(s, want) {
+				t.Fatalf("output %s lost the exact integer %s", s, want)
+			}
+		}
+		// The float64-mangled forms of count (2^53+1 → 2^53) and MaxInt64
+		// (→ 2^63) must never appear. (The MinInt64 mangle shares digits
+		// with its correct form, so it is only checked under its own key.)
+		for _, mangled := range []string{`"count":9007199254740992`, `"actual":9223372036854775808`} {
+			if strings.Contains(s, mangled) {
+				t.Fatalf("output %s shows float64-mangled digits (%s)", s, mangled)
+			}
+		}
+	})
+
+	t.Run("out-of-range, noninteger and exponent forms fail the int constraint", func(t *testing.T) {
+		t.Parallel()
+		m, stats := mustRedact(t, "error_details",
+			`{"count":99999999999999999999,"actual":3.14,"observed":4.0,"length":1e6}`)
+		for _, k := range []string{"count", "actual", "observed", "length"} {
+			if v, ok := m[k].(map[string]any); !ok || v["redacted"] != "constraint" {
+				t.Fatalf("key %s not refused: %v", k, m[k])
+			}
+		}
+		if stats.ConstraintFailures != 4 {
+			t.Fatalf("constraint_failures = %d, want 4", stats.ConstraintFailures)
+		}
+	})
+
+	t.Run("null under an int constraint stays null", func(t *testing.T) {
+		t.Parallel()
+		m, stats := mustRedact(t, "error_details", `{"orphan_id_min":null}`)
+		if v, ok := m["orphan_id_min"]; !ok || v != nil {
+			t.Fatalf("explicit null = %v, want null", v)
+		}
+		if stats.ConstraintFailures != 0 {
+			t.Fatalf("null refused: %+v", stats)
+		}
+	})
+}
+
 func TestRedactJSONPreservesSafeDiagnostics(t *testing.T) {
 	t.Parallel()
 

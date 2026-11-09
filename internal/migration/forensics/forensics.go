@@ -12,6 +12,7 @@
 package forensics
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -260,7 +261,13 @@ func RedactJSON(kind string, raw json.RawMessage) (json.RawMessage, redactStats)
 		return json.RawMessage("null"), redactStats{}
 	}
 	var top any
-	if err := json.Unmarshal(raw, &top); err != nil {
+	// UseNumber (review round 2, finding 2): numbers decode as json.Number
+	// with their exact digits — a plain Unmarshal converts every number to
+	// float64, silently mangling integer diagnostics above the 2^53
+	// mantissa before they reach the forensic JSONL.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&top); err != nil {
 		return json.RawMessage(`{"redacted":"shape"}`), redactStats{}
 	}
 	obj, ok := top.(map[string]any)
@@ -321,11 +328,17 @@ func valueFits(constraint string, v any) bool {
 		if v == nil {
 			return true // explicit JSON null is uninformative, never sensitive
 		}
-		n, ok := v.(float64) // encoding/json decodes JSON numbers as float64
-		if !ok || n != trunc(n) || n < -9.2e18 || n > 9.2e18 {
+		// Exact signed int64 parse (review round 2, finding 2): accepts the
+		// whole int64 range — including integers past the float64 mantissa
+		// and ±MaxInt64, which the old float64 decode mangled or refused —
+		// and fails nonintegers, exponent forms and out-of-range values.
+		// The original json.Number is echoed unchanged, byte-exact.
+		n, ok := v.(json.Number)
+		if !ok {
 			return false
 		}
-		return true
+		_, err := n.Int64()
+		return err == nil
 	case conBool:
 		_, ok := v.(bool)
 		return ok
@@ -384,11 +397,4 @@ func splitEnum(csv string) []string {
 		}
 	}
 	return out
-}
-
-func trunc(f float64) float64 {
-	if f < 0 {
-		return -float64(int64(-f))
-	}
-	return float64(int64(f))
 }
