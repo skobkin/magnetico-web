@@ -2,7 +2,8 @@
 
 Branch `refactor/0.8.0-unify-and-new-storage`, the 8 commits of the approved plan
 (base `cd5d0c5b`, the 04B tip; pushed as `cd5d0c5b..69ece9e8`) plus the owner-review-
-round-1 fixes (five commits, listed in the review section below). Normative contract:
+round-1 fixes (five commits, listed in the review section below) and the round-2
+fixes (two commits, listed in their own section below). Normative contract:
 [`docs/specs/legacy-torrent-forensics-cleanup-v1.md`](../specs/legacy-torrent-forensics-cleanup-v1.md)
 (committed as received); assignment:
 [`docs/wip/04C-forensics-cleanup.md`](04C-forensics-cleanup.md). No spec file was
@@ -12,9 +13,10 @@ experiment is complete). No production database was contacted — every integrat
 ran against disposable per-test databases from the one pinned `postgres:17` container
 (maintained across 04B/04C, dropped at session end). The plan's 8 commits were pushed
 at the end on the owner's explicit instruction (`cd5d0c5b..69ece9e8`, CI green on the
-tip). The review-round fix commits were pushed on the owner's explicit mid-round
-command (`69ece9e8..fdb967ac`); this report commit remains local until the next
-explicit push.
+tip). The round-1 fix commits and the round-1 report commit were pushed on explicit
+owner commands (`69ece9e8..fdb967ac`, then `fdb967ac..147cfd2c`; CI green on
+`147cfd2c`). The round-2 fix commits and this report update remain local until the
+next explicit push.
 
 ## What shipped
 
@@ -87,7 +89,11 @@ text cannot be proven safe by shape, so the `safetext` constraint no longer exis
 and the free-text detail keys (`reason`, `error`, `stage`) are not whitelisted at
 all: they drop with the unknown keys and only a count survives. Numeric, boolean,
 enum, `sqlstate`, `hex40`, `rfc3339`, `dbident`, `hostport` and `port` diagnostics
-are preserved.
+are preserved. Numbers are decoded with `UseNumber` (review round 2, finding 2):
+integer diagnostics keep their exact digits through the redactor — values beyond the
+float64 mantissa and the full int64 range pass byte-exact — and `int` validation is
+an exact signed int64 parse, so out-of-range, noninteger, decimal-form and
+exponent-form values fail the constraint closed.
 
 ## Record expansion and the decode-vs-raw split (owner finding ⑤)
 
@@ -200,10 +206,13 @@ irrecoverable); any cross-combination is a config error before any connection.
 
 Execution opens an explicit transaction, re-loads the state and re-runs every gate on
 the transaction's own snapshot (drift → rollback + typed refusal "rolled back;
-nothing dropped"), re-checks the run lock's liveness immediately BEFORE the DDL and
-again BEFORE the COMMIT (`lock.Lost()` — a lost exclusion rolls the transaction back
-and refuses with `ErrCleanupRefused`; the destructive DDL is never executed after
-exclusion is lost; review round 1, finding 5), executes the 8 fixed DDL statements
+nothing dropped"), ACTIVELY PINGS the run-lock connection immediately BEFORE the DDL
+and again BEFORE the COMMIT (review round 1 finding 5, tightened in round 2 finding
+1: `Lost()` only reports a previously detected loss — a backend killed between the
+monitor's idle pings is invisible to it — so the synchronous `Ping` is the real
+guard; a failed ping rolls the transaction back and refuses with
+`ErrCleanupRefused`; the destructive DDL is never executed after exclusion is lost),
+executes the 8 fixed DDL statements
 (FK order, no `CASCADE`, no
 `IF EXISTS` — a missing object or a foreign dependent object trips
 `DROP SCHEMA … RESTRICT` and rolls the WHOLE transaction back, pinned by test), and
@@ -407,8 +416,9 @@ advisory lock after acquiring it (the accepted 04B runner pattern): a
 `MonitorLockLoss` goroutine watches the lock connection; a lost lock cancels the run
 context with a typed `ErrLockLost` cause, the work aborts, and the failure surfaces as
 a SAFETY failure (exit 1) — never as the operator-interrupt contract (exit 2), pinned
-at the wrapper level for both runners. Cleanup additionally re-checks `lock.Lost()`
-immediately before the destructive DDL and again before the COMMIT: a lost exclusion
+at the wrapper level for both runners. Cleanup additionally re-checks the lock
+immediately before the destructive DDL and again before the COMMIT (tightened in
+round 2 to an ACTIVE `Ping`): a lost exclusion
 rolls back and refuses with `ErrCleanupRefused` ("nothing dropped") — the drop is
 never executed or committed after exclusion is lost. Tests: lock loss MID-export
 (the advisory backend is `pg_terminate_backend`-killed via a Progress hook; the export
@@ -463,6 +473,68 @@ small KiB-scale fixtures only; the 10% extract was never restored):
   build OK, vet OK, gofmt clean, `golangci-lint run` 0 issues.
 - Census: 535 top-level test functions repo-wide — 527 before the round plus exactly
   the 8 new round-1 test functions.
+
+## Owner review round 2 (tip `147cfd2c`)
+
+Two findings; both fixed, focused, and regression-tested, in two commits:
+
+| Commit | Finding | Fix |
+|---|---|---|
+| `7003c43a` | 1 | ACTIVE lock liveness: `Ping` before the DROP DDL and before COMMIT; export pings the lock before publishing the artifact |
+| `22a57292` | 2 | The redactor decodes with `UseNumber`; `int` validated by exact signed int64 parse — integer diagnostics byte-exact |
+
+**Finding 1 — `Lost()` is not an active liveness check.** `RunLock.Lost()` only
+reports a PREVIOUSLY detected loss (the monitor's `deadErr`): a lock backend killed
+between the 5-second idle pings leaves it unset, so the round-1 synchronous checks
+could pass while exclusion was already void. `runDropTransaction` now PINGS the lock
+connection immediately before the destructive DDL and again before COMMIT — a ping on
+a dead connection fails at once, is recorded as loss (fail-closed), and rolls the
+transaction back with the typed `ErrCleanupRefused` refusal. A cancelled context is
+checked first and stays the operator interrupt (exit 2), never misreported as a
+safety failure. `ExportErrors` gained the same guard at its most critical commit
+point: before `publish()`, the run context is checked and the lock is pinged — any
+loss aborts the temp and refuses with `ErrLockLost`, so no final artifact is ever
+produced under a lost lock (stdout mode is unchanged: already-streamed bytes cannot
+be retracted and no artifact path exists). Both tests kill the backend with
+`pg_terminate_backend` WITHOUT marking the lock dead and with NO monitor tick (no
+sleep, no monitor goroutine in the cleanup twin): the cleanup test drives
+`runDropTransaction` directly — the round-1 code DROPS the schema in exactly this
+scenario, the new code refuses with the schema and registry intact; the export test
+kills at the metadata-phase hook and asserts `ErrLockLost` + no output + schema
+intact, provable ONLY by the active pre-publish ping.
+
+**Finding 2 — float64 silently mangled integer diagnostics.** `RedactJSON` decoded
+numbers with plain `json.Unmarshal` (every number → `float64`): integer diagnostics
+above the 2^53 mantissa were silently rounded (9007199254740993 → …992) before
+reaching the forensic JSONL, and ±MaxInt64 was refused by the float range check.
+The decoder now uses `UseNumber()` and the `int` constraint validates via
+`json.Number.Int64()` — an exact signed int64 parse with no floating-point step.
+Values the writers emit (plain integers) pass byte-exact across the whole int64
+range; out-of-range values, nonintegers (`3.14`), decimal forms (`4.0`) and exponent
+forms (`1e6`) fail the constraint closed (the last two were previously accepted when
+float-equal to an integer — a deliberate tightening; no writer emits them). The
+redaction tests assert the OUTPUT BYTES — re-unmarshaling into `float64` would
+reproduce the bug under test — covering 2^53+1, `math.MaxInt64`, `math.MinInt64`,
+out-of-range/noninteger/exponent refusals, and null-under-int.
+
+### Round-2 verification battery
+
+Ran against the same pinned disposable `postgres:17` container (per-test databases,
+small fixtures only; no real-data restore):
+
+- Focused regressions: the two silent-kill tests and the exact-int64 tests pass
+  (the cleanup twin FAILS on the round-1 code — the schema is dropped — and passes
+  on the fix); the full `forensics` and `migration` packages green; per-commit
+  `go build ./...`, `go vet ./...`, `gofmt -l .` clean, `golangci-lint run` 0 issues.
+- Race suite (`-race ./internal/migration/... ./opflags/... -parallel 4`): all 9
+  packages `ok`, RACE-EXIT=0 — no incidents this round (migration root 225.9 s,
+  forensics 132.1 s, original 103.0 s, state 131.3 s, target 140.2 s). Exit codes
+  captured directly this time — no log-filter pipes.
+- Full battery (`go test -count=1 -p 2 -parallel 4 ./...`): all 23 packages `ok`,
+  BATTERY-EXIT=0, zero failures, zero reruns; build OK, vet OK, gofmt clean,
+  `golangci-lint run` exit 0.
+- Census: 538 top-level test functions repo-wide — 535 after round 1 plus exactly
+  the 3 new round-2 test functions.
 
 ## Hand-off notes for 04D
 
