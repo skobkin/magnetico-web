@@ -22,9 +22,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 )
@@ -701,6 +703,48 @@ func TestExportEnvelopeRunIDOnEveryEvent(t *testing.T) {
 		}
 	}
 	t.Fatal("fixture produced no verification_issue events — the regression is not exercised")
+}
+
+// TestExportLockLossAborts (review round 1, finding 5): the export monitors
+// its advisory-lock connection; a lost lock cancels the run as a SAFETY
+// failure (typed ErrLockLost — never an operator interrupt), the temp is
+// removed and no file is published.
+func TestExportLockLossAborts(t *testing.T) {
+	t.Parallel()
+	srcDSN := seedRecordSource(t)
+	pool, dsn := seedRecordsTarget(t, []int64{1, 2})
+	blob := encodeTestBlob(t, []codec.File{{Path: "a", Size: 10}})
+	seedTargetRecord(t, pool, recordTarget{id: 1, name: "one", totalSize: 10, fileCount: 1, blob: blob})
+	seedTargetRecord(t, pool, recordTarget{id: 2, name: "two", totalSize: 20, fileCount: 1, blob: blob})
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "lockloss.jsonl")
+	killed := false
+	_, err := ExportErrors(context.Background(), ExportInput{
+		Options: ExportOptions{
+			OutputPath: out, IncludeRecords: true, SourceDatabaseURL: srcDSN,
+			Limits: DefaultLimits(),
+		},
+		TargetDSN: dsn,
+		Progress: func(p ExportProgress) {
+			if killed {
+				return
+			}
+			killed = true
+			killAdvisoryBackend(t, dsn)
+			// Hold the engine mid-run past the monitor's 5 s idle ping so the
+			// loss is detected while the export is still working.
+			time.Sleep(7 * time.Second)
+		},
+	})
+	if !killed {
+		t.Fatal("the progress hook never ran — the test proves nothing")
+	}
+	if !errors.Is(err, ErrLockLost) {
+		t.Fatalf("error = %v, want ErrLockLost (a safety failure, not an interrupt)", err)
+	}
+	assertNoOutput(t, dir, filepath.Base(out))
+	assertSchemaIntact(t, pool)
 }
 
 func TestExportErrorsFiltersMakePartial(t *testing.T) {

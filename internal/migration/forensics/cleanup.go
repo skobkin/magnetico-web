@@ -248,13 +248,32 @@ func tallyVerificationIssues(ctx context.Context, q state.Queryer) (map[string]i
 }
 
 // Cleanup runs the gates, the preview and (with --execute) the atomic drop.
-func Cleanup(ctx context.Context, in CleanupInput) (*CleanupResult, error) {
+func Cleanup(ctx context.Context, in CleanupInput) (res *CleanupResult, err error) {
 	opts := in.Options
 	if err := validateCleanupFlags(opts); err != nil {
 		return nil, err // G10: configuration errors precede any connection
 	}
 
-	pool, err := target.OpenPool(ctx, in.TargetDSN)
+	// Lock-connection liveness (review round 1, finding 5): the destructive
+	// side must NEVER run after exclusion is lost. The monitor pings while
+	// the lock connection is idle and cancels the run with a typed cause on
+	// loss; runDropTransaction additionally re-checks the lock synchronously
+	// immediately before the DDL and again before COMMIT. A lock loss is a
+	// SAFETY failure (fatal), never an operator interrupt — the deferred
+	// rewrite replaces a cancellation-shaped error with the cause, so the
+	// wrapper can tell the two apart.
+	runCtx, cancelRun := context.WithCancelCause(ctx)
+	defer cancelRun(nil)
+	defer func() {
+		if err != nil {
+			if cause := context.Cause(runCtx); cause != nil &&
+				!errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+				err = cause
+			}
+		}
+	}()
+
+	pool, err := target.OpenPool(runCtx, in.TargetDSN)
 	if err != nil {
 		return nil, err
 	}
@@ -266,20 +285,26 @@ func Cleanup(ctx context.Context, in CleanupInput) (*CleanupResult, error) {
 		}
 	}
 
-	lock, err := state.AcquireRunLock(ctx, in.TargetDSN)
+	lock, err := state.AcquireRunLock(runCtx, in.TargetDSN)
 	if err != nil {
 		closePool()
 		return nil, err
 	}
 	defer lock.Release(context.WithoutCancel(ctx))
 
-	inspection, err := state.InspectOperationalSchema(ctx, pool)
+	monitorCtx, stopMonitor := context.WithCancel(context.WithoutCancel(runCtx))
+	defer stopMonitor()
+	go lock.MonitorLockLoss(monitorCtx, func(e error) {
+		cancelRun(fmt.Errorf("%w: %s", ErrLockLost, sanitizeDetailText(e.Error())))
+	})
+
+	inspection, err := state.InspectOperationalSchema(runCtx, pool)
 	if err != nil {
 		closePool()
 		return nil, err
 	}
 
-	res := &CleanupResult{Class: inspection.Class, ExpectedDrops: expectedDropList()}
+	res = &CleanupResult{Class: inspection.Class, ExpectedDrops: expectedDropList()}
 	refuse := func(format string, args ...any) (*CleanupResult, error) {
 		closePool()
 		return nil, fmt.Errorf("%w: %s", ErrCleanupRefused, fmt.Sprintf(format, args...))
@@ -312,7 +337,7 @@ func Cleanup(ctx context.Context, in CleanupInput) (*CleanupResult, error) {
 		return refuse("unhandled schema class %v", inspection.Class)
 	}
 
-	cs, err := loadCleanupState(ctx, pool, state.SchemaV2)
+	cs, err := loadCleanupState(runCtx, pool, state.SchemaV2)
 	if err != nil {
 		closePool()
 		if errors.Is(err, state.ErrNoRunState) || errors.Is(err, state.ErrRunStateCorrupt) {
@@ -329,7 +354,7 @@ func Cleanup(ctx context.Context, in CleanupInput) (*CleanupResult, error) {
 	res.Latest = cs.latest
 	res.Reason = opts.Reason
 
-	gates, corrupt, blockers, err := evaluateCleanupGates(ctx, pool, in.TargetDSN, opts, cs, true)
+	gates, corrupt, blockers, err := evaluateCleanupGates(runCtx, pool, in.TargetDSN, opts, cs, true)
 	if err != nil {
 		closePool()
 		return nil, err
@@ -352,7 +377,7 @@ func Cleanup(ctx context.Context, in CleanupInput) (*CleanupResult, error) {
 		return refuse("%s", strings.Join(blockers, "; "))
 	}
 
-	dropped, err := runDropTransaction(ctx, pool, in.TargetDSN, opts)
+	dropped, err := runDropTransaction(runCtx, pool, lock, in.TargetDSN, opts)
 	closePool()
 	if err != nil {
 		return nil, err
@@ -388,8 +413,9 @@ func evaluateCleanupGates(ctx context.Context, q state.Queryer, targetDSN string
 		gates = append(gates, GateResult{Name: name, Status: GatePass, Detail: detail})
 	}
 
-	// G1 — the run lock is held for the whole command (acquired in Cleanup).
-	pass("G1 lock", "advisory run lock held for the whole command")
+	// G1 — the run lock is held for the whole command (acquired in Cleanup)
+	// and its connection is liveness-monitored; loss is fatal.
+	pass("G1 lock", "advisory run lock held and liveness-monitored for the whole command")
 
 	// G2 — exactly v2, re-classified on this queryer.
 	insp, err := state.InspectOperationalSchema(ctx, q)
@@ -676,8 +702,15 @@ func coverageHolds(run *state.VerificationRun) (bool, string) {
 
 // runDropTransaction opens the drop transaction, rechecks every gate
 // against the transaction's own snapshot, drops, and commits. A lost
-// COMMIT acknowledgment is classified — never assumed success.
-func runDropTransaction(ctx context.Context, pool *pgxpool.Pool, targetDSN string, opts CleanupOptions) (bool, error) {
+// COMMIT acknowledgment is classified — never assumed success. The lock
+// is re-checked synchronously immediately before the destructive DDL and
+// again before COMMIT (review round 1, finding 5): the monitor usually
+// cancels ctx on loss, but these checks close the race between the last
+// idle ping and the destructive work — a lost lock voids exclusion, so
+// nothing destructive runs and a detected loss refuses to COMMIT.
+func runDropTransaction(ctx context.Context, pool *pgxpool.Pool, lock *state.RunLock,
+	targetDSN string, opts CleanupOptions,
+) (bool, error) {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -711,11 +744,19 @@ func runDropTransaction(ctx context.Context, pool *pgxpool.Pool, targetDSN strin
 			"(rolled back; nothing dropped)", ErrCleanupRefused, strings.Join(blockers, "; "))
 	}
 
+	if err := lock.Lost(); err != nil {
+		return false, fmt.Errorf("%w: the migration run lock was lost before the drop — "+
+			"rolled back; nothing dropped (%s)", ErrCleanupRefused, sanitizeDetailText(err.Error()))
+	}
 	if err := state.DropOperationalSchema(ctx, tx); err != nil {
 		return false, fmt.Errorf("%w: drop failed — the transaction rolled back and nothing was dropped: %w",
 			ErrCleanupRefused, err)
 	}
 
+	if err := lock.Lost(); err != nil {
+		return false, fmt.Errorf("%w: the migration run lock was lost during the drop — refusing "+
+			"to commit; rolled back; nothing dropped (%s)", ErrCleanupRefused, sanitizeDetailText(err.Error()))
+	}
 	if err := tx.Commit(ctx); err != nil {
 		// Owner finding 6: verified postconditions ≠ proven acknowledgment.
 		return false, classifyCommitOutcome(ctx, targetDSN, cs.facts)

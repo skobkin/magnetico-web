@@ -904,3 +904,43 @@ func TestCleanupNoOpOnAbsentSchema(t *testing.T) {
 		t.Fatalf("no-op preview lacks the honesty note: %v", res.Preview)
 	}
 }
+
+// TestCleanupRefusesDropAfterLockLoss (review round 1, finding 5): the drop
+// transaction must never run — and never commit — once the advisory-lock
+// connection has died. The lock is killed and marked dead (the exact state
+// the monitor leaves behind), then runDropTransaction is driven directly:
+// it must refuse before any DDL, leaving the schema and registry intact.
+func TestCleanupRefusesDropAfterLockLoss(t *testing.T) {
+	t.Parallel()
+	pool, dsn, runID := seedCleanupTarget(t)
+	defer pool.Close()
+	seedGreenVerification(t, pool, runID)
+	manifest := exportEvidence(t, dsn)
+
+	lock, err := state.AcquireRunLock(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("AcquireRunLock: %v", err)
+	}
+	defer lock.Release(context.Background())
+	killAdvisoryBackend(t, dsn)
+	if err := lock.Ping(context.Background()); err == nil {
+		t.Fatal("the killed lock connection still pings — the test setup failed")
+	}
+	if err := lock.Lost(); err == nil {
+		t.Fatal("lock loss was not recorded after the failed ping")
+	}
+
+	opts := cleanupInput(dsn, manifest, nil).Options
+	dropped, err := runDropTransaction(context.Background(), pool, lock, dsn, opts)
+	if dropped || err == nil {
+		t.Fatalf("runDropTransaction = (dropped=%v, err=%v) — a lost lock must refuse the drop", dropped, err)
+	}
+	if !errors.Is(err, ErrCleanupRefused) || !strings.Contains(err.Error(), "lock was lost") {
+		t.Fatalf("error = %v, want the lock-loss refusal", err)
+	}
+	// Nothing was dropped: schema intact, registry tables still serving.
+	assertSchemaIntact(t, pool)
+	if _, err := state.CountRegistry(context.Background(), pool, runID); err != nil {
+		t.Fatalf("registry tables damaged after the lock-loss refusal: %v", err)
+	}
+}

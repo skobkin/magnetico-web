@@ -155,6 +155,8 @@ func controlledErrorDetail(err error) string {
 		return forensics.ErrCleanupRefused.Error()
 	case errors.Is(err, forensics.ErrCleanupAmbiguous):
 		return forensics.ErrCleanupAmbiguous.Error()
+	case errors.Is(err, forensics.ErrLockLost):
+		return forensics.ErrLockLost.Error()
 	}
 	return fmt.Sprintf("unexpected error (%T)", err)
 }

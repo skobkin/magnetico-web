@@ -145,6 +145,31 @@ func tracedForensicsPool(t *testing.T, dsn string, tr pgx.QueryTracer) *pgxpool.
 	return pool
 }
 
+// killAdvisoryBackend terminates the PostgreSQL backend holding the
+// migration advisory lock (review round 1, finding 5 tests): PostgreSQL
+// releases the lock when the connection dies — the exact state of a lost
+// exclusion.
+func killAdvisoryBackend(t *testing.T, dsn string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("kill-advisory connect: %v", err)
+	}
+	defer conn.Close(context.Background())
+	var pid int64
+	if err := conn.QueryRow(ctx,
+		`SELECT pid FROM pg_locks WHERE locktype = 'advisory'
+         AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+         LIMIT 1`).Scan(&pid); err != nil {
+		t.Fatalf("no advisory lock found to kill: %v", err)
+	}
+	if _, err := conn.Exec(ctx, `SELECT pg_terminate_backend($1)`, pid); err != nil {
+		t.Fatalf("pg_terminate_backend: %v", err)
+	}
+}
+
 // seedBudgetTarget builds a v2 registry + production schema and selects the
 // given ids through record-scope errors, on a pool traced into tl.
 func seedBudgetTarget(t *testing.T, tl *timeline, ids []int64) (*pgxpool.Pool, string, string) {

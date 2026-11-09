@@ -45,6 +45,10 @@ var (
 	// acknowledgement was lost; catalog postconditions are consistent with
 	// success but do not prove it — operator inspection required.
 	ErrCleanupAmbiguous = errors.New("cleanup outcome is ambiguous; inspect manually before relying on it")
+	// ErrLockLost: the advisory-lock connection died mid-run — exclusion is
+	// void and the operation aborted. A SAFETY failure (fatal), never
+	// reported as an operator interrupt.
+	ErrLockLost = errors.New("migration run lock lost")
 )
 
 // OptionsError reports an invalid option combination (fixed text; the

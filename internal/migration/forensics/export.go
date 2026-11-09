@@ -10,6 +10,7 @@ package forensics
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -79,7 +80,7 @@ type ExportResult struct {
 
 // ExportErrors runs the export end to end: metadata pass always, record
 // and blob expansion when --include-records is set.
-func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
+func ExportErrors(ctx context.Context, in ExportInput) (res *ExportResult, err error) {
 	opts := in.Options
 	if opts.OutputPath == "" {
 		return nil, &OptionsError{Detail: "output path is required"}
@@ -104,11 +105,34 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 
 	now := func() time.Time { return nowOr(in.Now) }
 
-	f, err := Preflight(ctx, in.TargetDSN)
+	// Lock-connection liveness (review round 1, finding 5): the advisory
+	// lock is only as exclusive as its connection. The monitor pings while
+	// the lock connection is idle; loss cancels the run with a typed cause.
+	// A lock loss is a SAFETY failure (fatal), never an operator interrupt —
+	// the deferred rewrite replaces a cancellation-shaped error with the
+	// cause, so the wrapper can tell the two apart.
+	runCtx, cancelRun := context.WithCancelCause(ctx)
+	defer cancelRun(nil)
+	defer func() {
+		if err != nil {
+			if cause := context.Cause(runCtx); cause != nil &&
+				!errors.Is(cause, context.Canceled) && !errors.Is(cause, context.DeadlineExceeded) {
+				err = cause
+			}
+		}
+	}()
+
+	f, err := Preflight(runCtx, in.TargetDSN)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Release()
+
+	monitorCtx, stopMonitor := context.WithCancel(context.WithoutCancel(runCtx))
+	defer stopMonitor()
+	go f.Lock.MonitorLockLoss(monitorCtx, func(e error) {
+		cancelRun(fmt.Errorf("%w: %s", ErrLockLost, sanitizeDetailText(e.Error())))
+	})
 
 	progress := f.Progress
 	v1 := f.Class == state.SchemaV1
@@ -125,7 +149,7 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 	var sourceIdent = json.RawMessage("null")
 	if opts.IncludeRecords {
 		var srcID pgidentity.Identity
-		src, srcID, err = openRecordSource(ctx, f, opts.SourceDatabaseURL)
+		src, srcID, err = openRecordSource(runCtx, f, opts.SourceDatabaseURL)
 		if err != nil {
 			return nil, err
 		}
@@ -139,7 +163,7 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 	}
 	sink := out.sinkWriter()
 
-	res := &ExportResult{
+	res = &ExportResult{
 		OutputPath:   opts.OutputPath,
 		SchemaClass:  f.Class,
 		RunID:        progress.RunID,
@@ -190,7 +214,7 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 	// Full error history (keyset walk; resolved and unresolved alike).
 	after := int64(0)
 	for {
-		rows, err := state.ListErrorRows(ctx, f.Pool, progress.RunID, after, keysetPage)
+		rows, err := state.ListErrorRows(runCtx, f.Pool, progress.RunID, after, keysetPage)
 		if err != nil {
 			return fail(fmt.Errorf("reading error history: %w", err))
 		}
@@ -211,10 +235,10 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 
 	// 04B collections: v1 marks them unavailable and walks nothing.
 	if !v1 {
-		if err := walkVerification(ctx, f, sink, filters); err != nil {
+		if err := walkVerification(runCtx, f, sink, filters); err != nil {
 			return fail(err)
 		}
-		if err := walkRetry(ctx, f.Pool, progress.RunID, sink); err != nil {
+		if err := walkRetry(runCtx, f.Pool, progress.RunID, sink); err != nil {
 			return fail(err)
 		}
 	}
@@ -222,13 +246,13 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 	// Record/blob expansion (records mode): per selected source_id, the
 	// full source/target record blocks.
 	if src != nil {
-		if err := expandRecords(ctx, f, src, sink, opts, in.Progress); err != nil {
+		if err := expandRecords(runCtx, f, src, sink, opts, in.Progress); err != nil {
 			return fail(err)
 		}
 	}
 
 	// Registry-state digests bind the manifest to the exact registry bytes.
-	digest, err := ComputeRegistryDigest(ctx, f.Pool, progress.RunID, f.Class)
+	digest, err := ComputeRegistryDigest(runCtx, f.Pool, progress.RunID, f.Class)
 	if err != nil {
 		return fail(fmt.Errorf("computing registry digest: %w", err))
 	}
