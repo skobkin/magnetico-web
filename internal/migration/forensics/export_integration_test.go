@@ -800,7 +800,6 @@ func TestExportErrorsOptionRefusals(t *testing.T) {
 		opts    ExportOptions
 		wantErr error
 	}{
-		{"records need the later slice", ExportOptions{OutputPath: "x", IncludeRecords: true, Limits: DefaultLimits()}, nil},
 		{"blobs need records", ExportOptions{OutputPath: "x", IncludeBlobs: true, Limits: DefaultLimits()}, nil},
 		{"stdout + manifest", ExportOptions{OutputPath: StdoutPath, WriteManifest: true, Limits: DefaultLimits()}, nil},
 		{"bad limits", ExportOptions{OutputPath: "x", Limits: Limits{MaxEvents: -1, MaxRecords: 1, MaxOutputBytes: 1, MaxBlobBytes: 1}}, nil},
@@ -825,6 +824,24 @@ func TestExportErrorsOptionRefusals(t *testing.T) {
 		})
 		if !errors.Is(err, ErrNoMigrationHistory) {
 			t.Fatalf("error = %v, want ErrNoMigrationHistory", err)
+		}
+	})
+
+	// Records mode landed: a records request without a source DSN is no
+	// longer "a later slice" but a typed validation refusal (fires before
+	// any connection).
+	t.Run("records without a source DSN are typed", func(t *testing.T) {
+		t.Parallel()
+		_, err := ExportErrors(ctx, ExportInput{
+			Options: ExportOptions{
+				OutputPath:     filepath.Join(t.TempDir(), "x.jsonl"),
+				IncludeRecords: true,
+				Limits:         DefaultLimits(),
+			},
+			TargetDSN: "postgres://127.0.0.1:1/none",
+		})
+		if !errors.Is(err, ErrRecordsRequireSource) {
+			t.Fatalf("error = %v, want ErrRecordsRequireSource", err)
 		}
 	})
 }

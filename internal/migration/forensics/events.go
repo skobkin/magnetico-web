@@ -20,7 +20,10 @@ const (
 	FormatVersion = 1
 )
 
-// Event types, in canonical global order (export_footer last).
+// Event types, in canonical global order (export_footer last). The record
+// events appear per selected source_id ascending, in the per-record order:
+// source_record, source_file*, target_record, decode_finding, target_file*,
+// target_blob, target_blob_chunk*.
 const (
 	TypeExportHeader      = "export_header"
 	TypeImportRun         = "import_run"
@@ -29,6 +32,13 @@ const (
 	TypeVerificationIssue = "verification_issue"
 	TypeRetryRun          = "retry_run"
 	TypeRetryAttempt      = "retry_attempt"
+	TypeSourceRecord      = "source_record"
+	TypeSourceFile        = "source_file"
+	TypeTargetRecord      = "target_record"
+	TypeDecodeFinding     = "decode_finding"
+	TypeTargetFile        = "target_file"
+	TypeTargetBlob        = "target_blob"
+	TypeTargetBlobChunk   = "target_blob_chunk"
 	TypeExportFooter      = "export_footer"
 )
 
@@ -264,6 +274,89 @@ type exportFooterEvent struct {
 	CompletedAt string           `json:"completed_at"`
 }
 
+// --- record/blob events (--include-records) ----------------------------------
+
+// sourceRecordEvent is the source-side metadata for one selected ID.
+// Status "absent" is proven absence (the set-oriented query succeeded).
+type sourceRecordEvent struct {
+	envelope
+	SourceID         int64    `json:"source_id"`
+	Status           string   `json:"status"` // present | absent
+	InfoHash         hexBytes `json:"info_hash"`
+	Name             string   `json:"name"`
+	TotalSize        int64    `json:"total_size"`
+	DiscoveredOn     int64    `json:"discovered_on"` // source unix seconds (0 when absent)
+	DiscoveredOnTime string   `json:"discovered_on_time"`
+}
+
+// sourceFileEvent is ONE source file row — every row of the selected
+// torrent, no codec caps, duplicates and source file IDs preserved.
+type sourceFileEvent struct {
+	envelope
+	SourceID int64  `json:"source_id"`
+	FileID   int32  `json:"file_id"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
+}
+
+// targetRecordEvent is the target-side snapshot row. Blob keeps the three
+// states distinct: "none" (no row), "null_data" (row with NULL data —
+// impossible under the v2 CHECK but reported if it ever appears),
+// "stored_bytes" (row with data; StoredBytes exact).
+type targetRecordEvent struct {
+	envelope
+	SourceID         int64    `json:"source_id"`
+	Status           string   `json:"status"` // present | absent
+	InfoHash         hexBytes `json:"info_hash"`
+	Name             string   `json:"name"`
+	TotalSize        int64    `json:"total_size"`
+	DiscoveredOn     int64    `json:"discovered_on"`
+	DiscoveredOnTime string   `json:"discovered_on_time"`
+	FileCount        int64    `json:"file_count"`
+	Blob             string   `json:"blob"`
+	StoredBytes      int64    `json:"stored_bytes"`
+}
+
+// decodeFindingEvent is the typed decode verdict, decided independently of
+// raw export.
+type decodeFindingEvent struct {
+	envelope
+	SourceID int64  `json:"source_id"`
+	Status   string `json:"status"` // decoded | failed | not_attempted
+	Code     string `json:"code"`
+	Details  any    `json:"details"`
+}
+
+// targetFileEvent is one decoded (or assumed) target file entry. Assumed is
+// true ONLY for the reconstructed no-blob single entry.
+type targetFileEvent struct {
+	envelope
+	SourceID int64  `json:"source_id"`
+	Index    int    `json:"index"`
+	Path     string `json:"path"`
+	Size     int64  `json:"size"`
+	Assumed  bool   `json:"assumed"`
+}
+
+// targetBlobEvent opens one raw blob block and binds its SHA-256 so the
+// Base64 round-trip is checkable.
+type targetBlobEvent struct {
+	envelope
+	SourceID    int64  `json:"source_id"`
+	StoredBytes int64  `json:"stored_bytes"`
+	SHA256      string `json:"sha256"`
+}
+
+// targetBlobChunkEvent carries one ordered Base64 chunk. Lossless rule:
+// concat(base64-decode of chunks by ascending chunk_index) == stored bytes.
+type targetBlobChunkEvent struct {
+	envelope
+	SourceID   int64  `json:"source_id"`
+	ChunkIndex int    `json:"chunk_index"`
+	DataBase64 string `json:"data_base64"`
+	ChunkBytes int    `json:"chunk_bytes"`
+}
+
 // --- event constructors -----------------------------------------------------
 
 func newEnvelope(evType, runID string) envelope {
@@ -274,6 +367,8 @@ func newEnvelope(evType, runID string) envelope {
 var canonicalOrder = []string{
 	TypeExportHeader, TypeImportRun, TypeImportError, TypeVerificationRun,
 	TypeVerificationIssue, TypeRetryRun, TypeRetryAttempt,
+	TypeSourceRecord, TypeSourceFile, TypeTargetRecord, TypeDecodeFinding,
+	TypeTargetFile, TypeTargetBlob, TypeTargetBlobChunk,
 	TypeExportFooter,
 }
 

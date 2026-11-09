@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
 	"github.com/skobkin/magnetico-web/internal/migration/pgidentity"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 )
@@ -64,17 +65,23 @@ type ExportResult struct {
 	DataRevision int64
 }
 
-// ExportErrors runs the metadata export end to end.
+// ExportErrors runs the export end to end: metadata pass always, record
+// and blob expansion when --include-records is set.
 func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 	opts := in.Options
 	if opts.OutputPath == "" {
 		return nil, &OptionsError{Detail: "output path is required"}
 	}
-	if opts.IncludeRecords {
-		return nil, &OptionsError{Detail: "--include-records requires --source-database-url later in the pipeline (not available yet in this build)"}
-	}
-	if opts.IncludeBlobs {
+	if opts.IncludeBlobs && !opts.IncludeRecords {
 		return nil, &OptionsError{Detail: "--include-blobs requires --include-records"}
+	}
+	if opts.IncludeRecords {
+		if opts.SourceDatabaseURL == "" {
+			return nil, ErrRecordsRequireSource
+		}
+		if opts.OutputPath == StdoutPath {
+			return nil, &OptionsError{Detail: "record/blob export requires a file output path (stdout is metadata-only)"}
+		}
 	}
 	if opts.OutputPath == StdoutPath && opts.WriteManifest {
 		return nil, &OptionsError{Detail: "--manifest cannot be combined with stdout output"}
@@ -93,6 +100,22 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 
 	progress := f.Progress
 	v1 := f.Class == state.SchemaV1
+
+	// Records mode: the source opens BEFORE the header so the sanitized
+	// source identity lands in the header and the manifest; the typed
+	// refusals (unavailable source, same database, missing production
+	// schema) fire before any byte is written.
+	var src *original.Source
+	var sourceIdent = json.RawMessage("null")
+	if opts.IncludeRecords {
+		var srcID pgidentity.Identity
+		src, srcID, err = openRecordSource(ctx, f, opts.SourceDatabaseURL)
+		if err != nil {
+			return nil, err
+		}
+		defer src.Close()
+		sourceIdent = identityJSON(srcID)
+	}
 
 	out, err := openOutput(opts.OutputPath, opts.Limits)
 	if err != nil {
@@ -114,7 +137,6 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 
 	// Header.
 	identJSON := identityJSON(f.Identity)
-	var sourceIdent = json.RawMessage("null")
 	filters := exportFilters{OnlyUnresolved: opts.OnlyUnresolved, VerificationID: opts.VerificationID}
 	coverage := "complete"
 	if filters.OnlyUnresolved || filters.VerificationID != "" {
@@ -177,6 +199,14 @@ func ExportErrors(ctx context.Context, in ExportInput) (*ExportResult, error) {
 			return fail(err)
 		}
 		if err := walkRetry(ctx, f.Pool, progress.RunID, sink); err != nil {
+			return fail(err)
+		}
+	}
+
+	// Record/blob expansion (records mode): per selected source_id, the
+	// full source/target record blocks.
+	if src != nil {
+		if err := expandRecords(ctx, f, src, sink, opts); err != nil {
 			return fail(err)
 		}
 	}
