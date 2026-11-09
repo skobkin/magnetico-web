@@ -712,6 +712,93 @@ func TestCleanupCorruptVerificationStates(t *testing.T) {
 			t.Fatal("info-issue cleanup did not drop")
 		}
 	})
+
+	// Review round 1, finding 3: required coverage columns must be
+	// non-NULL. Zero counts are valid; NULL is not zero. A completed_pass
+	// with NULL coverage fields must never slip past the coverage and
+	// accounting checks — and the corruption is NOT waivable.
+	t.Run("NULL target coverage is corrupt", func(t *testing.T) {
+		t.Parallel()
+		pool, dsn, runID := seedCleanupTarget(t)
+		defer pool.Close()
+		// Decode pass with NULL expected/observed target coverage; content green.
+		insertVerRun(t, pool, runID, verRun{
+			kind: "decode", runState: "completed_pass", phase: "complete", startRev: 4, completed: true,
+			verified: 2, issues: 0,
+		})
+		insertVerRun(t, pool, runID, verRun{
+			kind: "content", runState: "completed_pass", phase: "complete", startRev: 4, completed: true,
+			verified: 2, issues: 0,
+			expTarget: ptrInt64(2), obsTarget: ptrInt64(2),
+			expSource: ptrInt64(2), obsSource: ptrInt64(2),
+		})
+		manifest := exportEvidence(t, dsn)
+
+		_, err := Cleanup(context.Background(), cleanupInput(dsn, manifest, nil))
+		assertRefused(t, err, true)
+		if !strings.Contains(err.Error(), "coverage is NULL") {
+			t.Fatalf("refusal does not name the NULL coverage: %v", err)
+		}
+		// --force-unverified must NOT waive it.
+		_, err = Cleanup(context.Background(), cleanupInput(dsn, manifest, func(o *CleanupOptions) {
+			o.ForceUnverified = true
+			o.Reason = "trying to waive NULL coverage"
+		}))
+		assertRefused(t, err, true)
+		assertSchemaIntact(t, pool)
+	})
+
+	t.Run("NULL source coverage on content is corrupt", func(t *testing.T) {
+		t.Parallel()
+		pool, dsn, runID := seedCleanupTarget(t)
+		defer pool.Close()
+		insertVerRun(t, pool, runID, verRun{
+			kind: "decode", runState: "completed_pass", phase: "complete", startRev: 4, completed: true,
+			verified: 2, issues: 0, expTarget: ptrInt64(2), obsTarget: ptrInt64(2),
+		})
+		// Content pass missing its REQUIRED source coverage pairs.
+		insertVerRun(t, pool, runID, verRun{
+			kind: "content", runState: "completed_pass", phase: "complete", startRev: 4, completed: true,
+			verified: 2, issues: 0, expTarget: ptrInt64(2), obsTarget: ptrInt64(2),
+		})
+		manifest := exportEvidence(t, dsn)
+
+		_, err := Cleanup(context.Background(), cleanupInput(dsn, manifest, func(o *CleanupOptions) {
+			o.ForceUnverified = true
+			o.Reason = "trying to waive NULL source coverage"
+		}))
+		assertRefused(t, err, true)
+		if !strings.Contains(err.Error(), "source coverage is NULL") {
+			t.Fatalf("refusal does not name the NULL source coverage: %v", err)
+		}
+		assertSchemaIntact(t, pool)
+	})
+
+	t.Run("zero coverage is valid, NULL is not zero", func(t *testing.T) {
+		t.Parallel()
+		pool, dsn, runID := seedCleanupTarget(t)
+		defer pool.Close()
+		// Zero counts are legitimate recorded coverage: both pairs present,
+		// both zero, accounting identity 0 == 0.
+		insertVerRun(t, pool, runID, verRun{
+			kind: "decode", runState: "completed_pass", phase: "complete", startRev: 4, completed: true,
+			verified: 0, issues: 0, expTarget: ptrInt64(0), obsTarget: ptrInt64(0),
+		})
+		insertVerRun(t, pool, runID, verRun{
+			kind: "content", runState: "completed_pass", phase: "complete", startRev: 4, completed: true,
+			verified: 0, issues: 0,
+			expTarget: ptrInt64(0), obsTarget: ptrInt64(0),
+			expSource: ptrInt64(0), obsSource: ptrInt64(0),
+		})
+		manifest := exportEvidence(t, dsn)
+		res, err := Cleanup(context.Background(), cleanupInput(dsn, manifest, nil))
+		if err != nil {
+			t.Fatalf("cleanup with zero coverage error = %v — zero is valid, NULL is not", err)
+		}
+		if !res.Dropped {
+			t.Fatal("zero-coverage cleanup did not drop")
+		}
+	})
 }
 
 func TestCleanupMidDropRollsBack(t *testing.T) {

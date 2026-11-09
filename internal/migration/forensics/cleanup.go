@@ -572,6 +572,22 @@ func verificationGate(kind string, run *state.VerificationRun, tally issueTally,
 			" exists — the migration was never verified"}, nil
 	}
 
+	// Required coverage columns (review round 1, finding 3): a completed
+	// verdict must RECORD its coverage — zero counts are valid, NULL is not
+	// zero. A corrupted run with NULL coverage could otherwise bypass the
+	// coverage and accounting checks below. Missing required coverage is
+	// CORRUPT state, never waivable.
+	if run.ExpectedTargetIDs == nil || run.ObservedTargetIDs == nil {
+		corrupt = append(corrupt, fmt.Sprintf(
+			"%s run seq %d: required target coverage is NULL (expected_target_ids=%v observed_target_ids=%v) "+
+				"— corrupt verification state", kind, run.Seq, run.ExpectedTargetIDs, run.ObservedTargetIDs))
+	}
+	if run.Kind == state.VerificationKindContent && (run.ExpectedSourceIDs == nil || run.ObservedSourceIDs == nil) {
+		corrupt = append(corrupt, fmt.Sprintf(
+			"%s run seq %d: required source coverage is NULL (expected_source_ids=%v observed_source_ids=%v) "+
+				"— corrupt verification state", kind, run.Seq, run.ExpectedSourceIDs, run.ObservedSourceIDs))
+	}
+
 	// Independent persisted-issue validation.
 	if tally.Total != run.IssueCount {
 		corrupt = append(corrupt, fmt.Sprintf(
@@ -634,7 +650,9 @@ func verificationGate(kind string, run *state.VerificationRun, tally issueTally,
 }
 
 // coverageHolds validates expected/observed coverage separately (owner
-// finding 3, item 5) for each kind's non-NULL id pairs.
+// finding 3, item 5) for each kind's id pairs. Required NULL coverage is
+// rejected upstream as corrupt (review round 1, finding 3); this comparison
+// runs on whatever pairs are present.
 func coverageHolds(run *state.VerificationRun) (bool, string) {
 	check := func(label string, exp, obs *int64) (bool, string) {
 		if exp == nil || obs == nil {
