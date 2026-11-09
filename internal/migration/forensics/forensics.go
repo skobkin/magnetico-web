@@ -194,12 +194,13 @@ var whitelists = map[string]map[string]string{
 }
 
 // detailsWhitelist covers every key the 04A/04B detail writers produce:
-// counts, IDs, limit shapes, stage/limit/side enums, and the two sanitized
-// free-text keys (reason/error, written through the runner's sanitizer).
+// counts, IDs, limit shapes and side/limit enums. Free-text keys
+// (reason/error/stage) are deliberately NOT whitelisted (review round 1,
+// finding 6): an arbitrary stored string cannot be proven safe — a short
+// unmarked secret like "hunter2" passes any shape heuristic — so free text
+// falls to the deny-by-default drop and only a count survives. Numeric,
+// boolean and enumerated diagnostics are preserved.
 var detailsWhitelist = map[string]string{
-	"reason":              "safetext",
-	"error":               "safetext",
-	"stage":               "safetext",
 	"limit":               "enum:stored_bytes,uncompressed_bytes,files,path_bytes,aggregate_path_bytes,trie_depth",
 	"side":                "enum:source,target,registry",
 	"sqlstate":            conSQLState,
@@ -236,19 +237,17 @@ var detailsWhitelist = map[string]string{
 }
 
 const (
-	safetextMaxBytes = 256
-	detailsMaxBytes  = 4096
+	detailsMaxBytes = 4096
 )
 
 var (
-	safetextControl = regexp.MustCompile(`[\x00-\x1f\x7f]`)
-	credentialish   = regexp.MustCompile(`(?i)(://|password|passwd|pass=|pwd=|token|secret|api[_-]?key|authorization|bearer)`)
-	sqlStateRe      = regexp.MustCompile(`^[0-9A-Z]{5}$`)
-	hex40Re         = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	rfc3339Re       = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
-	dbIdentRe       = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,63}$`)
-	hostPortRe      = regexp.MustCompile(`^[A-Za-z0-9_.:\[\]]{1,255}(:\d{1,5})?$`)
-	portRe          = regexp.MustCompile(`^\d{1,5}$`)
+	credentialish = regexp.MustCompile(`(?i)(://|password|passwd|pass=|pwd=|token|secret|api[_-]?key|authorization|bearer)`)
+	sqlStateRe    = regexp.MustCompile(`^[0-9A-Z]{5}$`)
+	hex40Re       = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	rfc3339Re     = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`)
+	dbIdentRe     = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,63}$`)
+	hostPortRe    = regexp.MustCompile(`^[A-Za-z0-9_.:\[\]]{1,255}(:\d{1,5})?$`)
+	portRe        = regexp.MustCompile(`^\d{1,5}$`)
 )
 
 // RedactJSON applies the per-kind deny-by-default whitelist to stored JSONB.
@@ -330,12 +329,6 @@ func valueFits(constraint string, v any) bool {
 	case conBool:
 		_, ok := v.(bool)
 		return ok
-	case "safetext":
-		s, ok := v.(string)
-		if !ok || len(s) == 0 || len(s) > safetextMaxBytes {
-			return false
-		}
-		return !safetextControl.MatchString(s) && !credentialish.MatchString(s)
 	case conHex40:
 		s, ok := v.(string)
 		return ok && hex40Re.MatchString(s)

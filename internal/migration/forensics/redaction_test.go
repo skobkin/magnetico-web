@@ -41,29 +41,39 @@ func TestRedactJSONOwnerAdversarialCases(t *testing.T) {
 		}
 	})
 
-	t.Run("credential grammar under a known key is refused", func(t *testing.T) {
+	t.Run("free-text keys are not whitelisted at all (review finding 6)", func(t *testing.T) {
+		t.Parallel()
+		// The old "safetext" rule let any short control-free value through
+		// known free-text keys — an unmarked secret like "hunter2" passed
+		// unchanged. Arbitrary stored strings cannot be proven safe, so
+		// reason/error/stage are now unknown keys: dropped entirely, only a
+		// count survives.
+		m, stats := mustRedact(t, "error_details",
+			`{"reason":"hunter2","error":"short","stage":"decode"}`)
+		for _, k := range []string{"reason", "error", "stage"} {
+			if _, present := m[k]; present {
+				t.Fatalf("free-text key %s echoed: %v", k, m)
+			}
+		}
+		if stats.UnknownKeys != 3 {
+			t.Fatalf("unknown_keys = %d, want 3", stats.UnknownKeys)
+		}
+		if _, has := m["redacted"]; !has {
+			t.Fatalf("redaction stats missing from output: %v", m)
+		}
+	})
+
+	t.Run("credential grammar under a former safetext key is dropped", func(t *testing.T) {
 		t.Parallel()
 		m, stats := mustRedact(t, "error_details",
 			`{"reason":"postgres://user:pass@host/db","error":"host /var/run has passwd entries"}`)
 		for _, k := range []string{"reason", "error"} {
-			v, ok := m[k].(map[string]any)
-			if !ok || v["redacted"] != "constraint" {
-				t.Fatalf("key %s not constraint-refused: %v", k, m[k])
+			if _, present := m[k]; present {
+				t.Fatalf("key %s echoed: %v", k, m)
 			}
 		}
-		if stats.ConstraintFailures != 2 {
-			t.Fatalf("constraint_failures = %d, want 2", stats.ConstraintFailures)
-		}
-	})
-
-	t.Run("escaped and token-grammar secrets are refused", func(t *testing.T) {
-		t.Parallel()
-		m, _ := mustRedact(t, "error_details", `{"error":"Bearer abc123","reason":"Api_Key: xyz"}`)
-		for _, k := range []string{"error", "reason"} {
-			v, ok := m[k].(map[string]any)
-			if !ok || v["redacted"] != "constraint" {
-				t.Fatalf("key %s not refused: %v", k, m[k])
-			}
+		if stats.UnknownKeys != 2 {
+			t.Fatalf("unknown_keys = %d, want 2", stats.UnknownKeys)
 		}
 	})
 
@@ -84,22 +94,15 @@ func TestRedactJSONOwnerAdversarialCases(t *testing.T) {
 
 	t.Run("nested objects under scalar constraints are refused", func(t *testing.T) {
 		t.Parallel()
-		m, _ := mustRedact(t, "error_details", `{"count":{"actual":3},"stage":{"nested":"obj"}}`)
-		for _, k := range []string{"count", "stage"} {
-			v, ok := m[k].(map[string]any)
-			if !ok || v["redacted"] != "constraint" {
-				t.Fatalf("key %s not refused: %v", k, m[k])
-			}
+		m, stats := mustRedact(t, "error_details", `{"count":{"actual":3},"stage":{"nested":"obj"}}`)
+		if v, ok := m["count"].(map[string]any); !ok || v["redacted"] != "constraint" {
+			t.Fatalf("key count not refused: %v", m["count"])
 		}
-	})
-
-	t.Run("oversized strings under safetext are refused", func(t *testing.T) {
-		t.Parallel()
-		long := strings.Repeat("a", safetextMaxBytes+1)
-		m, _ := mustRedact(t, "error_details", `{"reason":"`+long+`"}`)
-		v, ok := m["reason"].(map[string]any)
-		if !ok || v["redacted"] != "constraint" {
-			t.Fatalf("oversize reason not refused: %v", m["reason"])
+		if _, present := m["stage"]; present {
+			t.Fatalf("free-text key stage echoed: %v", m)
+		}
+		if stats.ConstraintFailures != 1 || stats.UnknownKeys != 1 {
+			t.Fatalf("stats = %+v, want 1 constraint failure + 1 unknown key", stats)
 		}
 	})
 }
@@ -108,7 +111,7 @@ func TestRedactJSONPreservesSafeDiagnostics(t *testing.T) {
 	t.Parallel()
 
 	raw := `{
-      "limit":"stored_bytes","side":"source","stage":"decode","sqlstate":"22001",
+      "limit":"stored_bytes","side":"source","sqlstate":"22001",
       "actual":33000000,"allowed":33554432,"count":12,"expected":12,"observed":11,
       "at_start":100,"at_end":200,"length":42,"file_count":7,"decoded_files":6,
       "fields":3,"source_files":9,"target_files":8,"from_id":1,"to_id":64,
@@ -254,8 +257,6 @@ func TestRedactJSONShapeRefusals(t *testing.T) {
 		for key, constraint := range detailsWhitelist {
 			var val string
 			switch {
-			case constraint == "safetext":
-				val = `"` + strings.Repeat("x", safetextMaxBytes) + `"`
 			case strings.HasPrefix(constraint, "enum:") || constraint == conSQLState:
 				// Values must satisfy the constraint; reuse the first allowed entry.
 				if strings.HasPrefix(constraint, "enum:") {
