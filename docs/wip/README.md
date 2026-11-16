@@ -10,6 +10,7 @@ This directory contains **implementation assignments**, not automatic execution 
 | 4 | [`04A-core-migrator.md`](04A-core-migrator.md) | Core offline migrator: original v0.12.0 source → 0.8.0 target with checkpoints, error registry, crash/resume, index deferral ([report](04A-core-migrator-report.md)); stop for review |
 | 5 | [`04B-verification-recovery.md`](04B-verification-recovery.md) | Full verification (`verify-decode`, `verify-content`) and targeted retry (`torrents retry-errors`) with durable resumable state ([report](04B-verification-recovery-report.md)); stop for review |
 | 6 | [`04C-forensics-cleanup.md`](04C-forensics-cleanup.md) | Forensic `migrate errors export` (fail-open JSONL) and gated atomic `migrate cleanup` teardown of the migration schema ([report](04C-forensics-cleanup-report.md)); stop for review |
+| 7 | [`04D-end-to-end-fault-validation.md`](04D-end-to-end-fault-validation.md) | Real-sample fault-injection validation of the 04A–04C toolchain: observed-state triggers, post-death checkpoint atomicity, resume via normal CLI only, full source↔target equality ([report](04D-end-to-end-validation-report.md)); validation only — no schema, wire-format or cutover changes |
 
 Approved reference contracts live in [`docs/specs/`](../specs/): [`wire-format-v1.md`](../specs/wire-format-v1.md) and [`postgresql-persistence-v2.md`](../specs/postgresql-persistence-v2.md).
 
