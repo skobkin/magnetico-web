@@ -16,3 +16,6 @@ vendor/
 
 # Owner-provided read-only sample dump (real-data extract; never commit).
 /magneticod-sample.sql.gz
+
+# 04D campaign evidence and scratch outputs (never commit).
+/.scratch/
