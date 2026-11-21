@@ -30,8 +30,9 @@ A single binary `magnetico` with the following subcommands:
   advisory-lock exclusion, durable operational state in a dedicated
   `magnetico_migration` schema), with the legacy source database treated
   strictly as read-only:
-  - `migrate schema-init` — creates the 0.8.0 schema non-destructively;
-    existing and legacy databases are refused, never modified.
+  - `migrate schema-init` — creates the 0.8.0 schema non-destructively and
+    is idempotent on an already valid 0.8.0 schema; incompatible or legacy
+    schemas are refused, never modified.
   - `migrate torrents` — the checkpointed import; `--defer-secondary-indexes`
     defers the three secondary indexes to a rebuild at finalization.
   - `migrate torrents retry-errors` — the transactional repair pass over the
