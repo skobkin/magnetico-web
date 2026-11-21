@@ -6,11 +6,15 @@ import (
 	"sync"
 )
 
-// Encoder is a bounded, concurrency-safe encoder whose compressor state is
-// reused across calls. At most `workers` Encode calls run concurrently; the
-// rest block, which bounds both CPU work and per-worker memory (the Brotli
-// q11 writer state is the largest fixed cost). After Close, Encode returns an
-// error.
+// Encoder is a bounded, concurrency-safe encoder whose Zstd encoder, output
+// buffer and (for payloads below one Brotli block) Brotli writer are reused
+// across calls. At most `workers` Encode calls run concurrently; the rest
+// block, which bounds concurrent CPU work and the number of simultaneously
+// active Brotli writers. Larger payloads get a transient Brotli writer per
+// compression (see compressState), whose memory is garbage rather than
+// pooled state: the worker bound does not cap how many are awaiting
+// collection. Output never depends on earlier calls. After Close, Encode
+// returns an error.
 type Encoder struct {
 	profile Profile
 	limits  Limits

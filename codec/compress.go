@@ -12,7 +12,24 @@ import (
 
 // compressState holds reusable compressor state for one worker. A state must
 // be used by a single goroutine at a time; Encoder hands states out
-// exclusively. Encoders are lazily created and reused via Reset.
+// exclusively.
+//
+// Determinism invariant (wire-format-v1 §4): for the same payload, profile
+// and library version, compress returns the same bytes regardless of what
+// the state compressed before. The Zstd encoder and the output buffer are
+// always reused. Brotli writer reuse is restricted:
+//
+// brotli.Writer.Reset clears the stream size hint but keeps the hasher
+// object, and at quality <= 9 the hasher type is chosen from that size hint
+// on first use (h5 below 1 MiB, h6 from 1 MiB). A reused writer therefore
+// compresses a payload differently depending on the size class of the first
+// payload it saw. A fresh writer allocates tens of MiB of hasher tables, a
+// cost that dominates the encode time of small lists.
+//
+// So the pooled writer (benc) is reused only for payloads below
+// brotliReuseMaxPayload: a single input block, far under the hasher switch,
+// so every stream it serves selects the same hasher and has no cross-block
+// state. Any larger payload gets a fresh writer and never touches benc.
 type compressState struct {
 	// quality is the Brotli quality used by this profile's candidates.
 	quality int
@@ -20,9 +37,17 @@ type compressState struct {
 	usesZstd, usesBrotli bool
 
 	zenc *zstd.Encoder
-	benc *brotli.Writer
+	benc *brotli.Writer // reused only for payloads < brotliReuseMaxPayload
 	buf  bytes.Buffer
 }
+
+// brotliReuseMaxPayload bounds the payload size (exclusive) for which the
+// pooled Brotli writer is reused. It equals the Brotli input block size at
+// quality >= 9 (lgblock 18), so a reused writer only ever compresses a
+// single block, and sits 4x below the 1 MiB hasher-selection threshold of
+// brotli v1.2.6. Changing it, or upgrading brotli, requires re-running the
+// reuse tests in determinism_test.go.
+const brotliReuseMaxPayload = 1 << 18
 
 func newCompressState(p Profile) *compressState {
 	s := &compressState{quality: p.brotliQuality()}
@@ -38,7 +63,8 @@ func newCompressState(p Profile) *compressState {
 }
 
 // compress compresses payload with the given compressor, reusing the state's
-// encoders when present. The returned slice aliases the state's internal
+// Zstd encoder and output buffer (Brotli reuses its writer only below
+// brotliReuseMaxPayload). The returned slice aliases the state's internal
 // buffer and is only valid until the next compress call on the same state.
 func (s *compressState) compress(comp CompressorID, payload []byte) ([]byte, error) {
 	s.buf.Reset()
@@ -64,15 +90,23 @@ func (s *compressState) compress(comp CompressorID, payload []byte) ([]byte, err
 		}
 
 	case Brotli:
-		if s.benc == nil {
-			s.benc = brotli.NewWriterOptions(&s.buf, brotli.WriterOptions{Quality: s.quality})
+		// Reuse the pooled writer only below the gate; see the determinism
+		// invariant on compressState.
+		var bw *brotli.Writer
+		if len(payload) < brotliReuseMaxPayload {
+			if s.benc == nil {
+				s.benc = brotli.NewWriterOptions(&s.buf, brotli.WriterOptions{Quality: s.quality})
+			} else {
+				s.benc.Reset(&s.buf)
+			}
+			bw = s.benc
 		} else {
-			s.benc.Reset(&s.buf)
+			bw = brotli.NewWriterOptions(&s.buf, brotli.WriterOptions{Quality: s.quality})
 		}
-		if _, err := s.benc.Write(payload); err != nil {
+		if _, err := bw.Write(payload); err != nil {
 			return nil, fmt.Errorf("brotli write: %w", err)
 		}
-		if err := s.benc.Close(); err != nil {
+		if err := bw.Close(); err != nil {
 			return nil, fmt.Errorf("brotli close: %w", err)
 		}
 
