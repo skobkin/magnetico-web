@@ -39,9 +39,14 @@ byte accounting, `Append/Peek/Ack/Quarantine/Stats/Close`, checkpoint/vacuum mai
 Tests: append/peek/ack/quarantine; duplicate hashes; byte accounting across reopen; `SQLITE_FULL`
 (tiny `max_page_count`) → `ErrQueueFull`, no corruption; SIGKILL subprocess during writes — every row whose
 `Append` returned success is present after reopen; second process on the same directory refused; schema
-version mismatch refused; WAL size stays bounded; file shrinks after `incremental_vacuum`.
-Acceptance: measured disk-per-payload ratio recorded (replaces the spec's estimate); ≥ 100 records/s
-group-committed on the dev machine (recorded, not a benchmark claim).
+version mismatch refused; **healthy checkpoint/reclamation**: with only short readers the WAL returns
+toward `journal_size_limit` after checkpoints; with an artificially long-lived reader the WAL is observed
+to grow past the limit and is reclaimed after the reader closes; a forced checkpoint failure is logged and
+counted and the writer keeps working; the file shrinks after `incremental_vacuum`. No test asserts an
+unconditional maximum WAL size.
+Acceptance: measured disk-per-payload ratio recorded (replaces the spec's estimate); queue throughput
+(records/s, group-commit sizes, fsync latency) **measured and reported** for p50/mean/p99-sized payloads —
+not a release gate and no fixed records/s threshold on any particular machine.
 
 ## M3 — Existence lookup and cache
 
@@ -79,6 +84,8 @@ Tests (disposable PG):
 the §5.5 timeouts and limits, bearer authentication, `/exists` (dedupe → cache → in-flight join → batched
 lookup, `unknown` on error), `/torrents`, `busy` semaphore, graceful shutdown, periodic counter summary.
 Tests: missing/wrong/short token, no token in logs, errors or panics (log capture); 400/405/413/415 paths;
+exact rejection code per §5.3 table (1 vs > 1 record, oversize record vs oversize body, precedence);
+202 response with `{"accepted":n}` body; nothing written on any rejection;
 batch and body limits; `unknown` never reported as `missing`; 503 `storage_unavailable` while PG is down and
 recovery afterwards; shutdown with in-flight requests; concurrent identical misses collapse to one lookup.
 
@@ -90,8 +97,14 @@ recovery afterwards; shutdown with in-flight requests; concurrent identical miss
   sender (§5.4 table incl. bisection and quarantine), admission gate, counters.
 - Rewire `runCrawl`; remove `persistence.MakeDatabase`, `DatabaseURL` and its env/yaml keys; add
   `UPGRADE.md`/README notes.
-Tests: client classification table; bisection quarantines exactly the bad record while the rest are delivered;
-`unsupported_version` at the queue head is quarantined; `record_too_large` quarantined at enqueue, never sent
+Tests: client classification table; bisection quarantines exactly the bad record while the rest are delivered,
+at depth 1 and at maximum depth, with the bad record at head, middle and tail; a crash during bisection
+leaves quarantined rows quarantined and restarts the rest from the head; single-record `invalid_record`,
+`unsupported_version`, `invalid_request` and 413 each quarantine with payload byte-identical, reason and
+HTTP status, and the next record is delivered; a permanently oversized record is never retried
+indefinitely (413 single → quarantine; 413 multi → bisect); the systemic-failure guard stops quarantining
+after 8 consecutive 400/413 and retains records; 202 with empty, garbled or mismatched body still
+acknowledges, while 200/204 do not; `record_too_large` quarantined at enqueue, never sent
 or truncated; lost 202 → resend → no duplicate; 401 keeps rows; fail-open fills the queue to the limit then
 stops admitting; **queue-full shutdown**: full SQLite queue + ≥ 8 fake in-flight leeches → SIGTERM exits within
 the grace period, committed rows unchanged, dropped counters match, no panic; Sink tests under `-race`
@@ -103,8 +116,11 @@ the grace period, committed rows unchanged, dropped counters match, no panic; Si
 - PostgreSQL stop/start while crawling; ingest restart with pending queue rows; lost-ack proxy.
 - SIGKILL subprocess crash points (pattern of `main_faults_test.go`): before/after local commit; after server
   commit before response; after `AddTorrent` before queue delete.
-- One focused throughput test (~10k records HTTP → queue → consumer, records/s reported) and a bounded
-  memory/disk check; no benchmark campaign.
+- One focused pipeline test at the **expected production load** (10–50 torrents/s, a realistic size mix from
+  the measured distribution): the crawler queue depth and the PostgreSQL queue backlog must not grow
+  without bound over the run (queue-depth/backlog samples reported), memory and disk stay within the
+  configured limits, and records/s through HTTP → queue → consumer is reported. This is an acceptance check
+  of acceptable behaviour, not a benchmark and not a fixed records/s gate.
 - Loopback smoke: `crawl` + `ingest` binaries with a fake DHT source.
 - Release-readiness checklist: defaults documented, operator SQL for quarantine, Traefik/TLS notes,
   PostgreSQL durability settings, backup note, `-race` clean.

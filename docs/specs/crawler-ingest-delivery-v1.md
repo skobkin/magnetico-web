@@ -45,7 +45,7 @@ DHT → event loop → precheck batcher ─HTTPS→ POST …/exists → LRU cach
 |---|---|
 | Local enqueue | Record is *admitted* only after the SQLite transaction commits with `synchronous=FULL`. |
 | HTTP 202 | Every submitted record is **durably committed in the PostgreSQL queue** (or was already pending there). It does **not** mean the torrent is in `magneticod.torrents`. |
-| Local delete | The crawler MAY delete a row only after a valid 202 for the batch containing it. |
+| Local delete | The crawler MAY delete a row only after an HTTP 202 status for the request containing it. |
 | Consumer | A queue row is deleted only after `AddTorrent` succeeded (created or already present), or moved to quarantine in one transaction. |
 
 **Durability assumptions (explicit).** SQLite: local filesystem that honours `fsync`
@@ -72,10 +72,12 @@ PostgreSQL queue (`BYTEA`, never JSONB, which would normalise content):
 - Decoding is strict: unknown fields, unknown `v`, trailing data and a bad `info_hash` are errors.
 - The uint64→int64 `total_size` guard (`torrentFromMetadata`) moves into the record package and runs
   before enqueue.
-- **`MaxRecordBytes` = 16 MiB** of serialized JSON. Measured sample maximum ≈ 9.3 MB, but control
-  characters escape to `\u00XX` (up to 6×), so 10 MiB of bencoded metadata can exceed any fixed JSON
-  limit; an explicit limit is therefore required. An oversized record is quarantined locally with
-  reason `record_too_large`; it is never sent, truncated, retried or deleted.
+- **`MaxRecordBytes` = 16 MiB** of serialized JSON. There is **no guaranteed relation** between the
+  size of the bencoded metadata (≤ 10 MiB) and its JSON form: the JSON can be smaller, or larger (for
+  example control characters escape to `\u00XX`, up to 6×). The explicit limit is therefore the only
+  contract. A record whose JSON exceeds it is quarantined locally with reason `record_too_large`; it is
+  never sent, truncated, retried or deleted. The measured sample maximum (≈ 9.3 MB, estimated from the
+  formula in §11) is informational only.
 
 ## 4. Crawler queue — SQLite WAL
 
@@ -85,6 +87,16 @@ The crawler is deployable as a single container with no PostgreSQL or Redis acce
 dependency). `journal_mode=WAL`, `synchronous=FULL`, `auto_vacuum=INCREMENTAL` (set at creation),
 `busy_timeout=5000`, `journal_size_limit=64MiB`, explicit `cache_size`.
 
+**WAL growth is not hard-bounded.** `journal_size_limit` only makes SQLite truncate the WAL file
+*after* a checkpoint has completed and the WAL has been reset; it is **not** a ceiling on disk usage.
+The WAL can grow beyond it while a checkpoint cannot complete: a long-lived reader (a snapshot pins
+every frame written after it), a failing or blocked checkpoint, or one very large transaction. Rules:
+readers (`Peek`, diagnostics) MUST be short-lived and never held across network I/O; the checkpoint
+runs automatically (autocheckpoint) plus a periodic explicit attempt (`PASSIVE`, then `TRUNCATE` when
+idle). A failed or incomplete checkpoint is logged (throttled), counted and retried — it is not fatal.
+The WAL file size is exported as a counter and a warning is logged above 256 MiB. The byte quota below
+counts payload bytes only (not WAL, index overhead or freelist), so operators MUST provision disk
+headroom beyond the quota; a full disk surfaces as `SQLITE_FULL`.
 **Schema.** `PRAGMA user_version` = queue schema version (mismatch → refuse to start).
 
 ```sql
@@ -157,9 +169,8 @@ Request `{"records":[<record v1>, …]}` — ≤ 256 records, body limit 17 MiB 
 1 MiB envelope). The sender packs ≤ 8 MiB per request; a record between 8 and 16 MiB travels alone.
 
 **All-or-nothing admission.** The server decodes and validates *every* item (strict decode, known
-`v`, size ≤ `MaxRecordBytes`, `ValidateIngest`). Any failure → `400 invalid_batch` and **nothing is
-written**; the body lists item indexes and codes for diagnostics only (the client does not rely on
-them). Otherwise, in one transaction:
+`v`, size ≤ `MaxRecordBytes`, `ValidateIngest`). Any failure rejects the **whole request** and
+**nothing is written** (the error codes are defined in §5.3). Otherwise, in one transaction:
 
 1. `SET LOCAL synchronous_commit = on`.
 2. One multi-row `INSERT … ON CONFLICT (info_hash) DO NOTHING`, rows sorted by `info_hash` (no
@@ -168,28 +179,60 @@ them). Otherwise, in one transaction:
 4. `used_bytes` above `MAGNETICO_INGEST_QUEUE_MAX_BYTES` → ROLLBACK → `503 queue_full`.
 5. COMMIT, then `202`.
 
-202 therefore means *every* item was durably queued or already pending. Duplicates of rows already
-in `torrents` are resolved by the consumer (idempotent).
+**HTTP 202 is the complete acknowledgment.** Status 202 alone means every item of the request was
+durably queued or already pending. The server sends `{"accepted":<n>}` as an informational body; the
+client MUST NOT parse, validate or compare it — an empty, unparsable or "mismatched" body on a 202 is
+still an acknowledgment. Any other 2xx status (200, 204, …) is **not** an acknowledgment. Duplicates of
+rows already in `torrents` are resolved by the consumer (idempotent).
 
 ### 5.3 Status codes and error body
 
-200, 202, 400 (`invalid_batch`, `invalid_request`), 401, 405, 413, 415, 503 (`queue_full`,
-`storage_unavailable`, `busy`; with `Retry-After`), 500. Error body
-`{"error":{"code":"…","retryable":true|false}}`; never contains record contents, tokens or driver text.
+200, 202, 400, 401, 405, 413, 415, 503 (`queue_full`, `storage_unavailable`, `busy`; with
+`Retry-After`), 500. Error body `{"error":{"code":"…","retryable":true|false}}`; never contains record
+contents, tokens or driver text.
+
+**Rejection codes for `POST …/torrents`.** The code depends on the number of records in the request so
+that a permanently invalid record is always identified individually:
+
+| Request | Failure | Status / code |
+|---|---|---|
+| > 1 record | any item fails validation | `400 invalid_batch` (diagnostic item indexes/codes only) |
+| > 1 record | any item exceeds `MaxRecordBytes`, or body > 17 MiB | `413 payload_too_large` |
+| exactly 1 record | unknown `v` | `400 unsupported_version` |
+| exactly 1 record | record fails strict decode or `ValidateIngest` | `400 invalid_record` |
+| exactly 1 record | record exceeds `MaxRecordBytes`, or body > 17 MiB | `413 record_too_large` |
+| any | envelope itself malformed (not JSON, missing `records`, > 256 records) | `400 invalid_request` |
+
+Precedence for a single record: `unsupported_version` > `record_too_large` > `invalid_record`. For a
+multi-record request, 413 wins over 400 when both kinds of failure are present. `413` is also what
+`http.MaxBytesReader` yields when the body limit is exceeded.
 
 ### 5.4 Client behaviour (deterministic)
 
 | Response | Action |
 |---|---|
-| 202 (valid, parsable) | delete every row of the batch |
-| 400 `invalid_batch`, > 1 record | **bisect**: resubmit each half, recursively (≤ 8 levels for 256 records) |
-| 400 for a single record (`invalid_record`, `unsupported_version`, `record_too_large`) | **move to local quarantine** with payload, reason code and HTTP status; continue with the next record (the FIFO head never stays blocked) |
-| Retryable result during a bisect | abort the bisect, back off, restart from the head of the queue |
-| Other non-202, unparsable/mismatched 202, timeout, connection reset | **ambiguous / not acknowledged**: keep rows and resend later (safe: idempotent) |
+| Status 202 (body ignored) | delete every row of the request |
+| 400 (any code) or 413 (any code), request has > 1 record | **bisect**: resubmit each half as its own request, recursively (≤ 8 levels for 256 records) |
+| 400 `invalid_record`, `unsupported_version`, or `invalid_request`, or 413 (any code), request has exactly 1 record | **permanent per-record failure**: move that record to **local quarantine** (payload preserved byte-for-byte) with reason = the server's code (`payload_too_large` is recorded as `record_too_large`) and the HTTP status; continue with the next record |
+| Retryable result (5xx, 429, timeout, reset) during a bisect | abort the bisect, back off, restart from the head of the queue |
+| Any other status, timeout, connection reset, 2xx other than 202 | **ambiguous / not acknowledged**: keep rows and resend later (safe: idempotent) |
 | 401 / 403 | keep rows, long backoff, loud throttled log |
 
-401/403/5xx/timeouts are never quarantined. Timeouts: exists 10 s, submit 60 s. Backoff 1 s → 60 s with
-full jitter. A lost 202 after a durable commit is resolved by resending (`ON CONFLICT DO NOTHING`).
+Properties: (a) a permanently invalid record is always isolated by bisection to a single-record request,
+where the server's code is specific, so the same rule applies at any recursion depth; (b) quarantine is
+durable (one SQLite transaction moves the row), so after a crash during a bisect the already-quarantined
+records are not retried and the remaining records restart from the head; (c) the head of the FIFO is
+never retried indefinitely for a permanent failure; (d) a single-record request is only quarantined for
+the codes above, never for 401/403/429/5xx/timeouts.
+
+**Systemic-failure guard.** If ≥ 8 consecutive records are quarantined by 400/413 responses without an
+intervening 202, the sender stops quarantining, backs off (60 s) and logs loudly (a misconfigured proxy or
+server would otherwise empty the queue into quarantine; records are retained either way). Quarantined
+records can be returned to the queue by an operator after the cause is fixed (SQL documented; CLI is
+post-release).
+
+Timeouts: exists 10 s, submit 60 s. Backoff 1 s → 60 s with full jitter. A lost 202 after a durable
+commit is resolved by resending (`ON CONFLICT DO NOTHING`).
 
 ### 5.5 Server limits
 
@@ -351,7 +394,8 @@ rejected, as today. Secrets (tokens, DSNs with passwords) are ENV/config-only, n
 **Measured** (read-only pass over the local `magneticod-sample.sql.gz`, 3,457,046 torrents): files per
 torrent mean 35.7, p50 3, p90 34, p99 495, max 123,480. **Estimated** record JSON size (formula
 110 B + name + Σpath + 26 B/file over measured inputs): mean ≈ 3.1 KB, p50 ≈ 350 B, p90 ≈ 2.5 KB,
-p99 ≈ 41 KB, p99.9 ≈ 394 KB, p99.99 ≈ 1.7 MB, max ≈ 9.3 MB. Ceiling 10 MiB bencode (≤ 16 MiB JSON).
+p99 ≈ 41 KB, p99.9 ≈ 394 KB, p99.99 ≈ 1.7 MB, max ≈ 9.3 MB. Bencoded metadata is capped at 10 MiB by
+the leech; its JSON size is not derivable from that cap and is governed solely by `MaxRecordBytes`.
 
 **Estimated** SQLite size ≈ 1.25 × payload + ~100 B/row (to be measured in M2):
 
@@ -363,11 +407,14 @@ p99 ≈ 41 KB, p99.9 ≈ 394 KB, p99.99 ≈ 1.7 MB, max ≈ 9.3 MB. Ceiling 10 M
 
 Infohash-only pending rows (not used by this design): ~80–100 B/row → 1 M ≈ 100 MB. PostgreSQL queue:
 similar payload plus 23 B tuple header, the unique index, and TOAST (pglz may shrink large rows); its WAL is
-managed by the server. SQLite WAL is bounded by one group-commit batch plus autocheckpoint (~4 MiB), with
-`journal_size_limit` 64 MiB. Deleted rows go to the freelist; size returns to the OS only via
+managed by the server. In a healthy state (short readers, checkpoints completing) the SQLite WAL stays
+near one group-commit batch plus the autocheckpoint size (~4 MiB) and is truncated toward
+`journal_size_limit` after checkpoints; it is **not** hard-bounded (see §4) and operators must leave disk
+headroom. Deleted rows go to the freelist; size returns to the OS only via
 `incremental_vacuum` (SQLite) / `VACUUM FULL` (PostgreSQL). Because record sizes vary by four orders of
-magnitude, capacity limits are in **bytes**, not records. Throughput (one fsync per group commit) is an
-estimate to be confirmed by the M7 test, not a benchmark claim.
+magnitude, capacity limits are in **bytes**, not records. Queue throughput (one fsync per group commit)
+is measured and reported in M2 but is not a release gate; the gate is that the whole pipeline keeps up
+with the expected production load (§12, M7).
 
 ## 12. Tests (acceptance for 0.8.0)
 
@@ -377,7 +424,8 @@ restart and PostgreSQL outage (503, crawler retains); duplicate infohashes and d
 HTTP acknowledgment after durable enqueue; process crashes before/after each acknowledgment; partial and
 malformed batches; token authentication and secret leakage; cache staleness; queue limits including the
 **quota concurrency regression**; all-or-nothing admission with crawler bisection; `unsupported_version`
-and `record_too_large` quarantine; queue-full shutdown with a full local queue and in-flight leeches;
+and `record_too_large` quarantine (including after recursive bisection and for 413 responses);
+202 acknowledgment independent of the response body; queue-full shutdown with a full local queue and in-flight leeches;
 graceful and ungraceful shutdown; advisory-lock ownership. Disposable PostgreSQL only
 (`internal/pgtest`, `MAGNETICO_TEST_POSTGRES_DSN`); no production connections.
 
@@ -401,8 +449,10 @@ graceful and ungraceful shutdown; advisory-lock ownership. Disposable PostgreSQL
 
 **Recommendation: SQLite WAL** (owner preference; no material objection found). bbolt is the runner-up.
 Pebble/Badger are rejected for a delete-heavy FIFO. Acceptance criteria are in the plan (M2): crash-kill
-with no lost committed row, byte quota never exceeded, WAL ≤ configured size, file shrinks after
-`incremental_vacuum`, sustained 100 records/s group-committed on the dev machine.
+with no lost committed row, byte quota never exceeded, healthy checkpoint/truncate behaviour (WAL
+returns toward `journal_size_limit` once readers close; growth under a long-lived reader is observed and
+reclaimed afterwards), file shrinks after `incremental_vacuum`. Queue throughput is measured and reported,
+not gated.
 
 ### 13.2 Server queue
 
