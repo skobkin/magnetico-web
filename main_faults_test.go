@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
@@ -50,6 +51,64 @@ const (
 
 func faultTS() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+// Credential redaction for the fault harness: the CLI arguments carry full
+// database DSNs (startFaultImport/runFaultResume log them), and
+// pgtest.TestDatabase inherits credentials from the cluster AdminDSN — an
+// external disposable server can carry a real password. Every harness log
+// line that can carry DSN material goes through redactDSN/redactArgs; the
+// actual exec.Cmd arguments never do.
+//
+// The product already redacts its own output (redactDatabaseURL in main.go,
+// pgconn's redactPW), so the harness only needs to guard its own log sites —
+// but captured process output is redacted too, as defense in depth.
+
+// faultRedactedMark matches the mask pgx uses for redacted connection
+// strings, so harness logs and product logs mask alike.
+const faultRedactedMark = "xxxxx"
+
+// faultURLPasswordRe masks the userinfo password of a postgres:// URL
+// wherever the URL appears — argv entries and captured process output.
+var faultURLPasswordRe = regexp.MustCompile(`(postgres(?:ql)?://[^:/@?#\s]+:)[^@?#\s]+(@)`)
+
+// faultKeywordPasswordRe masks libpq keyword-style passwords, including a
+// password= query parameter inside a URL.
+var faultKeywordPasswordRe = regexp.MustCompile(`(?i)\b(password=)[^\s&]+`)
+
+// redactDSN replaces credential material (URL userinfo password, libpq
+// keyword password) with a fixed marker. Non-DSN input is returned unchanged.
+func redactDSN(s string) string {
+	s = faultURLPasswordRe.ReplaceAllString(s, "${1}"+faultRedactedMark+"${2}")
+	s = faultKeywordPasswordRe.ReplaceAllString(s, "${1}"+faultRedactedMark)
+	return s
+}
+
+// redactArgs redacts every argument into a fresh slice; the input — the
+// actual exec.Cmd arguments — is never modified.
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = redactDSN(a)
+	}
+	return out
+}
+
+// faultLogSink, when non-nil, receives a copy of every harness log line that
+// can carry DSN material, in addition to the normal t.Logf stream. Only the
+// credential-redaction regression installs it, and it registers its reset
+// via t.Cleanup BEFORE starting the harness so that LIFO cleanup order keeps
+// the sink alive through every harness cleanup line.
+var faultLogSink func(format string, args ...any)
+
+// faultLogf emits one harness log line to the test log and to the capture
+// sink when installed. Callers must pass already-redacted values.
+func faultLogf(t *testing.T, format string, args ...any) {
+	t.Helper()
+	t.Logf(format, args...)
+	if faultLogSink != nil {
+		faultLogSink(format, args...)
+	}
+}
+
 // seedFaultSource creates the frozen v0.12.0 source layout with n clean
 // single-file torrents (ids 1..n, contiguous).
 func seedFaultSource(t *testing.T, dsn string, n int) {
@@ -68,7 +127,7 @@ func initFaultTarget(t *testing.T, dsn string) {
 	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
 	defer cancel()
 	if err := persistence.InitSchema(ctx, dsn); err != nil {
-		t.Fatalf("InitSchema() error = %v", err)
+		t.Fatalf("InitSchema() error = %v", redactDSN(err.Error()))
 	}
 }
 
@@ -113,9 +172,9 @@ func startFaultImport(t *testing.T, bin, sourceDSN, targetDSN string, extraArgs 
 	cmd.Stdout, cmd.Stderr = buf, buf
 	if err := cmd.Start(); err != nil {
 		cancel()
-		t.Fatalf("start %v: %v", args, err)
+		t.Fatalf("start %v: %v", redactArgs(args), err)
 	}
-	t.Logf("%s: started pid=%d: magnetico %v", faultTS(), cmd.Process.Pid, args)
+	faultLogf(t, "%s: started pid=%d: magnetico %v", faultTS(), cmd.Process.Pid, redactArgs(args))
 	r := &runningBinary{t: t, cmd: cmd, out: buf, done: make(chan struct{})}
 	t.Cleanup(func() {
 		select {
@@ -136,7 +195,7 @@ func (r *runningBinary) waitExit() (int, syscall.Signal, string) {
 	err := r.cmd.Wait()
 	close(r.done)
 	out := r.out.String()
-	r.t.Logf("%s: pid %d exited; output:\n%s", faultTS(), r.cmd.Process.Pid, out)
+	faultLogf(r.t, "%s: pid %d exited; output:\n%s", faultTS(), r.cmd.Process.Pid, redactDSN(out))
 	if err == nil {
 		return 0, 0, out
 	}
@@ -228,7 +287,7 @@ func readFaultSnapshot(t *testing.T, dsn string) faultSnapshot {
 	defer cancel()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		t.Fatalf("snapshot connect: %v", err)
+		t.Fatalf("snapshot connect: %v", redactDSN(err.Error()))
 	}
 	defer conn.Close(context.Background())
 	var s faultSnapshot
@@ -293,7 +352,7 @@ func runFaultResume(t *testing.T, bin, sourceDSN, targetDSN string, extraArgs ..
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
-	t.Logf("%s: resumed `magnetico %v` exited; output:\n%s", faultTS(), args, out.String())
+	faultLogf(t, "%s: resumed `magnetico %v` exited; output:\n%s", faultTS(), redactArgs(args), redactDSN(out.String()))
 	if err == nil {
 		return 0
 	}
@@ -744,7 +803,7 @@ func TestFaultLostCommitAckRecoversInProcess(t *testing.T) {
 
 	u, err := url.Parse(tgt)
 	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
+		t.Fatalf("parse dsn: %v", redactDSN(err.Error()))
 	}
 	proxy := startCommitCutProxy(t, u.Host, tgt)
 	proxyDSN := proxyTargetDSN(t, tgt, proxy.addr())
@@ -1262,4 +1321,151 @@ func TestImportWithReadOnlySourceRole(t *testing.T) {
 		t.Fatalf("blob rows = %d, want %d", blobs, n)
 	}
 	t.Logf("%s: full import of %d torrents completed against the SELECT-only source role", faultTS(), n)
+}
+
+// faultDSNWithPassword returns dsn with a synthetic password in its URL
+// userinfo (preserving the username; defaulting to postgres when the cluster
+// DSN carries none). Under the pgtest trust-auth harnesses the server ignores
+// passwords, so the returned DSN still connects — letting the regression run
+// the real import with credential-bearing CLI arguments.
+func faultDSNWithPassword(t *testing.T, dsn, password string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", redactDSN(err.Error()))
+	}
+	user := "postgres"
+	if u.User != nil && u.User.Username() != "" {
+		user = u.User.Username()
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String()
+}
+
+// faultDSNWithBogusSSLMode returns dsn with sslmode=bogus so the server
+// driver rejects it at parse time — a deterministic failed-execution path.
+func faultDSNWithBogusSSLMode(t *testing.T, dsn string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse dsn: %v", redactDSN(err.Error()))
+	}
+	q := u.Query()
+	q.Set("sslmode", "bogus")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// TestRedactDSNCredentials pins the redaction primitive itself: passwords in
+// URL userinfo and libpq keyword form are masked wherever they appear, while
+// everything else — including the input slice passed to redactArgs — is
+// returned unchanged.
+func TestRedactDSNCredentials(t *testing.T) {
+	const pw = "sup3r-s3cr3t-fixtUre-pw"
+	cases := []struct {
+		name, in, want string
+	}{
+		{"url userinfo", "postgres://migrator:" + pw + "@127.0.0.1:5432/db?sslmode=disable",
+			"postgres://migrator:" + faultRedactedMark + "@127.0.0.1:5432/db?sslmode=disable"},
+		{"postgresql scheme", "postgresql://u:" + pw + "@h/db",
+			"postgresql://u:" + faultRedactedMark + "@h/db"},
+		{"embedded in env-style string", "MAGNETICO_MIGRATION_SOURCE_DSN=postgres://u:" + pw + "@h/db",
+			"MAGNETICO_MIGRATION_SOURCE_DSN=postgres://u:" + faultRedactedMark + "@h/db"},
+		{"keyword form", "host=127.0.0.1 user=mig password=" + pw + " dbname=db",
+			"host=127.0.0.1 user=mig password=" + faultRedactedMark + " dbname=db"},
+		{"query parameter", "postgres://h/db?password=" + pw + "&sslmode=disable",
+			"postgres://h/db?password=" + faultRedactedMark + "&sslmode=disable"},
+		{"percent-encoded password", "postgres://u:s3cr%3At" + pw + "@h/db",
+			"postgres://u:" + faultRedactedMark + "@h/db"},
+		{"no password", "postgres://postgres@127.0.0.1:5432/db?sslmode=disable",
+			"postgres://postgres@127.0.0.1:5432/db?sslmode=disable"},
+		{"no userinfo", "postgres://127.0.0.1:5432/db?sslmode=disable",
+			"postgres://127.0.0.1:5432/db?sslmode=disable"},
+		{"empty password", "postgres://u:@h/db", "postgres://u:@h/db"},
+		{"not a dsn", "--batch-size", "--batch-size"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactDSN(tc.in)
+			if got != tc.want {
+				t.Fatalf("redactDSN(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if tc.in != tc.want && strings.Contains(got, pw) {
+				t.Fatalf("redactDSN(%q) still contains the password: %q", tc.in, got)
+			}
+		})
+	}
+
+	raw := "postgres://migrator:" + pw + "@127.0.0.1:5432/db?sslmode=disable"
+	args := []string{"migrate", "torrents", "--database", raw, "--batch-size", "10"}
+	redacted := redactArgs(args)
+	if strings.Contains(strings.Join(redacted, " "), pw) {
+		t.Fatalf("redactArgs leaked the password: %v", redacted)
+	}
+	if args[3] != raw {
+		t.Fatalf("redactArgs modified its input slice: args[3] = %q", args[3])
+	}
+	if redacted[3] != "postgres://migrator:"+faultRedactedMark+"@127.0.0.1:5432/db?sslmode=disable" {
+		t.Fatalf("redacted args[3] = %q", redacted[3])
+	}
+}
+
+// TestFaultHarnessLogsRedactCredentials runs the real import harness against
+// DSNs carrying a synthetic password and asserts the password reaches the
+// exec.Cmd arguments but never the captured harness log stream — on both the
+// failed (preflight dies on an unparsable DSN) and the successful (full
+// import) execution paths.
+func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
+	pgtest.IntegrationCluster(t)
+
+	const pw = "s3cr3t-synthetic-04d-pw"
+	src := pgtest.IntegrationCluster(t).TestDatabase(t)
+	seedFaultSource(t, src, 5000)
+	tgt := pgtest.IntegrationCluster(t).TestDatabase(t)
+	initFaultTarget(t, tgt)
+	bin := buildBinary(t)
+
+	passedTgt := faultDSNWithPassword(t, tgt, pw)
+	badTgt := faultDSNWithBogusSSLMode(t, passedTgt)
+
+	// Sink reset registered FIRST: LIFO cleanup order keeps the sink alive
+	// through every harness cleanup line.
+	sink := &safeBuffer{}
+	t.Cleanup(func() { faultLogSink = nil })
+	faultLogSink = func(format string, args ...any) { fmt.Fprintf(sink, format+"\n", args...) }
+
+	// Failed execution path: the import dies in preflight on the unparsable
+	// DSN, after startFaultImport logged the full (passworded) argument list.
+	run := startFaultImport(t, bin, src, badTgt)
+	code, sig, _ := run.waitExit()
+	if sig != 0 || code == 0 {
+		t.Fatalf("bad-DSN run: want a non-zero, non-signal exit, got code=%d sig=%v", code, sig)
+	}
+	// The real arguments reached exec.Cmd unmodified...
+	if raw := strings.Join(run.cmd.Args, " "); !strings.Contains(raw, pw) {
+		t.Fatalf("exec.Cmd arguments lost the synthetic password: %v", run.cmd.Args)
+	}
+	// ...while the captured harness log shows the redacted form only.
+	logged := sink.String()
+	if strings.Contains(logged, pw) {
+		t.Fatalf("harness log leaked the synthetic password:\n%s", logged)
+	}
+	if !strings.Contains(logged, "started pid=") || !strings.Contains(logged, faultRedactedMark) {
+		t.Fatalf("harness log is missing the redacted start line (capture broken or redaction not applied):\n%s", logged)
+	}
+
+	// Successful execution path: the same credential-bearing DSN drives a
+	// complete import (trust auth ignores the password), and the resume log
+	// line — arguments plus captured process output — stays clean too.
+	if code := runFaultResume(t, bin, src, passedTgt); code != 0 {
+		t.Fatalf("import with the passworded DSN exit code = %d, want 0", code)
+	}
+	assertFaultComplete(t, passedTgt, 5000)
+	logged = sink.String()
+	if strings.Contains(logged, pw) {
+		t.Fatalf("harness log leaked the synthetic password:\n%s", logged)
+	}
+	if !strings.Contains(logged, "resumed `magnetico") {
+		t.Fatalf("harness log is missing the resume log line — sink capture incomplete:\n%s", logged)
+	}
 }
