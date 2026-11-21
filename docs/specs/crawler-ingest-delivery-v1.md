@@ -377,6 +377,15 @@ One bounded, process-local LRU (array-backed list + `map[[20]byte]int32`) behind
 - `MAGNETICO_INGEST_CACHE_DISABLED=true` disables it.
 - A confirmed `AddTorrent` promotes the entry to positive. Database errors are never cached as
   negative. Counters: hits, misses, DB lookups, DB errors.
+- A late "missing" answer never downgrades a positive entry (a lookup that began before the insert).
+- **Implementation (M3).** `internal/ingest/cache` holds the LRU (`ExistenceCache`, `LRU`, `Disabled`);
+  capacity = budget / `EntryBytes` (96 B documented; measured ≈ 83 B/entry at the default 8 MiB →
+  87,381 entries, see `TestHeapBudget`); the map and node array are pre-sized, so memory is flat.
+  `internal/ingest/existence` is the lookup service behind `/exists`: deduplicate → cache → join
+  in-flight lookups → one batched `ExistingInfoHashes` per request (≤ 16 concurrent) → classify into
+  exists / missing / **unknown**; an error, a cancelled context or an abandoned join is `unknown`, is
+  never cached and never reported as missing; a joined request sees the leader's error as `unknown`.
+  `Service.MarkExisting` is the consumer's promotion hook.
 
 ## 8. Concurrency and shutdown
 

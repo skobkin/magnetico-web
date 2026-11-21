@@ -1,6 +1,6 @@
 # Task 06 — Implementation plan (Task 06A deliverable)
 
-**Status:** M0–M2 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M3 in progress, M4–M7 not
+**Status:** M0–M3 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M4–M7 not
 started.
 
 Design: [`docs/specs/crawler-ingest-delivery-v1.md`](../specs/crawler-ingest-delivery-v1.md) (draft).
@@ -57,6 +57,8 @@ not a release gate and no fixed records/s threshold on any particular machine.
   `= ANY($1)` query; existing methods untouched. PG integration test incl. empty/dup/missing input and DB error.
 - `internal/ingest/cache`: LRU behind `ExistenceCache`; positive no-TTL, negative 20 s, injected clock,
   disable switch, promotion, counters.
+- `internal/ingest/existence`: the lookup service the `/exists` handler will use (dedupe → cache →
+  in-flight join → batched lookup, `unknown` on error, concurrency cap 16). The HTTP handler is M5.
 Tests: eviction order, TTL expiry, errors never cached as negative, heap test for the 8 MiB budget.
 
 ## M4 — PostgreSQL ingest queue

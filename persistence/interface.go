@@ -104,6 +104,16 @@ type Store interface {
 	// concurrency authority.
 	DoesTorrentExist(ctx context.Context, infoHash []byte) (bool, error)
 
+	// ExistingInfoHashes is the batched form of DoesTorrentExist: it returns
+	// the subset of infoHashes that are already stored, using one query. Like
+	// DoesTorrentExist it is a performance hint only; AddTorrent remains the
+	// concurrency authority. An empty input returns an empty set without
+	// touching the database; duplicates are harmless; a hash that is not
+	// exactly 20 bytes is ErrInvalidMetadata (nothing is queried). A database
+	// failure is ErrStorageIO and no partial result is returned: callers must
+	// never treat an error as "missing".
+	ExistingInfoHashes(ctx context.Context, infoHashes [][]byte) (map[[20]byte]struct{}, error)
+
 	Close() error
 }
 

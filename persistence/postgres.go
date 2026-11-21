@@ -427,6 +427,39 @@ func (s *pgxStore) DoesTorrentExist(ctx context.Context, infoHash []byte) (bool,
 	return exists, nil
 }
 
+func (s *pgxStore) ExistingInfoHashes(ctx context.Context, infoHashes [][]byte) (map[[20]byte]struct{}, error) {
+	found := make(map[[20]byte]struct{})
+	if len(infoHashes) == 0 {
+		return found, nil
+	}
+	for i, h := range infoHashes {
+		if len(h) != v1InfoHashLength {
+			return nil, fmt.Errorf("%w: infohash %d must be exactly %d bytes, got %d",
+				ErrInvalidMetadata, i, v1InfoHashLength, len(h))
+		}
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT info_hash FROM magneticod.torrents WHERE info_hash = ANY($1)`, infoHashes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrStorageIO, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h []byte
+		if err := rows.Scan(&h); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrStorageIO, err)
+		}
+		if len(h) != v1InfoHashLength {
+			return nil, fmt.Errorf("%w: stored infohash has %d bytes", ErrStorageIO, len(h))
+		}
+		found[[20]byte(h)] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrStorageIO, err)
+	}
+	return found, nil
+}
+
 func (s *pgxStore) Close() error {
 	s.encoder.Close()
 	s.pool.Close()

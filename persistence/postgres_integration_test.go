@@ -832,3 +832,89 @@ func TestRestrictedRoleNoBlobDecodeAccess(t *testing.T) {
 		t.Errorf("denial message %q does not name torrent_file_blobs", pgErr.Message)
 	}
 }
+
+func TestExistingInfoHashes(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	a, b, c := infoHash("exists-a"), infoHash("exists-b"), infoHash("exists-c")
+	missing := infoHash("exists-missing")
+	mustAdd(t, store, baseTorrent("a", a, 10), []File{{Path: "a", Size: 10}})
+	mustAdd(t, store, baseTorrent("b", b, 20), []File{{Path: "b1", Size: 5}, {Path: "b2", Size: 15}})
+	mustAdd(t, store, baseTorrent("c", c, 30), []File{{Path: "c", Size: 30}})
+
+	got, err := store.ExistingInfoHashes(ctx, [][]byte{a, missing, c, a, infoHash("exists-other")})
+	if err != nil {
+		t.Fatalf("ExistingInfoHashes() error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d hashes, want 2 (duplicates and missing ignored): %v", len(got), got)
+	}
+	for _, h := range [][]byte{a, c} {
+		if _, ok := got[[20]byte(h)]; !ok {
+			t.Errorf("%x missing from the result", h)
+		}
+	}
+	if _, ok := got[[20]byte(missing)]; ok {
+		t.Error("a missing hash was reported as existing")
+	}
+
+	// All present, none present.
+	if got, err := store.ExistingInfoHashes(ctx, [][]byte{a, b, c}); err != nil || len(got) != 3 {
+		t.Errorf("all present: %d, %v", len(got), err)
+	}
+	if got, err := store.ExistingInfoHashes(ctx, [][]byte{missing}); err != nil || len(got) != 0 {
+		t.Errorf("none present: %d, %v", len(got), err)
+	}
+
+	// Empty and nil input: empty set, no error.
+	for _, in := range [][][]byte{nil, {}} {
+		if got, err := store.ExistingInfoHashes(ctx, in); err != nil || got == nil || len(got) != 0 {
+			t.Errorf("empty input: %v, %v", got, err)
+		}
+	}
+
+	// A malformed hash is refused as a whole.
+	if _, err := store.ExistingInfoHashes(ctx, [][]byte{a, {1, 2, 3}}); !errors.Is(err, ErrInvalidMetadata) {
+		t.Errorf("short hash: error = %v, want ErrInvalidMetadata", err)
+	}
+	if _, err := store.ExistingInfoHashes(ctx, [][]byte{nil}); !errors.Is(err, ErrInvalidMetadata) {
+		t.Errorf("nil hash: error = %v, want ErrInvalidMetadata", err)
+	}
+
+	// A large batch (the ingest endpoint's cap is 1024).
+	big := make([][]byte, 0, 1024)
+	for i := 0; i < 1024; i++ {
+		big = append(big, infoHash(fmt.Sprintf("big-%04d", i)))
+	}
+	big[10], big[1000] = a, b
+	if got, err := store.ExistingInfoHashes(ctx, big); err != nil || len(got) != 2 {
+		t.Errorf("1024-hash batch: %d, %v", len(got), err)
+	}
+}
+
+func TestExistingInfoHashesDatabaseError(t *testing.T) {
+	t.Parallel()
+
+	store, _ := newTestStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // a failed query must be an error, never an empty "all missing" set
+	got, err := store.ExistingInfoHashes(ctx, [][]byte{infoHash("err-a")})
+	if !errors.Is(err, ErrStorageIO) {
+		t.Fatalf("error = %v, want ErrStorageIO", err)
+	}
+	if got != nil {
+		t.Errorf("a failed lookup returned a result set: %v", got)
+	}
+
+	// A closed store fails the same way.
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExistingInfoHashes(context.Background(), [][]byte{infoHash("err-b")}); !errors.Is(err, ErrStorageIO) {
+		t.Errorf("closed store: error = %v, want ErrStorageIO", err)
+	}
+}
