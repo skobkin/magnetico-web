@@ -1238,41 +1238,40 @@ func TestImportWithReadOnlySourceRole(t *testing.T) {
 	initFaultTarget(t, tgt)
 	bin := buildBinary(t)
 
-	// The role is cluster-global: unique per run, dropped at cleanup (never
-	// Fatalf in cleanup — log and move on).
+	// The role is cluster-global: unique per run, removed at cleanup. Its
+	// password is an independent temporary credential — never a copy of the
+	// admin's — so the restricted role grants no knowledge of the harness
+	// credential. Trust-auth harnesses ignore it; password-auth external
+	// servers (MAGNETICO_TEST_POSTGRES_DSN) validate it, so the role connects
+	// under both.
 	role := "magnetico_ro_" + faultRandHex(t, 6)
-	// Mirror the admin credential's password: trust-auth harnesses ignore it,
-	// password-auth external servers need it for the LOGIN role to connect.
+	rolePW := faultRandHex(t, 16)
 	admin, err := url.Parse(cluster.AdminDSN)
 	if err != nil {
-		t.Fatalf("parse admin dsn: %v", err)
+		t.Fatalf("parse admin dsn: %v", redactDSN(err.Error()))
 	}
-	pw, _ := admin.User.Password()
-	create := fmt.Sprintf(`CREATE ROLE %s LOGIN`, pgtest.QuoteIdent(role))
-	if pw != "" {
-		create = fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD %s`,
-			pgtest.QuoteIdent(role), pgtest.QuoteLiteral(pw))
-	}
-	execSmokeSQL(t, cluster.AdminDSN, create)
+	execSmokeSQL(t, cluster.AdminDSN, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD %s`,
+		pgtest.QuoteIdent(role), pgtest.QuoteLiteral(rolePW)))
 	t.Cleanup(func() {
 		// This cleanup runs BEFORE the test-database drop (LIFO), so the role
-		// still holds its ACL grants — revoke them first, then drop. Every
-		// step is log-only: cleanup never fails the test.
+		// still holds its ACL grants — DROP OWNED revokes them (including the
+		// CONNECT grant on the database itself, a shared object) in one step,
+		// after which DROP ROLE always succeeds. A leftover role would pollute
+		// later runs, so any cleanup failure fails the test (t.Errorf is valid
+		// inside t.Cleanup).
 		ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
 		defer cancel()
-		if conn, err := pgx.Connect(ctx, src); err == nil {
-			_, _ = conn.Exec(ctx, fmt.Sprintf(
-				`REVOKE SELECT ON ALL TABLES IN SCHEMA magneticod FROM %s;
-                 REVOKE USAGE ON SCHEMA magneticod FROM %s;`, pgtest.QuoteIdent(role), pgtest.QuoteIdent(role)))
-			_, _ = conn.Exec(ctx, fmt.Sprintf(`REVOKE ALL ON DATABASE %s FROM %s`,
-				pgtest.QuoteIdent(faultDBName(t, src)), pgtest.QuoteIdent(role)))
-			conn.Close(context.Background())
+		conn, err := pgx.Connect(ctx, src)
+		if err != nil {
+			t.Errorf("cleanup: connect for %s removal: %v", role, redactDSN(err.Error()))
+			return
 		}
-		if conn, err := pgx.Connect(ctx, cluster.AdminDSN); err == nil {
-			if _, err := conn.Exec(ctx, fmt.Sprintf(`DROP ROLE %s`, pgtest.QuoteIdent(role))); err != nil {
-				t.Logf("cleanup: DROP ROLE: %v", err)
-			}
-			conn.Close(context.Background())
+		defer conn.Close(context.Background())
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`DROP OWNED BY %s`, pgtest.QuoteIdent(role))); err != nil {
+			t.Errorf("cleanup: DROP OWNED BY %s: %v", role, err)
+		}
+		if _, err := conn.Exec(ctx, fmt.Sprintf(`DROP ROLE %s`, pgtest.QuoteIdent(role))); err != nil {
+			t.Errorf("cleanup: DROP ROLE %s: %v", role, err)
 		}
 	})
 
@@ -1282,13 +1281,10 @@ func TestImportWithReadOnlySourceRole(t *testing.T) {
         GRANT SELECT ON ALL TABLES IN SCHEMA magneticod TO %[2]s;`,
 		pgtest.QuoteIdent(faultDBName(t, src)), pgtest.QuoteIdent(role)))
 
-	// The restricted source DSN: same server and database, restricted role.
+	// The restricted source DSN: same server and database, restricted role,
+	// its own credential.
 	restricted := *admin
-	if pw != "" {
-		restricted.User = url.UserPassword(role, pw)
-	} else {
-		restricted.User = url.User(role)
-	}
+	restricted.User = url.UserPassword(role, rolePW)
 	restricted.Path = "/" + faultDBName(t, src)
 	restrictedDSN := restricted.String()
 
@@ -1325,9 +1321,10 @@ func TestImportWithReadOnlySourceRole(t *testing.T) {
 
 // faultDSNWithPassword returns dsn with a synthetic password in its URL
 // userinfo (preserving the username; defaulting to postgres when the cluster
-// DSN carries none). Under the pgtest trust-auth harnesses the server ignores
-// passwords, so the returned DSN still connects — letting the regression run
-// the real import with credential-bearing CLI arguments.
+// DSN carries none). Used by the failed-path regression only: paired with a
+// bogus sslmode the run dies at parse time, before any server contact, so the
+// synthetic credential works under trust-auth local harnesses and
+// password-authenticated external servers alike.
 func faultDSNWithPassword(t *testing.T, dsn, password string) string {
 	t.Helper()
 	u, err := url.Parse(dsn)
@@ -1411,10 +1408,13 @@ func TestRedactDSNCredentials(t *testing.T) {
 }
 
 // TestFaultHarnessLogsRedactCredentials runs the real import harness against
-// DSNs carrying a synthetic password and asserts the password reaches the
-// exec.Cmd arguments but never the captured harness log stream — on both the
-// failed (preflight dies on an unparsable DSN) and the successful (full
-// import) execution paths.
+// credential-bearing DSNs and asserts the passwords reach the exec.Cmd
+// arguments but never the captured harness log stream. The failed path uses a
+// synthetic password behind a parse-time-invalid sslmode — the server is
+// never contacted, so it is auth-method independent. The successful path uses
+// the real target DSN, whose credentials are valid for the cluster even on
+// password-authenticated external PostgreSQL (MAGNETICO_TEST_POSTGRES_DSN
+// preserved), and asserts its actual password cannot appear in the logs.
 func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 	pgtest.IntegrationCluster(t)
 
@@ -1425,8 +1425,17 @@ func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 	initFaultTarget(t, tgt)
 	bin := buildBinary(t)
 
-	passedTgt := faultDSNWithPassword(t, tgt, pw)
-	badTgt := faultDSNWithBogusSSLMode(t, passedTgt)
+	// Failed-path DSN: synthetic password, killed at parse time by the bogus
+	// sslmode — no server authentication involved, works on every backend.
+	badTgt := faultDSNWithBogusSSLMode(t, faultDSNWithPassword(t, tgt, pw))
+	// Successful-path DSN: the target DSN itself — valid credentials for the
+	// server, password-authenticated external clusters included.
+	realPW := ""
+	if u, err := url.Parse(tgt); err != nil {
+		t.Fatalf("parse target dsn: %v", redactDSN(err.Error()))
+	} else if u.User != nil {
+		realPW, _ = u.User.Password()
+	}
 
 	// Sink reset registered FIRST: LIFO cleanup order keeps the sink alive
 	// through every harness cleanup line.
@@ -1454,18 +1463,32 @@ func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 		t.Fatalf("harness log is missing the redacted start line (capture broken or redaction not applied):\n%s", logged)
 	}
 
-	// Successful execution path: the same credential-bearing DSN drives a
-	// complete import (trust auth ignores the password), and the resume log
-	// line — arguments plus captured process output — stays clean too.
-	if code := runFaultResume(t, bin, src, passedTgt); code != 0 {
-		t.Fatalf("import with the passworded DSN exit code = %d, want 0", code)
+	// Successful execution path: the valid credential-bearing target DSN
+	// drives a complete import — under trust auth and password auth alike —
+	// and its real password reaches exec.Cmd but never the harness log.
+	beforeSuccess := sink.String()
+	if code := runFaultResume(t, bin, src, tgt); code != 0 {
+		t.Fatalf("import with the credential-bearing target DSN exit code = %d, want 0", code)
 	}
-	assertFaultComplete(t, passedTgt, 5000)
+	assertFaultComplete(t, tgt, 5000)
 	logged = sink.String()
 	if strings.Contains(logged, pw) {
 		t.Fatalf("harness log leaked the synthetic password:\n%s", logged)
 	}
-	if !strings.Contains(logged, "resumed `magnetico") {
-		t.Fatalf("harness log is missing the resume log line — sink capture incomplete:\n%s", logged)
+	// Only the lines appended by the successful run: the DSN's own password
+	// (and the whole credential-bearing DSN) must be absent, the redacted
+	// form present — unless the cluster runs trust auth and the DSN carries
+	// no password at all.
+	successLog := logged[len(beforeSuccess):]
+	if realPW != "" {
+		if strings.Contains(successLog, realPW) || strings.Contains(successLog, tgt) {
+			t.Fatalf("harness log leaked the target DSN password:\n%s", successLog)
+		}
+		if !strings.Contains(successLog, faultRedactedMark) {
+			t.Fatalf("successful run's log line shows no redacted form — redaction not applied:\n%s", successLog)
+		}
+	}
+	if !strings.Contains(successLog, "resumed `magnetico") {
+		t.Fatalf("harness log is missing the resume log line — sink capture incomplete:\n%s", successLog)
 	}
 }
