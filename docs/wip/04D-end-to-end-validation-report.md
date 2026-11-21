@@ -44,6 +44,19 @@ not a code defect.
 - Schema lesson recorded: `migrate schema-init` creates only `magneticod.*` (v1, 0 rows); the
   `magnetico_migration` operational schema is created by the migrator itself
   (`internal/migration/state/store.go:68`) — observed live in R1b.
+- **Source database credentials (exact role, honest):** every connection to the restored source
+  (`magnetico_04d_sample_src`) used the container **superuser role `postgres`**. The dump's
+  `magneticod` role was created only because the dump assigns schema ownership
+  (`ALTER SCHEMA … OWNER TO magneticod`); it was never used to connect. The SELECT-only source
+  discipline of this campaign was therefore **observed behavior, not database-enforced**: only
+  `SELECT`, `gzip -t`, `pg_current_wal_lsn()` and similar read-only statements were ever issued
+  (corroborated by R0/R11 archive-hash equality and the R1==R11 source-fingerprint equality), but
+  a superuser *can* write, so SELECT-only privileges were **not enforced** during the historical
+  campaign. Enforcement at the privilege level is now covered by the committed
+  `TestImportWithReadOnlySourceRole` fixture (see the fixture table): a source role holding
+  CONNECT + USAGE + SELECT and nothing else completes a full import, and a write by that role is
+  refused by the server itself (SQLSTATE 42501) — proving the restriction is enforced and the
+  migrator performs no source modification.
 
 ## Scenario matrix (real sample)
 
@@ -145,12 +158,13 @@ procedure below.
 | ID | Scenario | Result |
 |---|---|---|
 | F1 | SIGKILL mid-import (fixture ~10–20k rows), observed-state trigger | EXERCISED — dies by signal; post-death checkpoint math exact; resume exit 0, full ID-set equality |
-| F2 | Lost COMMIT ack at the wire level (test-local TCP proxy; checkpoint-anchored arming; server-side durability proof) | EXERCISED — intercepted tx committed server-side (checkpoint advanced beyond the recorded pre-injection value), run reconciled in-process to exit 0 with exact counts, no dup/skip |
+| F2 | Lost COMMIT ack at the wire level (test-local TCP proxy; checkpoint-anchored arming; reply verification + independent database reads) | EXERCISED — the proxy verifies CommandComplete with the exact `COMMIT` tag and rejects the injection on ErrorResponse, truncated or malformed replies (a loud failure, never a vacuous pass); it reads the authoritative checkpoint directly from the target immediately before forwarding the COMMIT and again after the confirmation, pinning the durability proof to THE intercepted transaction; the client ack is then withheld, the run reconciles in-process to exit 0 with exact counts, no dup/skip |
 | F3 | Target backends terminated mid-import | EXERCISED — lock-loss fatal, exit 1; rerun resumes exit 0 |
 | F4 | Concurrent import under advisory lock | EXERCISED — second invocation refuses ("holds the lock"), first completes |
 | F5 | Mid-import source drift (insert beyond fingerprint) then removal | EXERCISED — resume refuses exit 1 with the fingerprint detail; after removal resumes exit 0 |
 | F6i | Restarted source ≠ drift | EXERCISED — postmaster change recorded, anchors unchanged, resume succeeds |
 | F6ii | Verification staleness after a retry bumps `data_revision` | EXERCISED — older verdict stale, fresh run re-verifies |
+| SRO | Source access under a restricted role (added in the review round) | EXERCISED — `TestImportWithReadOnlySourceRole`: source role with CONNECT + USAGE + SELECT only; a write by it is server-refused (SQLSTATE 42501 — the restriction is enforced, not assumed); the full import completes under that role, proving the migrator performs no source modification |
 
 Reused without new code (cited): interrupted/resumed import, ambiguous-commit in-process doubles,
 lock-loss during finalization, deferred-index crash boundaries
@@ -197,6 +211,53 @@ run row is adopted at the same `seq` and continued; after a `data_revision`-bump
 old verdict goes stale and the fresh run re-verifies. Forensics: `migrate errors export
 --manifest` re-derives everything from the surviving registry. Nothing in the campaign ever
 required manual checkpoint/DDL repair.
+
+## Review-round fixes (post-report revision)
+
+Owner review of this report produced four fixes — all harness or documentation
+side; no product, schema or wire-format change:
+
+1. **`commitCutProxy` log race (F2 harness):** the evidence log was appended
+   without synchronization while connection goroutines wrote it concurrently
+   with `dumpLogs`. All access is now mutex-guarded, with a lock-held variant
+   used by `arm` to avoid recursive locking; verified under `-race`.
+2. **F2 evidence strengthened.** ReadyForQuery alone is no longer accepted as
+   commit proof: the proxy verifies `CommandComplete` with the exact `COMMIT`
+   tag, detects `ErrorResponse`, and treats truncated, malformed or unexpected
+   reply sequences as **rejected injections** — the connection keeps relaying
+   and the test fails loudly on the recorded reason (NOT EXERCISED), so a
+   vacuous pass is impossible. The authoritative checkpoint is read directly
+   from the target database immediately **before** forwarding the intercepted
+   COMMIT and again **after** the server confirms it, so the recorded advance
+   is the intercepted transaction's own work — not progress made by unrelated
+   earlier or later commits (the old check only compared the final checkpoint
+   against the arming value). In the review-round rerun the verified
+   interception was `CommandComplete "COMMIT"`, checkpoint 5261 → 5271, with
+   the run reconciling in-process to exit 0 and the exact 50,000-record set.
+3. **Source-privilege clarification and enforcement test.** The historical
+   campaign connected to the restored source as the container superuser
+   (documented honestly in the environment section above): SELECT-only access
+   was observed discipline, not enforced. The new `TestImportWithReadOnlySourceRole`
+   fixture proves the migrator against a CONNECT + USAGE + SELECT-only source
+   role whose writes the server refuses (SQLSTATE 42501 asserted first), so
+   any attempted source modification by the migrator would have failed the
+   run. An interim defect in this new test's own cleanup (DROP ROLE refused
+   with SQLSTATE 2BP01 while the role still held its grants — cleanup runs
+   before the test-database drop) was fixed the same round: the cleanup
+   revokes the grants before dropping the role, and the rerun leaves no role
+   behind.
+4. **README refreshed** to describe the implemented state (crawler on the new
+   PostgreSQL storage, the full migrate toolchain, `web` still a placeholder)
+   instead of the phase-2 foundation snapshot.
+
+Battery after these changes (all actually run): `go build ./...` OK, `go vet
+./...` OK, `gofmt -l .` empty, `golangci-lint run` 0 issues;
+`go test -count=1 -p 2 -parallel 4 ./...` all green — 22 packages ok, rc=0,
+no failures or unexpected skips; under `-race` with the documented
+`-p 2 -parallel 4` limiter, both the fault suite (`TestFault*` +
+`TestImportWithReadOnlySourceRole`, ok in ~136 s) and the documented
+`./internal/migration/... ./opflags/ .` pass (all 10 packages ok, rc=0).
+No repeat of the historical 3.46-million-torrent campaign was needed or run.
 
 ## Pre-production blockers
 
