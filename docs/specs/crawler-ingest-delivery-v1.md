@@ -1,0 +1,474 @@
+# Magnetico 0.8.0 — Crawler → Ingest Delivery Contract (draft v1)
+
+**Status:** DRAFT for owner review (Task 06A, revision 3). Not yet normative: nothing here
+may be implemented until the owner approves it. It builds on `wire-format-v1.md` and
+`postgresql-persistence-v2.md` and changes neither. Section 15 lists the decisions the
+owner still has to confirm.
+
+**Scope split.** Every requirement is **0.8.0 (mandatory)** unless it sits in §14
+(post-release). Words MUST/SHOULD are used in their RFC 2119 sense.
+
+## 1. Goals and non-goals
+
+The crawler stops depending on PostgreSQL. It discovers infohashes, fetches metadata and
+delivers structured records over authenticated HTTPS to an `ingest` service, which queues them
+durably in PostgreSQL and persists them asynchronously through the existing `Store.AddTorrent`.
+
+- Delivery is **at-least-once**; persistence is **idempotent by infohash** (`AddTorrent` returns
+  `created=false` for known hashes).
+- DHT discovery is **best-effort**. A hash that was only observed, or metadata that was fetched but
+  not yet durably enqueued, may be lost. That is not a violation of any guarantee in this document.
+- Not in 0.8.0: pending-queue lookup in existence checks, adaptive backpressure, smart queue
+  filling, queue compression, more than one queue backend, parallel server consumers,
+  advanced cache algorithms.
+
+## 2. Components and guarantees
+
+```
+crawl (no PostgreSQL)                                       ingest (same binary, PostgreSQL)
+DHT → event loop → precheck batcher ─HTTPS→ POST …/exists → LRU cache → batched SELECT
+        │ missing | unknown (fail-open)
+        ▼
+ admission gate (active-leech semaphore AND local queue not full)
+        ▼
+ metadata.Sink (bounded, ctx-aware) → drain (fixed cap)
+        ▼
+ enqueue writer: ValidateIngest → SQLite group commit (synchronous=FULL)
+        ▼
+ sender: oldest batch ─HTTPS→ POST …/torrents → validate all → INSERT magnetico_ingest.queue
+ 202 ⇒ delete local rows                          COMMIT (synchronous_commit=on) ⇒ 202
+                                                          │
+                                  single consumer → AddTorrent → DELETE queue row, promote cache
+```
+
+| Boundary | Guarantee |
+|---|---|
+| Local enqueue | Record is *admitted* only after the SQLite transaction commits with `synchronous=FULL`. |
+| HTTP 202 | Every submitted record is **durably committed in the PostgreSQL queue** (or was already pending there). It does **not** mean the torrent is in `magneticod.torrents`. |
+| Local delete | The crawler MAY delete a row only after a valid 202 for the batch containing it. |
+| Consumer | A queue row is deleted only after `AddTorrent` succeeded (created or already present), or moved to quarantine in one transaction. |
+
+**Durability assumptions (explicit).** SQLite: local filesystem that honours `fsync`
+(ext4/xfs; not NFS/SMB), device honouring cache flushes. PostgreSQL: `fsync=on` (ingest refuses
+to start otherwise unless `MAGNETICO_INGEST_ALLOW_NON_DURABLE_DB=true`, development/tests only)
+and `synchronous_commit=on` for queue admission (`SET LOCAL` inside the admission transaction).
+With replicas, whether 202 survives primary loss depends on the operator's `synchronous_standby_names`;
+that is out of scope here and must be stated in operator docs.
+
+## 3. Record format v1
+
+One JSON object per torrent; the same bytes are stored locally, sent over HTTP and stored in the
+PostgreSQL queue (`BYTEA`, never JSONB, which would normalise content):
+
+```json
+{"v":1,"info_hash":"<40 lowercase hex>","name":"…","total_size":123,"discovered_on":1700000000,
+ "files":[{"path":"…","size":1}]}
+```
+
+- No raw bencode and no codec blob. Compression is out of scope; the queue `format` column is reserved.
+- `persistence.ValidateIngest` MUST run before marshalling (crawler) and again at admission (server).
+  It guarantees valid, NUL-free UTF-8, so JSON encoding is lossless (Go's encoder would otherwise
+  silently replace invalid bytes). Marshalling uses `SetEscapeHTML(false)`.
+- Decoding is strict: unknown fields, unknown `v`, trailing data and a bad `info_hash` are errors.
+- The uint64→int64 `total_size` guard (`torrentFromMetadata`) moves into the record package and runs
+  before enqueue.
+- **`MaxRecordBytes` = 16 MiB** of serialized JSON. Measured sample maximum ≈ 9.3 MB, but control
+  characters escape to `\u00XX` (up to 6×), so 10 MiB of bencoded metadata can exceed any fixed JSON
+  limit; an explicit limit is therefore required. An oversized record is quarantined locally with
+  reason `record_too_large`; it is never sent, truncated, retried or deleted.
+
+## 4. Crawler queue — SQLite WAL
+
+The crawler is deployable as a single container with no PostgreSQL or Redis access.
+
+**Driver / pragmas.** `modernc.org/sqlite` (pure Go, keeps `CGO_ENABLED=0`; cost: a large
+dependency). `journal_mode=WAL`, `synchronous=FULL`, `auto_vacuum=INCREMENTAL` (set at creation),
+`busy_timeout=5000`, `journal_size_limit=64MiB`, explicit `cache_size`.
+
+**Schema.** `PRAGMA user_version` = queue schema version (mismatch → refuse to start).
+
+```sql
+queue(id INTEGER PRIMARY KEY AUTOINCREMENT, info_hash BLOB NOT NULL UNIQUE, format INTEGER NOT NULL,
+      payload BLOB NOT NULL, payload_bytes INTEGER NOT NULL, enqueued_at INTEGER NOT NULL);
+quarantine(id INTEGER PRIMARY KEY AUTOINCREMENT, info_hash BLOB NOT NULL, format INTEGER NOT NULL,
+      payload BLOB NOT NULL, payload_bytes INTEGER NOT NULL, reason_code TEXT NOT NULL,
+      http_status INTEGER, quarantined_at INTEGER NOT NULL);
+```
+
+`INSERT … ON CONFLICT(info_hash) DO NOTHING` removes local duplicates (queue dedupe only, not an
+existence answer).
+
+**Concurrency.** One writer goroutine with group commit (≤ 64 records or ≤ 50 ms); short read
+transactions. An exclusive `flock` on the queue directory allows one crawler per queue. Periodic
+`wal_checkpoint(TRUNCATE)`; `incremental_vacuum` when the freelist exceeds a threshold (file size is
+otherwise the high-water mark).
+
+**Startup.** Normal SQLite WAL recovery only — **no unconditional integrity scan**. The optional
+diagnostic `magnetico crawl check-queue` runs `quick_check`/`integrity_check` and prints counts.
+Corruption is never repaired or deleted automatically.
+
+**Capacity.** `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` (default 1 GiB) bounds `SUM(payload_bytes)` of
+`queue` + `quarantine`. The counter is held in memory (safe: single writer, process-exclusive via
+`flock`) and initialised from `SUM()` at open.
+
+**Errors.** `SQLITE_FULL` → queue reports full. `SQLITE_IOERR`/corruption at runtime → the process
+exits non-zero; committed data stays.
+
+**Storage interface** (replaceable, one implementation): `Append`, `Peek(maxRecords,maxBytes)`,
+`Ack(ids)`, `Quarantine(ids, reason, httpStatus)`, `Stats`, `Close`. `Append` never blocks for space;
+when full it returns `ErrQueueFull` immediately.
+
+**Queue-full and shutdown lifecycle.** When full, the admission gate stops starting leeches.
+Leeches already in flight (≤ active-leech limit) may finish; their metadata is dropped as best-effort
+data, counted (`crawl_dropped_queue_full`) and logged throttled. On SIGTERM the writer drains the
+`drain` channel for at most a 5 s grace; whatever remains is dropped and counted
+(`crawl_dropped_shutdown`). The writer is never awaited indefinitely; commits are bounded by
+`busy_timeout`. Rows already committed are unaffected.
+
+**Fail-open precheck.** If the existence API is unavailable, the crawler may fetch metadata without a
+successful check and persist it locally, up to the byte limit; after that it stops admitting metadata.
+Duplicates created this way are harmless (idempotent server side).
+
+## 5. HTTP protocol (version 1)
+
+Base path `/api/ingest/v1`. TLS is terminated by Traefik; ingest listens on plain HTTP on the
+internal network. The crawler requires an `https://` URL, except loopback `http://` (tests).
+
+**Authentication.** `Authorization: Bearer <token>`; compared as SHA-256 digests with
+`subtle.ConstantTimeCompare`; token ≥ 32 bytes. Tokens are **ENV-only**
+(`MAGNETICO_INGEST_TOKEN`, `MAGNETICO_CRAWL_INGEST_TOKEN`): no CLI flag, no YAML field
+(`yaml:"-"`), never logged or echoed in errors. Single token in 0.8.0.
+
+### 5.1 `POST /api/ingest/v1/torrents/exists`
+
+Request `{"info_hashes":["<40 hex>", …]}` — ≤ 1024 hashes, body ≤ 64 KiB. Response 200:
+`{"exists":[…],"missing":[…],"unknown":[…]}`. `exists` only for hashes **confirmed in PostgreSQL**;
+`missing` only for confirmed absence; a database error (or an inconclusive lookup) yields `unknown`,
+never `missing`. Pending queue rows are not consulted. Malformed input → 400; whole-request
+database failure → 503 `storage_unavailable`.
+
+Server flow: deduplicate → cache → join in-flight lookups for concurrent misses → one
+`SELECT info_hash FROM magneticod.torrents WHERE info_hash = ANY($1)` through a new **additive**
+Store method `ExistingInfoHashes` (§15 O-3). Concurrency cap 16.
+
+### 5.2 `POST /api/ingest/v1/torrents`
+
+Request `{"records":[<record v1>, …]}` — ≤ 256 records, body limit 17 MiB (`MaxRecordBytes` +
+1 MiB envelope). The sender packs ≤ 8 MiB per request; a record between 8 and 16 MiB travels alone.
+
+**All-or-nothing admission.** The server decodes and validates *every* item (strict decode, known
+`v`, size ≤ `MaxRecordBytes`, `ValidateIngest`). Any failure → `400 invalid_batch` and **nothing is
+written**; the body lists item indexes and codes for diagnostics only (the client does not rely on
+them). Otherwise, in one transaction:
+
+1. `SET LOCAL synchronous_commit = on`.
+2. One multi-row `INSERT … ON CONFLICT (info_hash) DO NOTHING`, rows sorted by `info_hash` (no
+   deadlock between concurrent batches).
+3. Statement-level triggers update `magnetico_ingest.usage` (§6.2); its row lock serialises admissions.
+4. `used_bytes` above `MAGNETICO_INGEST_QUEUE_MAX_BYTES` → ROLLBACK → `503 queue_full`.
+5. COMMIT, then `202`.
+
+202 therefore means *every* item was durably queued or already pending. Duplicates of rows already
+in `torrents` are resolved by the consumer (idempotent).
+
+### 5.3 Status codes and error body
+
+200, 202, 400 (`invalid_batch`, `invalid_request`), 401, 405, 413, 415, 503 (`queue_full`,
+`storage_unavailable`, `busy`; with `Retry-After`), 500. Error body
+`{"error":{"code":"…","retryable":true|false}}`; never contains record contents, tokens or driver text.
+
+### 5.4 Client behaviour (deterministic)
+
+| Response | Action |
+|---|---|
+| 202 (valid, parsable) | delete every row of the batch |
+| 400 `invalid_batch`, > 1 record | **bisect**: resubmit each half, recursively (≤ 8 levels for 256 records) |
+| 400 for a single record (`invalid_record`, `unsupported_version`, `record_too_large`) | **move to local quarantine** with payload, reason code and HTTP status; continue with the next record (the FIFO head never stays blocked) |
+| Retryable result during a bisect | abort the bisect, back off, restart from the head of the queue |
+| Other non-202, unparsable/mismatched 202, timeout, connection reset | **ambiguous / not acknowledged**: keep rows and resend later (safe: idempotent) |
+| 401 / 403 | keep rows, long backoff, loud throttled log |
+
+401/403/5xx/timeouts are never quarantined. Timeouts: exists 10 s, submit 60 s. Backoff 1 s → 60 s with
+full jitter. A lost 202 after a durable commit is resolved by resending (`ON CONFLICT DO NOTHING`).
+
+### 5.5 Server limits
+
+`ReadHeaderTimeout` 10 s, `ReadTimeout`/`WriteTimeout` 60 s, `IdleTimeout` 120 s,
+`MaxHeaderBytes` 16 KiB, `http.MaxBytesReader` on every handler. At most 8 concurrent submit
+handlers → raw request bodies ≤ 8 × 17 MiB = **136 MiB** (this excludes JSON decoding, Go allocations
+and processing overhead and is **not** a bound on process memory); further requests get `503 busy`.
+
+### 5.6 Precheck outage
+
+Unknown results pause lookups for a backoff window while leech admission continues below the local
+byte limit (bounded fail-open). Best-effort discovery and durable delivery are separate: only records
+already committed to SQLite are protected.
+
+## 6. Server queue — PostgreSQL
+
+### 6.1 Schema `magnetico_ingest`
+
+```sql
+ingest_version(version INT)                      -- exactly {1}
+queue(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, info_hash BYTEA NOT NULL UNIQUE,
+      format SMALLINT NOT NULL, payload BYTEA NOT NULL, payload_bytes INT NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now(), attempts INT NOT NULL DEFAULT 0,
+      next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now(), last_error_code TEXT)
+quarantine(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, info_hash BYTEA NOT NULL, format SMALLINT NOT NULL,
+      payload BYTEA NOT NULL, payload_bytes INT NOT NULL, reason_code TEXT NOT NULL, detail TEXT,
+      attempts INT NOT NULL, received_at TIMESTAMPTZ NOT NULL, quarantined_at TIMESTAMPTZ NOT NULL DEFAULT now())
+usage(id SMALLINT PRIMARY KEY CHECK (id = 1), used_bytes BIGINT NOT NULL CHECK (used_bytes >= 0))
+```
+
+Aggressive autovacuum storage parameters on `queue`. **Table names MUST NOT be `torrents`, `files`,
+`torrent_file_blobs` or `schema_version`**: `persistence/schema.go` classifies tables with those
+names in *any* schema as legacy markers.
+
+### 6.2 Transactional quota
+
+Statement-level `AFTER INSERT`/`AFTER DELETE` triggers with transition tables on `queue` and
+`quarantine` add/subtract `SUM(payload_bytes)` in a single `UPDATE usage`; a `BEFORE UPDATE OF
+payload_bytes` trigger rejects mutation. Accounting is thus exact for every path, including manual
+operator SQL:
+
+| Path | Effect on `used_bytes` |
+|---|---|
+| Admission insert | + |
+| Consumer acknowledgement (DELETE) | − |
+| Queue → quarantine (INSERT + DELETE, one transaction) | net 0 |
+| Operator deletes quarantine rows | − |
+
+Because admissions serialise on the `usage` row, concurrent requests and multiple ingest instances
+cannot exceed the quota. A read-only startup check logs a warning if `used_bytes` differs from
+`SUM(queue)+SUM(quarantine)`. Quarantine counts toward the quota; retention is until an operator acts
+(0.8.0: documented SQL and counters; CLI is post-release).
+
+### 6.3 Initialisation and migration ordering
+
+- New explicit command **`magnetico migrate ingest-schema-init`**: non-destructive, idempotent, under
+  `pg_advisory_xact_lock`, requires a verified `magneticod` schema at version 1, creates only
+  `magnetico_ingest`. `migrate schema-init` is unchanged; nothing is created at startup.
+- Order: `schema-init` → `migrate torrents` → verify → (optional `cleanup`) → `ingest-schema-init` →
+  start `ingest`.
+- `ingest` startup is read-only: it refuses to start while an import run is in progress or incomplete
+  (`migrate torrents` requires an empty target) and logs that new inserts make earlier verification
+  verdicts stale.
+- Tests (M4) prove the presence of `magnetico_ingest` changes neither persistence startup
+  verification nor migrate preflight/verify.
+
+### 6.4 Single consumer and advisory lock
+
+One sequential consumer for 0.8.0 (expected load 10–50 torrents/s — an estimate, not a guarantee).
+
+**Ownership.** A session-level `pg_try_advisory_lock(key)` held on a **dedicated pinned connection**
+(`pgx.Connect` with the queue DSN, outside any pool) for the whole consumer lifetime. It is never
+acquired through a pooled query.
+
+- *Acquire:* open the connection, `pg_try_advisory_lock`; `false` → standby, retry every 10 s.
+- *Verify:* before each batch, `SELECT 1` on the pinned connection and a `pg_locks` check for our
+  `pg_backend_pid()`; any failure means ownership is lost.
+- *Connection lost:* stop immediately (in-flight work is idempotent), close, back off, reacquire from
+  scratch. Queue work runs on the pool; the pinned connection only proves ownership.
+- *Graceful shutdown:* finish the current record, `pg_advisory_unlock`, close the connection.
+
+**Loop.** `SELECT … FROM queue WHERE next_attempt_at <= now() ORDER BY id LIMIT 32`; per row:
+`AddTorrent` (own transaction, unchanged contract) → on success (created or already present)
+`DELETE` the row and promote the cache entry. A crash between the two repeats the row harmlessly.
+
+| Error | Action |
+|---|---|
+| `ErrInvalidMetadata` / record decode failure | quarantine (INSERT+DELETE, one transaction) |
+| `ErrStorageIO` / connection loss | global backoff 1 s → 60 s, row stays |
+| Anything else | `attempts++`, backoff via `next_attempt_at`; after 10 attempts quarantine `max_attempts` |
+
+A poison record cannot block the queue. Deleted tuples are reused after autovacuum; disk returns to the
+OS only with `VACUUM FULL` (documented).
+
+### 6.5 Connections
+
+The Store keeps its pool. The queue uses one small separate pool (max 4) plus the pinned lock
+connection. `MAGNETICO_INGEST_QUEUE_DATABASE` optionally supplies a different DSN/role (DML on
+`magnetico_ingest` only); default is the same DSN. A separate server is not required.
+
+## 7. Existence cache
+
+One bounded, process-local LRU (array-backed list + `map[[20]byte]int32`) behind an
+`ExistenceCache` interface so an implementation can be replaced later without protocol changes.
+
+- Budget `MAGNETICO_INGEST_CACHE_MAX_BYTES`, default 8 MiB; entry count derived from a documented
+  per-entry size, verified by a heap test.
+- **Positive entries**: no TTL (until eviction/restart). Valid because the torrent store is append-only
+  in normal operation (no deletion mechanism is planned); documented assumption.
+- **Negative entries**: TTL 20 s (new torrents arrive continuously).
+- `MAGNETICO_INGEST_CACHE_DISABLED=true` disables it.
+- A confirmed `AddTorrent` promotes the entry to positive. Database errors are never cached as
+  negative. Counters: hits, misses, DB lookups, DB errors.
+
+## 8. Concurrency and shutdown
+
+- All channels are fixed-capacity; every goroutine has one owner that stops it. No unbounded queues.
+- Active leeches are limited by `--leech-max-active` / `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE`
+  (default **32**); `LeechMaxN` keeps its per-hash peer meaning. Worst-case in-flight metadata memory
+  32 × 10 MiB.
+- **`metadata.Sink` rewrite (minimal):** context-aware; `TrySink` with a semaphore; the address policy
+  also applies to the first peer; leeches close their connection on cancel; `drain` is closed only after
+  all leeches have returned (no send on a closed channel, no panic); no `terminated` data race.
+- The DHT event loop hands results to the batcher without blocking; when the batcher is full the result is
+  dropped and counted.
+- **Crawler SIGTERM:** stop DHT → stop batcher → cancel leeches → writer commits what is left within its
+  5 s grace (rest dropped and counted) → sender finishes the current request (30 s grace) → checkpoint and
+  close SQLite.
+- **SIGKILL/power loss:** committed rows survive; sent-but-unacknowledged rows are resent.
+- **Ingest SIGTERM:** `http.Server.Shutdown` → in-flight commits finish → consumer finishes its current
+  record and releases the lock → pools close.
+- **Known DHT overflow defects** (confirmed by code review against `dht/managers.go`): `range` over a
+  channel that is never closed (producer goroutine blocks forever, result lost); unlocked read of
+  `m.output`. M0 ports the minimal upstream fix (`tgragnato/magnetico` 5092b922) with `-race` overflow
+  tests. A wider buffering redesign is a separate non-blocking issue.
+
+## 9. Untrusted bencode nesting
+
+The bencode decoder has no depth limit and recursion happens in `parseDict`/`parseList`/`readOneValue`,
+`FileTree.UnmarshalBencode` (which re-parses every subtree: O(depth × size)) and `appendTreeFiles`.
+A Go stack overflow is fatal. M0 first **proves or refutes** the risk with subprocess hostile-input tests
+(deep `l`/`d` nesting, deep file trees, at the 10 MiB limit), recording crash, wall time and peak heap. If
+confirmed: an iterative O(n) pre-scan `bencode.CheckDepth(b, 256)` before `unmarshalMetainfo` rejects
+over-deep metadata as invalid (counter + throttled warning). The decoder is not rewritten; the upstream
+streaming parser is not adopted in 0.8.0.
+
+## 10. Configuration
+
+All operational configuration is available through environment variables (Docker-first); YAML stays
+optional; CLI flags exist for non-secret values. Unknown `MAGNETICO_*` variables of the active command are
+rejected, as today. Secrets (tokens, DSNs with passwords) are ENV/config-only, never flags.
+`crawl`: `MAGNETICO_CRAWL_INGEST_URL`, `_INGEST_TOKEN`, `_QUEUE_DIR`, `_QUEUE_MAX_BYTES`,
+`_LEECH_MAX_ACTIVE`. `ingest`: `MAGNETICO_INGEST_LISTEN`, `_TOKEN`, `_DATABASE`, `_QUEUE_DATABASE`,
+`_QUEUE_MAX_BYTES`, `_CACHE_MAX_BYTES`, `_CACHE_DISABLED`, `_ALLOW_NON_DURABLE_DB`. The crawl option
+`databaseURL` (`--database`, `MAGNETICO_CRAWL_DATABASE`) is **removed**; a stale key fails loudly.
+
+## 11. Resource estimates
+
+**Measured** (read-only pass over the local `magneticod-sample.sql.gz`, 3,457,046 torrents): files per
+torrent mean 35.7, p50 3, p90 34, p99 495, max 123,480. **Estimated** record JSON size (formula
+110 B + name + Σpath + 26 B/file over measured inputs): mean ≈ 3.1 KB, p50 ≈ 350 B, p90 ≈ 2.5 KB,
+p99 ≈ 41 KB, p99.9 ≈ 394 KB, p99.99 ≈ 1.7 MB, max ≈ 9.3 MB. Ceiling 10 MiB bencode (≤ 16 MiB JSON).
+
+**Estimated** SQLite size ≈ 1.25 × payload + ~100 B/row (to be measured in M2):
+
+| Depth | p50 (350 B) | mean (3.1 KB) | p99 (41 KB) | worst (~10 MiB) |
+|---|---|---|---|---|
+| 10,000 | ~5 MB | ~40 MB | ~0.5 GB | ~100+ GB |
+| 100,000 | ~55 MB | ~0.4 GB | ~5 GB | — |
+| 1,000,000 | ~0.55 GB | ~3.9 GB | ~52 GB | — |
+
+Infohash-only pending rows (not used by this design): ~80–100 B/row → 1 M ≈ 100 MB. PostgreSQL queue:
+similar payload plus 23 B tuple header, the unique index, and TOAST (pglz may shrink large rows); its WAL is
+managed by the server. SQLite WAL is bounded by one group-commit batch plus autocheckpoint (~4 MiB), with
+`journal_size_limit` 64 MiB. Deleted rows go to the freelist; size returns to the OS only via
+`incremental_vacuum` (SQLite) / `VACUUM FULL` (PostgreSQL). Because record sizes vary by four orders of
+magnitude, capacity limits are in **bytes**, not records. Throughput (one fsync per group commit) is an
+estimate to be confirmed by the M7 test, not a benchmark claim.
+
+## 12. Tests (acceptance for 0.8.0)
+
+Unit, integration and fault-injection cases are listed per milestone in
+`docs/wip/06-crawler-ingest-plan.md`. They must cover: several simultaneous crawlers; ingest/PostgreSQL
+restart and PostgreSQL outage (503, crawler retains); duplicate infohashes and duplicate delivery; lost
+HTTP acknowledgment after durable enqueue; process crashes before/after each acknowledgment; partial and
+malformed batches; token authentication and secret leakage; cache staleness; queue limits including the
+**quota concurrency regression**; all-or-nothing admission with crawler bisection; `unsupported_version`
+and `record_too_large` quarantine; queue-full shutdown with a full local queue and in-flight leeches;
+graceful and ungraceful shutdown; advisory-lock ownership. Disposable PostgreSQL only
+(`internal/pgtest`, `MAGNETICO_TEST_POSTGRES_DSN`); no production connections.
+
+## 13. Decision matrices
+
+### 13.1 Crawler queue backend (workload: append, FIFO read, delete after ack, payloads 0.3 KB–10 MB)
+
+| Criterion | **SQLite WAL** | bbolt | Pebble | Badger | Redis Streams |
+|---|---|---|---|---|---|
+| Extra infrastructure | none | none | none | none | **server required** |
+| Durable commit before ack | `synchronous=FULL` | fsync per txn | WAL sync option | `SyncWrites` | AOF `always` / `WAITAOF` |
+| Crash recovery | WAL recovery, mature | copy-on-write, good | WAL replay | WAL replay | AOF replay |
+| Concurrent reader/writer | 1 writer + readers (WAL) | 1 writer, readers OK | yes | yes | yes |
+| Delete-heavy FIFO | freelist reuse, `incremental_vacuum` | file never shrinks without offline compaction | tombstones + compaction | value-log GC | `XDEL`/`XTRIM` |
+| Large values (MBs) | overflow pages, fine | poor (page-oriented) | OK | value log | memory-resident |
+| Dedup by infohash | `UNIQUE` index | manual | manual | manual | manual |
+| Format versioning | `user_version` | manual | manual | manual | manual |
+| Inspectability | `sqlite3` CLI | limited | limited | limited | redis-cli |
+| Dependency footprint | large (pure-Go driver) | small | large | large | external service |
+| Disk-full behaviour | clear `SQLITE_FULL`, committed data safe | ENOSPC mid-commit, reopen safe | compaction can fail | GC can fail | AOF stops / errors |
+
+**Recommendation: SQLite WAL** (owner preference; no material objection found). bbolt is the runner-up.
+Pebble/Badger are rejected for a delete-heavy FIFO. Acceptance criteria are in the plan (M2): crash-kill
+with no lost committed row, byte quota never exceeded, WAL ≤ configured size, file shrinks after
+`incremental_vacuum`, sustained 100 records/s group-committed on the dev machine.
+
+### 13.2 Server queue
+
+| Option | Verdict |
+|---|---|
+| **PostgreSQL tables (chosen)** | Already a hard dependency; one durability domain; transactional quota, quarantine and ack; 503 on outage is accepted. |
+| SQLite on the ingest host | Rejected by the owner: a second storage system without sufficient benefit; adds WAL/vacuum maintenance. |
+| Redis Streams | Not chosen (extra infrastructure). If ever used: HTTP 202 must follow `XADD` + `WAITAOF 1 0 <timeout>` (or `appendfsync always`); `XADD` success alone is **not** evidence of fsync; a `WAITAOF` timeout is ambiguous (the client resends); consumer groups need `XAUTOCLAIM` recovery of pending entries; `XACK` only after the PostgreSQL commit; `XTRIM MINID` only below the oldest unacked ID. |
+
+### 13.3 Cache
+
+| Option | Verdict |
+|---|---|
+| **TTL-LRU, split positive/negative expiry (chosen)** | Simple, bounded, predictable memory; fits append-only data. |
+| TinyLFU / W-TinyLFU | Possibly better hit rate on skewed traffic; extra complexity and dependency. Post-release comparison using production-observed traffic. |
+
+## 14. Post-release enhancements (not 0.8.0)
+
+Cache-algorithm comparison; pending-hash lookup; adaptive backpressure and queue-filling policies;
+queue compression (via record `format`); alternative queue backends; concurrent consumers (`FOR UPDATE
+SKIP LOCKED`; separate issue); DHT buffering redesign (separate issue); quarantine CLI; `/metrics`
+listener (0.8.0 logs a periodic counter summary every 5 min); token rotation; parser optimisation
+(separate issue); benchmark scenarios (queue throughput by payload class, cache hit rate vs budget,
+`AddTorrent` throughput vs consumer count).
+
+## 15. Open decisions for owner confirmation (conservative recommendations)
+
+| # | Decision | Recommendation |
+|---|---|---|
+| O-1 | SQLite driver | `modernc.org/sqlite` (alternatives: `ncruces/go-sqlite3`, CGO `mattn`) |
+| O-2 | New command / schema command names | `magnetico ingest`, `magnetico migrate ingest-schema-init`, `magnetico crawl check-queue` |
+| O-3 | Additive `Store.ExistingInfoHashes` (persistence contract addition, no existing method changes) | approve |
+| O-4 | Defaults: crawler queue 1 GiB, server queue 2 GiB, cache 8 MiB, negative TTL 20 s, leeches 32, submit concurrency 8, `MaxRecordBytes` 16 MiB | approve |
+| O-5 | Stale crawl `databaseURL` config | hard error |
+| O-6 | New `--leech-max-active` rather than redefining `LeechMaxN` | approve |
+| O-7 | Single token, no rotation | approve |
+| O-8 | `fsync=off` refused unless explicit dev override | approve |
+| O-9 | Legacy unused `persistence.Database` interface | leave untouched |
+| O-10 | Ingest refuses to start during an incomplete import | approve |
+| O-11 | `/metrics` listener | defer; periodic log summary |
+| O-12 | Quarantine retention | operator-managed in 0.8.0, no automatic expiry |
+
+## 16. Dependency and removal map (old direct-PostgreSQL crawler)
+
+| Where | Dependency | Fate |
+|---|---|---|
+| `main.go` `runCrawl`: `persistence.MakeDatabase` | crawler opens PG, schema verification | removed from `crawl`; used by `ingest` |
+| `main.go`: `store.DoesTorrentExist` per DHT result | synchronous PG round trip | replaced by the batched `/exists` call |
+| `main.go`: `store.AddTorrent` per drained record | direct write | SQLite enqueue → HTTP → PG queue → consumer → `AddTorrent` |
+| `main.go`: `torrentFromMetadata` | size guard | moved to the record package |
+| `main.go`: `dropInvalidRecord`, `stats.IncDBError` | metrics | invalid-record path stays; DB-error counter replaced by delivery counters |
+| `opflags.CrawlOptions.DatabaseURL` and its env/yaml keys | config | removed; documented in `UPGRADE.md` |
+| `metadata/sink.go` → `persistence` | type alias `File` only | kept; no runtime DB access |
+| `persistence.ValidateIngest` | validation | reused by crawler and ingest |
+| `persistence.Database` (legacy interface) | unused | untouched (O-9) |
+
+## 17. Upstream review (imported `f8066065…` → upstream HEAD `35f22146…`)
+
+| Upstream | Finding | Class |
+|---|---|---|
+| `5092b922` dht: drain swapped output channels | our copy has the unclosed-range deadlock and unlocked read | **Port in Task 06** (adapt + tests) |
+| `1a0ed4b1` metadata: address policy for first peer | first peer bypasses `isAllowed` in our copy | **Port in Task 06** |
+| `43e62e3a` dht: sample slicing `[i*20:(i+1)*20]` | still wrong in our copy | **Port in Task 06** |
+| `b999eec7` routingTable.dump counter | cap never applies in our copy | **Port in Task 06** |
+| `93c5b03a` metadata piece-index bounds | already stricter in our `applyMetadataPiece` | Skip |
+| `3b69869a`, `4bc0471c`, `fc91ebed` linear file-tree parsing, bencode perf | optimisation | Follow-up issue |
+| `c98cd81a`, `700a6934` piece layers, BuildFromFilePath | not on the crawler path | Skip |
+
+No upstream history is merged and no commit is cherry-picked wholesale.
