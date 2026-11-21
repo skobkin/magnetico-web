@@ -1,4 +1,7 @@
-# Task 06 — Implementation plan (Task 06A deliverable, awaiting owner review)
+# Task 06 — Implementation plan (Task 06A deliverable)
+
+**Status:** M0–M2 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M3 in progress, M4–M7 not
+started.
 
 Design: [`docs/specs/crawler-ingest-delivery-v1.md`](../specs/crawler-ingest-delivery-v1.md) (draft).
 **No milestone below may start before the owner approves the specification.** Each milestone is
@@ -84,7 +87,9 @@ Tests (disposable PG):
 the §5.5 timeouts and limits, bearer authentication, `/exists` (dedupe → cache → in-flight join → batched
 lookup, `unknown` on error), `/torrents`, `busy` semaphore, graceful shutdown, periodic counter summary.
 Tests: missing/wrong/short token, no token in logs, errors or panics (log capture); 400/405/413/415 paths;
-exact rejection code per §5.3 table (1 vs > 1 record, oversize record vs oversize body, precedence);
+exact rejection code per §5.3 table (1 vs > 1 record, oversize record vs oversize body, precedence), with the
+record-specific codes (`invalid_record`, `unsupported_version`, `record_too_large`) returned only for
+single-record requests as `application/json` error bodies;
 202 response with `{"accepted":n}` body; nothing written on any rejection;
 batch and body limits; `unknown` never reported as `missing`; 503 `storage_unavailable` while PG is down and
 recovery afterwards; shutdown with in-flight requests; concurrent identical misses collapse to one lookup.
@@ -97,18 +102,28 @@ recovery afterwards; shutdown with in-flight requests; concurrent identical miss
   sender (§5.4 table incl. bisection and quarantine), admission gate, counters.
 - Rewire `runCrawl`; remove `persistence.MakeDatabase`, `DatabaseURL` and its env/yaml keys; add
   `UPGRADE.md`/README notes.
-Tests: client classification table; bisection quarantines exactly the bad record while the rest are delivered,
-at depth 1 and at maximum depth, with the bad record at head, middle and tail; a crash during bisection
-leaves quarantined rows quarantined and restarts the rest from the head; single-record `invalid_record`,
-`unsupported_version`, `invalid_request` and 413 each quarantine with payload byte-identical, reason and
-HTTP status, and the next record is delivered; a permanently oversized record is never retried
-indefinitely (413 single → quarantine; 413 multi → bisect); the systemic-failure guard stops quarantining
-after 8 consecutive 400/413 and retains records; 202 with empty, garbled or mismatched body still
-acknowledges, while 200/204 do not; `record_too_large` quarantined at enqueue, never sent
-or truncated; lost 202 → resend → no duplicate; 401 keeps rows; fail-open fills the queue to the limit then
-stops admitting; **queue-full shutdown**: full SQLite queue + ≥ 8 fake in-flight leeches → SIGTERM exits within
-the grace period, committed rows unchanged, dropped counters match, no panic; Sink tests under `-race`
-(no send on closed channel, no leaked goroutines); a stale `databaseURL`/`MAGNETICO_CRAWL_DATABASE` is rejected.
+Tests: client classification table (recognised record-specific errors vs everything else, per §5.3/§5.4);
+bisection quarantines exactly the bad record while the rest are delivered, at depth 1 and at maximum
+depth, with the bad record at head, middle and tail; a crash during bisection leaves quarantined rows
+quarantined and restarts the rest from the head; a single-record `invalid_record`, `unsupported_version`
+or `record_too_large` response (well-formed ingest error body) quarantines with payload byte-identical,
+reason and HTTP status, and the next record is delivered; **unrecognised rejections never quarantine**:
+a single-record `invalid_request`, `payload_too_large`, an unknown code, a malformed/empty/non-JSON body,
+and a proxy-style 413/400 (HTML, plain text, foreign JSON) keep the record, back off, bump the
+`crawl_send_unrecognised_rejections` counter and log the throttled diagnostic (status, content type,
+envelope parsed or not, record count, ≤ 200 sanitised body bytes, no token or record contents); a
+multi-record 413/400 from a proxy is bisected and then, at one record, kept; a permanently oversized
+record is never retried indefinitely (local `record_too_large` → quarantine at enqueue; server
+`record_too_large` for one record → quarantine; 413 multi → bisect); the systemic-failure guard stops
+quarantining after 8 consecutive recognised record errors and retains records; 202 with empty, garbled or
+mismatched body still acknowledges, while 200/204 do not; `record_too_large` quarantined at enqueue,
+never sent or truncated; lost 202 → resend → no duplicate; 401 keeps rows; fail-open fills the queue to
+the limit then stops admitting; **queue-full shutdown**: full SQLite queue + ≥ 8 fake in-flight leeches →
+SIGTERM exits within the grace period, committed rows unchanged, dropped counters match, no panic; Sink
+tests under `-race` (no send on closed channel, no leaked goroutines); a stale
+`databaseURL`/`MAGNETICO_CRAWL_DATABASE` is rejected.
+`crawl check-queue` (the `crawlqueue.Check` diagnostic, delivered as a library in M2) is wired to the CLI
+here, together with the queue directory option.
 
 ## M7 — End-to-end fault injection and release readiness
 

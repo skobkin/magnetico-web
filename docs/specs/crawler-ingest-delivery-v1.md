@@ -101,22 +101,33 @@ headroom beyond the quota; a full disk surfaces as `SQLITE_FULL`.
 
 ```sql
 queue(id INTEGER PRIMARY KEY AUTOINCREMENT, info_hash BLOB NOT NULL UNIQUE, format INTEGER NOT NULL,
-      payload BLOB NOT NULL, payload_bytes INTEGER NOT NULL, enqueued_at INTEGER NOT NULL);
+      payload_bytes INTEGER NOT NULL, enqueued_at INTEGER NOT NULL, payload BLOB NOT NULL);
 quarantine(id INTEGER PRIMARY KEY AUTOINCREMENT, info_hash BLOB NOT NULL, format INTEGER NOT NULL,
-      payload BLOB NOT NULL, payload_bytes INTEGER NOT NULL, reason_code TEXT NOT NULL,
-      http_status INTEGER, quarantined_at INTEGER NOT NULL);
+      payload_bytes INTEGER NOT NULL, reason_code TEXT NOT NULL, http_status INTEGER,
+      quarantined_at INTEGER NOT NULL, payload BLOB NOT NULL);
 ```
+
+`payload` is deliberately the **last** column: SQLite reads a record's columns in order, so scans that
+need only `payload_bytes` (counters at open, `Peek` size planning) never follow the payload's
+overflow-page chain. `enqueued_at` and `quarantined_at` are Unix nanoseconds.
 
 `INSERT … ON CONFLICT(info_hash) DO NOTHING` removes local duplicates (queue dedupe only, not an
 existence answer).
 
-**Concurrency.** One writer goroutine with group commit (≤ 64 records or ≤ 50 ms); short read
+**Concurrency.** One writer goroutine with group commit: a group holds ≤ 64 records and, optionally,
+lingers ≤ 50 ms for more. The default is **no linger** (measured in M2: a lone producer was limited to
+~19 records/s by the 50 ms wait, versus ~600 records/s without it): the writer commits what is already
+waiting, and groups still form while the previous commit's fsync runs (30–60 records per group with 64
+concurrent producers). Ack, quarantine and maintenance run on the same goroutine; short read
 transactions. An exclusive `flock` on the queue directory allows one crawler per queue. Periodic
 `wal_checkpoint(TRUNCATE)`; `incremental_vacuum` when the freelist exceeds a threshold (file size is
 otherwise the high-water mark).
 
 **Startup.** Normal SQLite WAL recovery only — **no unconditional integrity scan**. The optional
-diagnostic `magnetico crawl check-queue` runs `quick_check`/`integrity_check` and prints counts.
+diagnostic `magnetico crawl check-queue` runs `quick_check`/`integrity_check` and prints counts. It
+takes the directory lock (so it refuses to run against a live crawler), opens the database read-only
+and never repairs anything. M2 delivers it as the library function `crawlqueue.Check`; the CLI wiring
+lands in M6 together with the queue-directory option.
 Corruption is never repaired or deleted automatically.
 
 **Capacity.** `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` (default 1 GiB) bounds `SUM(payload_bytes)` of
@@ -197,23 +208,32 @@ that a permanently invalid record is always identified individually:
 | Request | Failure | Status / code |
 |---|---|---|
 | > 1 record | any item fails validation | `400 invalid_batch` (diagnostic item indexes/codes only) |
-| > 1 record | any item exceeds `MaxRecordBytes`, or body > 17 MiB | `413 payload_too_large` |
+| > 1 record | any item exceeds `MaxRecordBytes` | `413 payload_too_large` |
 | exactly 1 record | unknown `v` | `400 unsupported_version` |
 | exactly 1 record | record fails strict decode or `ValidateIngest` | `400 invalid_record` |
-| exactly 1 record | record exceeds `MaxRecordBytes`, or body > 17 MiB | `413 record_too_large` |
+| exactly 1 record | the record exceeds `MaxRecordBytes` | `413 record_too_large` |
+| any | request body > 17 MiB (the record count is unknown when reading stops) | `413 payload_too_large` |
 | any | envelope itself malformed (not JSON, missing `records`, > 256 records) | `400 invalid_request` |
 
 Precedence for a single record: `unsupported_version` > `record_too_large` > `invalid_record`. For a
 multi-record request, 413 wins over 400 when both kinds of failure are present. `413` is also what
 `http.MaxBytesReader` yields when the body limit is exceeded.
 
+**Record-specific codes.** Exactly three codes blame one record and are the only evidence on which the
+crawler quarantines automatically: `invalid_record`, `unsupported_version` and `record_too_large`, each
+returned for a request that contained exactly one record, as the documented JSON error body
+(`Content-Type: application/json`, `{"error":{"code":…}}`). Everything else — `invalid_request`,
+`invalid_batch`, `payload_too_large`, any other code, and any 400/413 that is not a well-formed ingest
+error body (for example a reverse proxy's own 413 page) — says nothing about the record's content.
+
 ### 5.4 Client behaviour (deterministic)
 
 | Response | Action |
 |---|---|
 | Status 202 (body ignored) | delete every row of the request |
-| 400 (any code) or 413 (any code), request has > 1 record | **bisect**: resubmit each half as its own request, recursively (≤ 8 levels for 256 records) |
-| 400 `invalid_record`, `unsupported_version`, or `invalid_request`, or 413 (any code), request has exactly 1 record | **permanent per-record failure**: move that record to **local quarantine** (payload preserved byte-for-byte) with reason = the server's code (`payload_too_large` is recorded as `record_too_large`) and the HTTP status; continue with the next record |
+| 400 or 413 (any body), request has > 1 record | **bisect**: resubmit each half as its own request, recursively (≤ 8 levels for 256 records). Splitting is always safe, so it does not depend on recognising the response |
+| 400 `invalid_record` / `unsupported_version`, or 413 `record_too_large` — **recognised record-specific error** (§5.3) — request has exactly 1 record | **permanent per-record failure**: move that record to **local quarantine** (payload preserved byte-for-byte) with reason = the server's code and the HTTP status; continue with the next record |
+| Any other 400 or 413 on exactly 1 record: `invalid_request`, `payload_too_large`, an unknown code, a malformed/empty/non-JSON body, an HTML page from a proxy | **unrecognised rejection**: the record is **kept** (never quarantined), the sender backs off (60 s) and emits an actionable diagnostic (below); it retries after the backoff |
 | Retryable result (5xx, 429, timeout, reset) during a bisect | abort the bisect, back off, restart from the head of the queue |
 | Any other status, timeout, connection reset, 2xx other than 202 | **ambiguous / not acknowledged**: keep rows and resend later (safe: idempotent) |
 | 401 / 403 | keep rows, long backoff, loud throttled log |
@@ -221,14 +241,25 @@ multi-record request, 413 wins over 400 when both kinds of failure are present. 
 Properties: (a) a permanently invalid record is always isolated by bisection to a single-record request,
 where the server's code is specific, so the same rule applies at any recursion depth; (b) quarantine is
 durable (one SQLite transaction moves the row), so after a crash during a bisect the already-quarantined
-records are not retried and the remaining records restart from the head; (c) the head of the FIFO is
-never retried indefinitely for a permanent failure; (d) a single-record request is only quarantined for
-the codes above, never for 401/403/429/5xx/timeouts.
+records are not retried and the remaining records restart from the head; (c) a record is quarantined only
+on a recognised, record-specific application error from ingest — a generic `400 invalid_request`, a
+reverse proxy's 413, or any unknown or malformed response proves nothing about the record and never
+quarantines it, so a misconfigured proxy or an incompatible server cannot move good records out of the
+queue; (d) a single-record request is never quarantined for 401/403/429/5xx/timeouts.
 
-**Systemic-failure guard.** If ≥ 8 consecutive records are quarantined by 400/413 responses without an
-intervening 202, the sender stops quarantining, backs off (60 s) and logs loudly (a misconfigured proxy or
-server would otherwise empty the queue into quarantine; records are retained either way). Quarantined
-records can be returned to the queue by an operator after the cause is fixed (SQL documented; CLI is
+**Diagnostics for unrecognised rejections.** One throttled (≤ 1 per minute) log line carries: HTTP status,
+`Content-Type`, whether the body parsed as the ingest error envelope, the error code if any, the number of
+records in the request, and at most 200 printable bytes of the body with control characters replaced
+(never the request, the token or record contents), plus the hint "the server or a proxy in front of it
+rejected a request the crawler believes is valid: check the ingest version, `client_max_body_size`-style
+proxy limits and the TLS terminator". A counter `crawl_send_unrecognised_rejections` is exported with the
+other delivery counters.
+
+**Systemic-failure guard.** If ≥ 8 consecutive records are quarantined by recognised record-specific
+errors without an intervening 202, the sender stops quarantining, backs off (60 s) and logs loudly (a
+server that is wrong about every record — for example after a deploy with a different `MaxRecordBytes` —
+would otherwise empty the queue into quarantine; records are retained either way). Quarantined records
+can be returned to the queue by an operator after the cause is fixed (SQL documented; CLI is
 post-release).
 
 Timeouts: exists 10 s, submit 60 s. Backoff 1 s → 60 s with full jitter. A lost 202 after a durable
@@ -397,13 +428,36 @@ torrent mean 35.7, p50 3, p90 34, p99 495, max 123,480. **Estimated** record JSO
 p99 ≈ 41 KB, p99.9 ≈ 394 KB, p99.99 ≈ 1.7 MB, max ≈ 9.3 MB. Bencoded metadata is capped at 10 MiB by
 the leech; its JSON size is not derivable from that cap and is governed solely by `MaxRecordBytes`.
 
-**Estimated** SQLite size ≈ 1.25 × payload + ~100 B/row (to be measured in M2):
+**Measured (M2, this machine: AMD Ryzen 7 4800HS, btrfs on LUKS/NVMe, SQLite 3.54.1 via
+`modernc.org/sqlite` v1.61.0, 4 KiB pages, `synchronous=FULL`).** Database file size relative to payload
+bytes after the WAL was reset (`wal_checkpoint(TRUNCATE)`), and the WAL before any checkpoint:
 
-| Depth | p50 (350 B) | mean (3.1 KB) | p99 (41 KB) | worst (~10 MiB) |
+| Payload class | records | db+wal / payload after TRUNCATE | per-row overhead | WAL before checkpoint |
 |---|---|---|---|---|
-| 10,000 | ~5 MB | ~40 MB | ~0.5 GB | ~100+ GB |
-| 100,000 | ~55 MB | ~0.4 GB | ~5 GB | — |
-| 1,000,000 | ~0.55 GB | ~3.9 GB | ~52 GB | — |
+| p50 ≈ 350 B | 4,000 | 1.28 | ~97 B | ~4.1 MB (≈ autocheckpoint) |
+| mean ≈ 3.1 KB | 4,000 | 1.34 | ~1,047 B (page-packing waste: one ~3.1 KB row per 4 KiB page) | ~4.3 MB |
+| p99 ≈ 41 KB | 800 | 1.014 | ~580 B | ~5.7 MB |
+| p99.9 ≈ 394 KB | 120 | 1.003 | ~1,264 B | ~25 MB (one 64-record group of large rows) |
+
+So the practical ratio is **1.0–1.35 × payload** (the earlier 1.25 × estimate holds for small records
+and is pessimistic for large ones); the quota counts payload bytes only, so provision ≥ 1.4 × the
+quota plus a few tens of MB of WAL headroom. Capacity examples at that ratio:
+
+| Depth | p50 (350 B) | mean (3.1 KB) | p99 (41 KB) |
+|---|---|---|---|
+| 10,000 | ~4.5 MB | ~42 MB | ~0.4 GB |
+| 100,000 | ~45 MB | ~0.42 GB | ~4.2 GB |
+| 1,000,000 | ~0.45 GB | ~4.2 GB | ~42 GB |
+
+(The 1 GiB default quota therefore holds ~2.4 M p50 records, ~0.3 M mean-sized records, or ~25 k p99
+records.)
+
+**Measured queue throughput (reported, not a gate)**, records/s with 1 / 8 / 64 concurrent producers:
+p50 626 / 2,347 / 14,894; mean 569 / 2,242 / 10,447; p99 542 / 1,427 / 3,203; p99.9 231 / 402 / 512.
+Average group size 1.0 / 4.0 / ~32 records; commit (BEGIN…COMMIT incl. fsync) 1.6–2.2 ms for small
+records, 10 ms at p99 and 58 ms at p99.9 with 64 producers. Peek(256, 8 MiB) + Ack drain of 3.1 KB
+records: ~19,000 records/s. The expected production load (10–50 torrents/s) is two to three orders of
+magnitude below these figures.
 
 Infohash-only pending rows (not used by this design): ~80–100 B/row → 1 M ≈ 100 MB. PostgreSQL queue:
 similar payload plus 23 B tuple header, the unique index, and TOAST (pglz may shrink large rows); its WAL is
@@ -424,7 +478,9 @@ restart and PostgreSQL outage (503, crawler retains); duplicate infohashes and d
 HTTP acknowledgment after durable enqueue; process crashes before/after each acknowledgment; partial and
 malformed batches; token authentication and secret leakage; cache staleness; queue limits including the
 **quota concurrency regression**; all-or-nothing admission with crawler bisection; `unsupported_version`
-and `record_too_large` quarantine (including after recursive bisection and for 413 responses);
+and `record_too_large` quarantine (including after recursive bisection), **and no quarantine on
+unrecognised rejections** (`invalid_request`, proxy 413/400, malformed bodies: record kept, backoff,
+diagnostics);
 202 acknowledgment independent of the response body; queue-full shutdown with a full local queue and in-flight leeches;
 graceful and ungraceful shutdown; advisory-lock ownership. Disposable PostgreSQL only
 (`internal/pgtest`, `MAGNETICO_TEST_POSTGRES_DSN`); no production connections.
