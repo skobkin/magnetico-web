@@ -2,9 +2,19 @@
 # https://frankenphp.dev/docs/docker/
 FROM dunglas/frankenphp:1-php8.5-alpine
 
-# CVE-2026-109618 / CVE-2026-109619: refuse to build on unpatched PHP.
+# PHP 8.5.13 (2026-11-19 security batch): refuse to build on unpatched PHP.
+# Fixes CVE-2026-109618 / CVE-2026-109619 (2026-10-21) and multiple critical
+# UAF/RCE advisories (GHSA-gr4f-wgx5-jpfv, GHSA-8mjj-2r7p-4hg2, GHSA-2fjv-p558-g82m,
+# GHSA-g3vh-838c-65v7, GHSA-fm2m-fjf5-v3cp).
 # Raise/remove deliberately when superseded by a newer security floor.
-RUN php -r 'if (version_compare(PHP_VERSION, "8.5.12", "<")) { fwrite(STDERR, "base image ships vulnerable PHP ".PHP_VERSION." (< 8.5.12, CVE-2026-109618/109619)\n"); exit(1); }'
+RUN php -r 'if (version_compare(PHP_VERSION, "8.5.13", "<")) { fwrite(STDERR, "base image ships vulnerable PHP ".PHP_VERSION." (< 8.5.13, 2026-11-19 security batch)\n"); exit(1); }'
+
+# FrankenPHP < 1.13.6: refuse to build. All earlier releases embed a PHP without
+# the security fixes published 2026-11-19 (1.13.6 ships PHP 8.5.13); see the
+# php/frankenphp v1.13.6 release notes.
+# Raise/remove deliberately when superseded by a newer security floor.
+RUN FRANKENPHP_DETECTED_VERSION="$(frankenphp -v | sed -En 's/^FrankenPHP v([0-9]+\.[0-9]+\.[0-9]+).*/\1/p')" && \
+    php -r 'if (version_compare($argv[1] ?? "", "1.13.6", "<")) { fwrite(STDERR, "base image ships vulnerable FrankenPHP ".($argv[1] !== "" ? $argv[1] : "of unknown version")." (< 1.13.6)\n"); exit(1); }' "$FRANKENPHP_DETECTED_VERSION"
 
 ENV PHP_TIMEZONE Europe/Moscow
 ENV APP_ENV=prod

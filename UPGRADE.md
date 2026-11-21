@@ -4,6 +4,38 @@ User-facing and breaking changes that require action when deploying a new versio
 Entries are grouped by release date. Read the section covering your current version
 before upgrading.
 
+## 2026-11-21 (unreleased)
+
+### FrankenPHP security floor: 1.13.6 (critical PHP fixes published 2026-11-19)
+
+The Docker image is now built on FrankenPHP >= 1.13.6 and **refuses to build** on
+an older base image. Every FrankenPHP release before 1.13.6 embeds a PHP without
+the security fixes published 2026-11-19 (the most severe is rated critical by the
+PHP project; 1.13.6 ships PHP 8.5.13) — see the
+[php/frankenphp v1.13.6 release notes](https://github.com/php/frankenphp/releases/tag/v1.13.6).
+
+Rebuild the image from a freshly pulled base image (`docker build --pull` or
+`docker compose build --pull`) — a cached `dunglas/frankenphp:1-php8.5-alpine`
+can be months old and will now be rejected by the build on purpose. If you run
+the app outside Docker, run PHP >= 8.5.13 (or 8.4.28+/8.3.37+/8.2.36+ on older
+branches) and update immediately.
+
+### PHP security floor raised: 8.5.13 (2026-11-19 security batch)
+
+The PHP security floor in the Docker build was raised from 8.5.12 to **8.5.13**
+(released 2026-11-19 as 8.5.13 / 8.4.28 / 8.3.37 / 8.2.36 — see the
+[PHP news archive](https://www.php.net/archive/2026.php)). The release fixes
+multiple critical use-after-free vulnerabilities that can lead to remote code
+execution (timezone cache, magic method backtraces, interrupted session
+shutdown, partially overwritten session files — advisories `GHSA-gr4f-wgx5-jpfv`,
+`GHSA-8mjj-2r7p-4hg2`, `GHSA-2fjv-p558-g82m`, `GHSA-g3vh-838c-65v7`,
+`GHSA-fm2m-fjf5-v3cp` on the
+[php-src security advisories page](https://github.com/php/php-src/security/advisories)),
+in addition to the October critical RCE fixes (CVE-2026-109618/109619). The
+build now **refuses** any base image with PHP < 8.5.13. If you run the app
+outside Docker, update to PHP 8.5.13+ (or the matching patch version on older
+branches) immediately.
+
 ## 2026-10-21 0.7.0
 
 ### PHP 8.5 required

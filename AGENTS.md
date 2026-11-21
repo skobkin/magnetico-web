@@ -77,10 +77,13 @@ record purely internal refactors there.
 
 ## Known constraints
 
-- The Dockerfile enforces a PHP security floor (currently **8.5.12**, the fix for
-  CVE-2026-109618/109619): a build on an unpatched base image fails on purpose.
-  Raise it deliberately when a newer patch fixes a critical CVE; never bypass the
-  check.
+- The Dockerfile enforces deliberate security floors — a build on an older base
+  image fails on purpose. Raise them deliberately when a newer release fixes a
+  critical CVE; never bypass the checks:
+  - PHP >= **8.5.13** (fixes CVE-2026-109618/109619 and the 2026-11-19 security
+    batch — multiple critical UAF/RCE advisories).
+  - FrankenPHP >= **1.13.6** (earlier releases embed a PHP without the security
+    fixes published 2026-11-19).
 
 - `predis/predis` is deliberately held on **2.x**: `symfony/cache`'s Redis
   adapter (used by the `magneticod.cache` pool) doesn't declare predis 3
