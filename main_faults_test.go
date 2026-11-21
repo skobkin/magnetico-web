@@ -70,15 +70,41 @@ const faultRedactedMark = "xxxxx"
 // wherever the URL appears — argv entries and captured process output.
 var faultURLPasswordRe = regexp.MustCompile(`(postgres(?:ql)?://[^:/@?#\s]+:)[^@?#\s]+(@)`)
 
-// faultKeywordPasswordRe masks libpq keyword-style passwords, including a
-// password= query parameter inside a URL.
-var faultKeywordPasswordRe = regexp.MustCompile(`(?i)\b(password=)[^\s&]+`)
+// faultQuotedKeywordPasswordRe masks a single-quoted libpq keyword password,
+// whose value may span whitespace and carry backslash-escaped characters
+// (\' for a literal quote). It must run before faultKeywordPasswordRe so the
+// whole quoted value is consumed up to its closing quote — the bare rule
+// would otherwise stop at the first space and leak the rest.
+var faultQuotedKeywordPasswordRe = regexp.MustCompile(`(?i)\b(password=)'(?:[^'\\]|\\.)*'`)
+
+// faultKeywordPasswordRe masks bare libpq keyword-style passwords, including
+// a password= query parameter inside a URL. A leading quote is excluded so a
+// value already masked by the quoted rule is left intact.
+var faultKeywordPasswordRe = regexp.MustCompile(`(?i)\b(password=)[^\s&']+`)
 
 // redactDSN replaces credential material (URL userinfo password, libpq
-// keyword password) with a fixed marker. Non-DSN input is returned unchanged.
+// keyword password — bare or single-quoted) with a fixed marker. Non-DSN
+// input is returned unchanged.
 func redactDSN(s string) string {
 	s = faultURLPasswordRe.ReplaceAllString(s, "${1}"+faultRedactedMark+"${2}")
+	s = faultQuotedKeywordPasswordRe.ReplaceAllString(s, "${1}'"+faultRedactedMark+"'")
 	s = faultKeywordPasswordRe.ReplaceAllString(s, "${1}"+faultRedactedMark)
+	return s
+}
+
+// faultScrubSecrets returns s with every secret replaced by a display-only
+// marker, for safe inclusion in failure diagnostics: an assertion that
+// reports a leaked credential must never echo that credential itself. The
+// marker is deliberately distinct from faultRedactedMark so a scrubbed
+// diagnostic cannot be mistaken for a successfully redacted log line.
+// Callers pass longer secrets first: scrubbing a password out of a full DSN
+// would leave that DSN unmatchable for the later, shorter password secret.
+func faultScrubSecrets(s string, secrets ...string) string {
+	for _, sec := range secrets {
+		if sec != "" {
+			s = strings.ReplaceAll(s, sec, "<scrubbed>")
+		}
+	}
 	return s
 }
 
@@ -508,6 +534,21 @@ func (p *commitCutProxy) dumpLogs() {
 	}
 }
 
+// logContains reports whether any recorded proxy log line contains sub. It
+// is the reader half of the atomic publication contract with cutDone():
+// both read p.mu, so once cutDone() is observed true the interception's
+// evidence record is guaranteed to be observable.
+func (p *commitCutProxy) logContains(sub string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, l := range p.logs {
+		if strings.Contains(l, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 // appendLog records an evidence line. It takes p.mu itself: call it only
 // WITHOUT the lock held (arm uses appendLogLocked to stay non-recursive).
 func (p *commitCutProxy) appendLog(format string, args ...any) {
@@ -738,10 +779,15 @@ func (p *commitCutProxy) intercept(up net.Conn, f proxyFrame, serverFrames <-cha
 	p.preCommitCheckpoint = pre
 	p.postCommitCheckpoint = post
 	p.commitTag = tag
-	p.mu.Unlock()
-	p.appendLog("intercepted COMMIT: CommandComplete %q + ReadyForQuery consumed (commit durable); "+
+	// Atomic publication: the evidence record joins cut=true in the SAME
+	// critical section, so any reader that observes cutDone()==true must
+	// also observe this line (all log readers share p.mu). Appending it
+	// after the unlock would leave a window where the cut is visible but
+	// the evidence behind it is not.
+	p.appendLogLocked("intercepted COMMIT: CommandComplete %q + ReadyForQuery consumed (commit durable); "+
 		"checkpoint %d -> %d across the intercepted transaction; client ack withheld, connection severed",
 		tag, pre, post)
+	p.mu.Unlock()
 }
 
 // pgErrorSummary renders the SQLSTATE and message fields of a PostgreSQL
@@ -775,7 +821,7 @@ func proxyTargetDSN(t *testing.T, dsn, proxyAddr string) string {
 	t.Helper()
 	u, err := url.Parse(dsn)
 	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
+		t.Fatalf("parse dsn: %v", redactDSN(err.Error()))
 	}
 	u.Host = proxyAddr
 	q := u.Query()
@@ -828,6 +874,12 @@ func TestFaultLostCommitAckRecoversInProcess(t *testing.T) {
 		proxy.dumpLogs()
 		t.Fatalf("NOT EXERCISED: the armed COMMIT interception never fired")
 	}
+	// Atomic publication pinned: cutDone()==true must imply the matching
+	// evidence record is already observable — both are published under one
+	// critical section (see intercept).
+	if !proxy.logContains("intercepted COMMIT") {
+		t.Fatalf("cutDone() observed true, but the interception evidence record is not published")
+	}
 
 	// Durability pinned to the intercepted transaction: the proxy read the
 	// authoritative checkpoint directly from the database immediately before
@@ -860,7 +912,7 @@ func faultAdminDSN(t *testing.T, dsn string) string {
 	t.Helper()
 	u, err := url.Parse(dsn)
 	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
+		t.Fatalf("parse dsn: %v", redactDSN(err.Error()))
 	}
 	u.Path = "/postgres"
 	return u.String()
@@ -870,7 +922,7 @@ func faultDBName(t *testing.T, dsn string) string {
 	t.Helper()
 	u, err := url.Parse(dsn)
 	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
+		t.Fatalf("parse dsn: %v", redactDSN(err.Error()))
 	}
 	return strings.TrimPrefix(u.Path, "/")
 }
@@ -1295,7 +1347,7 @@ func TestImportWithReadOnlySourceRole(t *testing.T) {
 	defer cancel()
 	conn, err := pgx.Connect(ctx, restrictedDSN)
 	if err != nil {
-		t.Fatalf("connect as %s: %v", role, err)
+		t.Fatalf("connect as %s: %v", role, redactDSN(err.Error()))
 	}
 	_, err = conn.Exec(ctx, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
         VALUES (1, decode(lpad(to_hex(1), 40, '0'), 'hex'), 'x', 1, 1)`)
@@ -1370,6 +1422,14 @@ func TestRedactDSNCredentials(t *testing.T) {
 			"MAGNETICO_MIGRATION_SOURCE_DSN=postgres://u:" + faultRedactedMark + "@h/db"},
 		{"keyword form", "host=127.0.0.1 user=mig password=" + pw + " dbname=db",
 			"host=127.0.0.1 user=mig password=" + faultRedactedMark + " dbname=db"},
+		{"quoted keyword password with spaces", "host=db password='" + pw + " extra words' user=mig dbname=d",
+			"host=db password='" + faultRedactedMark + "' user=mig dbname=d"},
+		{"quoted keyword password with escaped quote", "password='it\\'s " + pw + "' host=db",
+			"password='" + faultRedactedMark + "' host=db"},
+		{"quoted empty keyword password", "host=db password='' user=m",
+			"host=db password='" + faultRedactedMark + "' user=m"},
+		{"quoted and bare keyword passwords", "password='" + pw + " hidden' password=" + pw,
+			"password='" + faultRedactedMark + "' password=" + faultRedactedMark},
 		{"query parameter", "postgres://h/db?password=" + pw + "&sslmode=disable",
 			"postgres://h/db?password=" + faultRedactedMark + "&sslmode=disable"},
 		{"percent-encoded password", "postgres://u:s3cr%3At" + pw + "@h/db",
@@ -1385,10 +1445,12 @@ func TestRedactDSNCredentials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := redactDSN(tc.in)
 			if got != tc.want {
-				t.Fatalf("redactDSN(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Fatalf("redactDSN(%q) = %q, want %q",
+					faultScrubSecrets(tc.in, pw), faultScrubSecrets(got, pw), faultScrubSecrets(tc.want, pw))
 			}
 			if tc.in != tc.want && strings.Contains(got, pw) {
-				t.Fatalf("redactDSN(%q) still contains the password: %q", tc.in, got)
+				t.Fatalf("redactDSN(%q) still contains the password: %q",
+					faultScrubSecrets(tc.in, pw), faultScrubSecrets(got, pw))
 			}
 		})
 	}
@@ -1397,7 +1459,7 @@ func TestRedactDSNCredentials(t *testing.T) {
 	args := []string{"migrate", "torrents", "--database", raw, "--batch-size", "10"}
 	redacted := redactArgs(args)
 	if strings.Contains(strings.Join(redacted, " "), pw) {
-		t.Fatalf("redactArgs leaked the password: %v", redacted)
+		t.Fatalf("redactArgs leaked the password: %q", faultScrubSecrets(strings.Join(redacted, " "), pw))
 	}
 	if args[3] != raw {
 		t.Fatalf("redactArgs modified its input slice: args[3] = %q", args[3])
@@ -1436,6 +1498,11 @@ func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 	} else if u.User != nil {
 		realPW, _ = u.User.Password()
 	}
+	// Failure diagnostics must never echo the credential whose leak they
+	// report: every captured log or argv excerpt is scrubbed of the two
+	// full DSNs and both passwords before being printed (longest first —
+	// a password scrubbed out of its DSN would leave that DSN behind).
+	scrub := func(s string) string { return faultScrubSecrets(s, badTgt, tgt, pw, realPW) }
 
 	// Sink reset registered FIRST: LIFO cleanup order keeps the sink alive
 	// through every harness cleanup line.
@@ -1452,15 +1519,15 @@ func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 	}
 	// The real arguments reached exec.Cmd unmodified...
 	if raw := strings.Join(run.cmd.Args, " "); !strings.Contains(raw, pw) {
-		t.Fatalf("exec.Cmd arguments lost the synthetic password: %v", run.cmd.Args)
+		t.Fatalf("exec.Cmd arguments lost the synthetic password: %q", scrub(strings.Join(run.cmd.Args, " ")))
 	}
 	// ...while the captured harness log shows the redacted form only.
 	logged := sink.String()
 	if strings.Contains(logged, pw) {
-		t.Fatalf("harness log leaked the synthetic password:\n%s", logged)
+		t.Fatalf("harness log leaked the synthetic password:\n%s", scrub(logged))
 	}
 	if !strings.Contains(logged, "started pid=") || !strings.Contains(logged, faultRedactedMark) {
-		t.Fatalf("harness log is missing the redacted start line (capture broken or redaction not applied):\n%s", logged)
+		t.Fatalf("harness log is missing the redacted start line (capture broken or redaction not applied):\n%s", scrub(logged))
 	}
 
 	// Successful execution path: the valid credential-bearing target DSN
@@ -1473,7 +1540,7 @@ func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 	assertFaultComplete(t, tgt, 5000)
 	logged = sink.String()
 	if strings.Contains(logged, pw) {
-		t.Fatalf("harness log leaked the synthetic password:\n%s", logged)
+		t.Fatalf("harness log leaked the synthetic password:\n%s", scrub(logged))
 	}
 	// Only the lines appended by the successful run: the DSN's own password
 	// (and the whole credential-bearing DSN) must be absent, the redacted
@@ -1482,13 +1549,13 @@ func TestFaultHarnessLogsRedactCredentials(t *testing.T) {
 	successLog := logged[len(beforeSuccess):]
 	if realPW != "" {
 		if strings.Contains(successLog, realPW) || strings.Contains(successLog, tgt) {
-			t.Fatalf("harness log leaked the target DSN password:\n%s", successLog)
+			t.Fatalf("harness log leaked the target DSN password:\n%s", scrub(successLog))
 		}
 		if !strings.Contains(successLog, faultRedactedMark) {
-			t.Fatalf("successful run's log line shows no redacted form — redaction not applied:\n%s", successLog)
+			t.Fatalf("successful run's log line shows no redacted form — redaction not applied:\n%s", scrub(successLog))
 		}
 	}
 	if !strings.Contains(successLog, "resumed `magnetico") {
-		t.Fatalf("harness log is missing the resume log line — sink capture incomplete:\n%s", successLog)
+		t.Fatalf("harness log is missing the resume log line — sink capture incomplete:\n%s", scrub(successLog))
 	}
 }
