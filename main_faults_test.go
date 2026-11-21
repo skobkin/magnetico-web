@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
@@ -351,32 +352,43 @@ func TestFaultImportKilledBySignalResumes(t *testing.T) {
 
 // commitCutProxy is a test-only TCP proxy between the binary and the test
 // server. Once armed it swells the acknowledgement of exactly one transaction
-// COMMIT: the commit is forwarded and confirmed server-side (ReadyForQuery
-// consumed) before the client connection is severed — the lost-COMMIT-ack
-// ambiguity the reconciler must survive on the real wire.
+// COMMIT: the commit is forwarded, its server reply is VERIFIED (CommandComplete
+// with the exact "COMMIT" tag, no ErrorResponse, terminated by ReadyForQuery),
+// the authoritative checkpoint is read from the target database directly
+// before the forwarding and again after the confirmation — pinning the
+// durability proof to the intercepted transaction itself — and only then is
+// the client connection severed without the ack. Any deviation (ErrorResponse,
+// missing or malformed CommandComplete, truncated reply, failed evidence read)
+// is a REJECTED injection: the connection keeps relaying and the test fails
+// loudly on the recorded reason, so the scenario can never pass vacuously.
 //
 // It requires simple query protocol (default_query_exec_mode=simple_protocol)
 // so every statement travels as one 'Q' message, and sslmode=disable so the
 // startup phase is plaintext without SSL negotiation.
 type commitCutProxy struct {
-	t        *testing.T
-	ln       net.Listener
-	upstream string // host:port of the real server
+	t         *testing.T
+	ln        net.Listener
+	upstream  string // host:port of the real server
+	targetDSN string // DIRECT target DSN (not through the proxy) for evidence reads
 
-	mu            sync.Mutex
-	armed         bool
-	preCheckpoint int64
-	cut           bool
-	logs          []string
+	mu                   sync.Mutex
+	armed                bool
+	preCheckpoint        int64
+	cut                  bool
+	logs                 []string
+	preCommitCheckpoint  int64 // read immediately before forwarding the intercepted COMMIT
+	postCommitCheckpoint int64 // read after the server confirmed it
+	commitTag            string
+	injectErr            string // non-empty: the injection was rejected for this reason
 }
 
-func startCommitCutProxy(t *testing.T, upstreamHostPort string) *commitCutProxy {
+func startCommitCutProxy(t *testing.T, upstreamHostPort, targetDSN string) *commitCutProxy {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("proxy listen: %v", err)
 	}
-	p := &commitCutProxy{t: t, ln: ln, upstream: upstreamHostPort}
+	p := &commitCutProxy{t: t, ln: ln, upstream: upstreamHostPort, targetDSN: targetDSN}
 	go p.acceptLoop(ln)
 	t.Cleanup(func() { p.dumpLogs(); _ = ln.Close() })
 	return p
@@ -384,18 +396,49 @@ func startCommitCutProxy(t *testing.T, upstreamHostPort string) *commitCutProxy 
 
 func (p *commitCutProxy) addr() string { return p.ln.Addr().String() }
 
+// arm enables the interception for the next COMMIT. The arming checkpoint is
+// a lower bound for the evidence (other transactions may commit between the
+// arming observation and the interception); the authoritative comparison is
+// the pre/post pair read by intercept.
 func (p *commitCutProxy) arm(preCheckpoint int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.armed = true
 	p.preCheckpoint = preCheckpoint
-	p.appendLog("armed: pre-injection checkpoint=%d; the next COMMIT is intercepted", preCheckpoint)
+	p.appendLogLocked("armed: pre-injection checkpoint=%d; the next COMMIT is intercepted", preCheckpoint)
 }
 
 func (p *commitCutProxy) cutDone() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.cut
+}
+
+// injectFailed returns the recorded rejection reason, or "" while the
+// interception is still pending or succeeded. Checking it in the wait loop
+// makes a rejected injection fail fast with its reason instead of timing out.
+func (p *commitCutProxy) injectFailed() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.injectErr
+}
+
+// commitCutEvidence is the interception's own record of the server reply and
+// the authoritative checkpoint pair around THE intercepted transaction.
+type commitCutEvidence struct {
+	PreCommitCheckpoint  int64
+	PostCommitCheckpoint int64
+	CommandTag           string
+}
+
+func (p *commitCutProxy) evidence() commitCutEvidence {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return commitCutEvidence{
+		PreCommitCheckpoint:  p.preCommitCheckpoint,
+		PostCommitCheckpoint: p.postCommitCheckpoint,
+		CommandTag:           p.commitTag,
+	}
 }
 
 func (p *commitCutProxy) dumpLogs() {
@@ -406,9 +449,44 @@ func (p *commitCutProxy) dumpLogs() {
 	}
 }
 
+// appendLog records an evidence line. It takes p.mu itself: call it only
+// WITHOUT the lock held (arm uses appendLogLocked to stay non-recursive).
 func (p *commitCutProxy) appendLog(format string, args ...any) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.appendLogLocked(format, args...)
+}
+
+// appendLogLocked is the lock-held variant (p.mu must be held by the caller).
+func (p *commitCutProxy) appendLogLocked(format string, args ...any) {
 	line := faultTS() + " " + fmt.Sprintf(format, args...)
 	p.logs = append(p.logs, line)
+}
+
+// readCheckpoint reads the authoritative committed checkpoint directly from
+// the target database — never through the proxy. Safe on the connection
+// goroutine: it uses no testing.T state.
+func (p *commitCutProxy) readCheckpoint() (int64, error) {
+	prog, err := tryLoadProgress(p.targetDSN)
+	if err != nil {
+		return 0, err
+	}
+	if prog == nil {
+		return 0, errors.New("no migration progress row")
+	}
+	return prog.LastProcessedID, nil
+}
+
+// reject records a rejected injection: the server reply or an evidence read
+// did not support a lost-ack simulation, so the client connection stays up
+// and keeps relaying; the test fails on the recorded reason instead of
+// passing vacuously.
+func (p *commitCutProxy) reject(format string, args ...any) {
+	p.mu.Lock()
+	p.armed = false
+	p.injectErr = fmt.Sprintf(format, args...)
+	p.mu.Unlock()
+	p.appendLog("injection REJECTED: "+format, args...)
 }
 
 func (p *commitCutProxy) acceptLoop(ln net.Listener) {
@@ -472,11 +550,7 @@ func (p *commitCutProxy) handle(client net.Conn) {
 	// statement description), the copy-data sub-protocol and simple 'Q'
 	// round trips all pass through unchanged. The only correlation point is
 	// the armed COMMIT interception below.
-	type frame struct {
-		typ  byte
-		data []byte
-	}
-	readFrames := func(r io.Reader, ch chan<- frame) {
+	readFrames := func(r io.Reader, ch chan<- proxyFrame) {
 		defer close(ch)
 		var hdr [5]byte
 		for {
@@ -493,16 +567,12 @@ func (p *commitCutProxy) handle(client net.Conn) {
 					return
 				}
 			}
-			ch <- frame{hdr[0], data}
+			ch <- proxyFrame{hdr[0], data}
 		}
 	}
-	writeFrame := func(w io.Writer, f frame) bool {
-		_, err := w.Write(appendFrame(nil, f.typ, f.data))
-		return err == nil
-	}
 
-	clientFrames := make(chan frame, 256)
-	serverFrames := make(chan frame, 256)
+	clientFrames := make(chan proxyFrame, 256)
+	serverFrames := make(chan proxyFrame, 256)
 	go readFrames(client, clientFrames)
 	go readFrames(up, serverFrames)
 
@@ -516,42 +586,128 @@ func (p *commitCutProxy) handle(client net.Conn) {
 			armed := p.armed
 			p.mu.Unlock()
 			if f.typ == 'Q' && armed && strings.TrimRight(string(f.data), "\x00") == "commit" {
-				// Forward the COMMIT, consume the server reply through
-				// ReadyForQuery — the COMMIT is durable — then sever the
-				// client without delivering the ack.
-				if !writeFrame(up, f) {
-					return
-				}
-				for {
-					sf, ok := <-serverFrames
-					if !ok {
-						return
-					}
-					if sf.typ == 'Z' {
-						break
-					}
-				}
-				p.mu.Lock()
-				p.armed = false
-				p.cut = true
-				pre := p.preCheckpoint
-				p.mu.Unlock()
-				p.appendLog("intercepted COMMIT: forwarded upstream, server ReadyForQuery consumed "+
-					"(commit durable); client ack withheld, connection severed (armed at checkpoint %d)", pre)
+				// Verify the server reply, capture the checkpoint evidence on
+				// both sides of the intercepted transaction, and only then
+				// sever the client without delivering the ack. On any
+				// deviation the injection is rejected and the relay continues.
+				p.intercept(up, f, serverFrames)
 				return
 			}
-			if !writeFrame(up, f) {
+			if !writeProxyFrame(up, f) {
 				return
 			}
 		case f, ok := <-serverFrames:
 			if !ok {
 				return
 			}
-			if !writeFrame(client, f) {
+			if !writeProxyFrame(client, f) {
 				return
 			}
 		}
 	}
+}
+
+// proxyFrame is one typed PostgreSQL wire frame (type byte + payload).
+type proxyFrame struct {
+	typ  byte
+	data []byte
+}
+
+func writeProxyFrame(w io.Writer, f proxyFrame) bool {
+	_, err := w.Write(appendFrame(nil, f.typ, f.data))
+	return err == nil
+}
+
+// intercept performs the armed COMMIT interception. Evidence discipline: the
+// authoritative checkpoint is read directly from the target database
+// immediately BEFORE the COMMIT is forwarded and again AFTER the server
+// confirms it — so the post-read reflects the intercepted transaction itself,
+// not progress made by unrelated earlier or later commits. The reply must be
+// CommandComplete with the exact "COMMIT" tag (no ErrorResponse) terminated
+// by ReadyForQuery; only then is the client connection severed without the
+// ack. Any deviation is recorded as a rejected injection.
+func (p *commitCutProxy) intercept(up net.Conn, f proxyFrame, serverFrames <-chan proxyFrame) {
+	pre, err := p.readCheckpoint()
+	if err != nil {
+		p.reject("checkpoint read before forwarding the COMMIT failed: %v", err)
+		return
+	}
+	if !writeProxyFrame(up, f) {
+		p.reject("forwarding the intercepted COMMIT upstream failed")
+		return
+	}
+	var (
+		tag         string
+		sawComplete bool
+		confirmed   bool
+	)
+	for sf := range serverFrames {
+		switch sf.typ {
+		case 'C': // CommandComplete
+			sawComplete = true
+			tag = strings.TrimRight(string(sf.data), "\x00")
+		case 'E': // ErrorResponse
+			p.reject("the server answered the intercepted COMMIT with ErrorResponse (%s)", pgErrorSummary(sf.data))
+			return
+		case 'Z': // ReadyForQuery
+			confirmed = true
+		}
+		if confirmed {
+			break
+		}
+	}
+	if !confirmed {
+		p.reject("the upstream connection closed before ReadyForQuery (incomplete reply)")
+		return
+	}
+	if !sawComplete {
+		p.reject("ReadyForQuery without a CommandComplete (unexpected reply sequence)")
+		return
+	}
+	if tag != "COMMIT" {
+		p.reject("CommandComplete tag %q, want exactly \"COMMIT\"", tag)
+		return
+	}
+	post, err := p.readCheckpoint()
+	if err != nil {
+		p.reject("checkpoint read after the server confirmed the COMMIT failed: %v", err)
+		return
+	}
+	p.mu.Lock()
+	p.armed = false
+	p.cut = true
+	p.preCommitCheckpoint = pre
+	p.postCommitCheckpoint = post
+	p.commitTag = tag
+	p.mu.Unlock()
+	p.appendLog("intercepted COMMIT: CommandComplete %q + ReadyForQuery consumed (commit durable); "+
+		"checkpoint %d -> %d across the intercepted transaction; client ack withheld, connection severed",
+		tag, pre, post)
+}
+
+// pgErrorSummary renders the SQLSTATE and message fields of a PostgreSQL
+// ErrorResponse body for the evidence log.
+func pgErrorSummary(data []byte) string {
+	var code, msg string
+	for len(data) > 0 {
+		field := data[0]
+		data = data[1:]
+		if field == 0 { // field terminator
+			break
+		}
+		i := bytes.IndexByte(data, 0)
+		if i < 0 {
+			break
+		}
+		switch field {
+		case 'C':
+			code = string(data[:i])
+		case 'M':
+			msg = string(data[:i])
+		}
+		data = data[i+1:]
+	}
+	return "SQLSTATE " + code + ": " + msg
 }
 
 // proxyTargetDSN rewrites a postgres:// DSN to dial the proxy and forces the
@@ -571,9 +727,12 @@ func proxyTargetDSN(t *testing.T, dsn, proxyAddr string) string {
 }
 
 // F2 — lost COMMIT acknowledgement at the binary level: the intercepted
-// transaction provably commits on the server (checkpoint advances past the
-// arming value) while the client never sees the ack; the same invocation
-// reconciles and finishes without duplicate or skipped records.
+// transaction is proven by the proxy's own reply verification and independent
+// database reads (CommandComplete with the exact COMMIT tag, no ErrorResponse;
+// the authoritative checkpoint advances across THE intercepted transaction)
+// while the client never sees the ack; the same invocation reconciles
+// in-process, exits 0, and lands the exact record set without duplicate or
+// skipped records.
 func TestFaultLostCommitAckRecoversInProcess(t *testing.T) {
 	pgtest.IntegrationCluster(t)
 
@@ -587,7 +746,7 @@ func TestFaultLostCommitAckRecoversInProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse dsn: %v", err)
 	}
-	proxy := startCommitCutProxy(t, u.Host)
+	proxy := startCommitCutProxy(t, u.Host, tgt)
 	proxyDSN := proxyTargetDSN(t, tgt, proxy.addr())
 
 	run := startFaultImport(t, bin, src, proxyDSN)
@@ -596,16 +755,37 @@ func TestFaultLostCommitAckRecoversInProcess(t *testing.T) {
 	proxy.arm(pre.LastProcessedID)
 
 	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) && !proxy.cutDone() {
+	for time.Now().Before(deadline) {
+		if reason := proxy.injectFailed(); reason != "" {
+			proxy.dumpLogs()
+			t.Fatalf("NOT EXERCISED: injection rejected — %s", reason)
+		}
+		if proxy.cutDone() {
+			break
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !proxy.cutDone() {
 		proxy.dumpLogs()
 		t.Fatalf("NOT EXERCISED: the armed COMMIT interception never fired")
 	}
-	// Server-side proof the intercepted transaction committed: the durable
-	// checkpoint advanced past the arming value despite the lost ack.
-	pollProgress(t, tgt, func(p *state.Progress) bool { return p.LastProcessedID > pre.LastProcessedID }, 10*time.Second)
+
+	// Durability pinned to the intercepted transaction: the proxy read the
+	// authoritative checkpoint directly from the database immediately before
+	// forwarding the COMMIT and again after consuming the verified COMMIT
+	// reply, so the advance between the two reads can only be the intercepted
+	// transaction's own work — not unrelated commits before or after it.
+	ev := proxy.evidence()
+	if ev.PreCommitCheckpoint < pre.LastProcessedID {
+		t.Fatalf("pre-commit checkpoint %d < arming checkpoint %d (checkpoint regression)",
+			ev.PreCommitCheckpoint, pre.LastProcessedID)
+	}
+	if ev.PostCommitCheckpoint <= ev.PreCommitCheckpoint {
+		t.Fatalf("the intercepted transaction did not advance the checkpoint (%d -> %d): "+
+			"the injection hit an unrelated transaction", ev.PreCommitCheckpoint, ev.PostCommitCheckpoint)
+	}
+	t.Logf("%s: intercepted COMMIT verified: CommandComplete %q, checkpoint %d -> %d across the intercepted transaction",
+		faultTS(), ev.CommandTag, ev.PreCommitCheckpoint, ev.PostCommitCheckpoint)
 
 	code, sig, _ := run.waitExit()
 	if code != 0 {
@@ -980,4 +1160,106 @@ func TestFaultVerificationStalenessAfterRetry(t *testing.T) {
 	}
 	t.Logf("%s: run 1 (revision %d) is stale against current revision %d; run 2 is fresh",
 		faultTS(), smokeScalar(t, tgt, fmt.Sprintf(decodeRev, 1)), revision)
+}
+
+// TestImportWithReadOnlySourceRole proves the migrator's source discipline at
+// the privilege level, complementing the historical campaign's operationally
+// observed (but not enforced) SELECT-only behavior: the source role here holds
+// CONNECT + USAGE + SELECT and nothing else, a write by that role is refused
+// by the server itself (the restriction is enforced, not assumed), and the
+// full import still completes — so any source modification attempted by the
+// migrator would have failed the run exactly like the probe below.
+func TestImportWithReadOnlySourceRole(t *testing.T) {
+	cluster := pgtest.IntegrationCluster(t)
+
+	src := cluster.TestDatabase(t)
+	const n = 5000
+	seedFaultSource(t, src, n)
+	tgt := pgtest.IntegrationCluster(t).TestDatabase(t)
+	initFaultTarget(t, tgt)
+	bin := buildBinary(t)
+
+	// The role is cluster-global: unique per run, dropped at cleanup (never
+	// Fatalf in cleanup — log and move on).
+	role := "magnetico_ro_" + faultRandHex(t, 6)
+	// Mirror the admin credential's password: trust-auth harnesses ignore it,
+	// password-auth external servers need it for the LOGIN role to connect.
+	admin, err := url.Parse(cluster.AdminDSN)
+	if err != nil {
+		t.Fatalf("parse admin dsn: %v", err)
+	}
+	pw, _ := admin.User.Password()
+	create := fmt.Sprintf(`CREATE ROLE %s LOGIN`, pgtest.QuoteIdent(role))
+	if pw != "" {
+		create = fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD %s`,
+			pgtest.QuoteIdent(role), pgtest.QuoteLiteral(pw))
+	}
+	execSmokeSQL(t, cluster.AdminDSN, create)
+	t.Cleanup(func() {
+		// This cleanup runs BEFORE the test-database drop (LIFO), so the role
+		// still holds its ACL grants — revoke them first, then drop. Every
+		// step is log-only: cleanup never fails the test.
+		ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+		defer cancel()
+		if conn, err := pgx.Connect(ctx, src); err == nil {
+			_, _ = conn.Exec(ctx, fmt.Sprintf(
+				`REVOKE SELECT ON ALL TABLES IN SCHEMA magneticod FROM %s;
+                 REVOKE USAGE ON SCHEMA magneticod FROM %s;`, pgtest.QuoteIdent(role), pgtest.QuoteIdent(role)))
+			_, _ = conn.Exec(ctx, fmt.Sprintf(`REVOKE ALL ON DATABASE %s FROM %s`,
+				pgtest.QuoteIdent(faultDBName(t, src)), pgtest.QuoteIdent(role)))
+			conn.Close(context.Background())
+		}
+		if conn, err := pgx.Connect(ctx, cluster.AdminDSN); err == nil {
+			if _, err := conn.Exec(ctx, fmt.Sprintf(`DROP ROLE %s`, pgtest.QuoteIdent(role))); err != nil {
+				t.Logf("cleanup: DROP ROLE: %v", err)
+			}
+			conn.Close(context.Background())
+		}
+	})
+
+	execSmokeSQL(t, src, fmt.Sprintf(`
+        GRANT CONNECT ON DATABASE %s TO %[2]s;
+        GRANT USAGE ON SCHEMA magneticod TO %[2]s;
+        GRANT SELECT ON ALL TABLES IN SCHEMA magneticod TO %[2]s;`,
+		pgtest.QuoteIdent(faultDBName(t, src)), pgtest.QuoteIdent(role)))
+
+	// The restricted source DSN: same server and database, restricted role.
+	restricted := *admin
+	if pw != "" {
+		restricted.User = url.UserPassword(role, pw)
+	} else {
+		restricted.User = url.User(role)
+	}
+	restricted.Path = "/" + faultDBName(t, src)
+	restrictedDSN := restricted.String()
+
+	// Enforcement sanity check: a write by this role is refused by the server
+	// (SQLSTATE 42501, insufficient_privilege) — SELECT-only is enforced, not
+	// assumed.
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, restrictedDSN)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", role, err)
+	}
+	_, err = conn.Exec(ctx, `INSERT INTO magneticod.torrents (id, info_hash, name, total_size, discovered_on)
+        VALUES (1, decode(lpad(to_hex(1), 40, '0'), 'hex'), 'x', 1, 1)`)
+	conn.Close(context.Background())
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
+		t.Fatalf("INSERT as the restricted role: err = %v, want SQLSTATE 42501 (privilege not held)", err)
+	}
+	t.Logf("%s: write as %s refused by the server (SQLSTATE 42501): SELECT-only enforced", faultTS(), role)
+
+	// The whole import completes under the restricted role: the migrator
+	// performs no source modification — any attempted write would have been
+	// refused exactly like the probe above.
+	if code := runFaultResume(t, bin, restrictedDSN, tgt); code != 0 {
+		t.Fatalf("import under the read-only source role exit code = %d, want 0", code)
+	}
+	assertFaultComplete(t, tgt, n)
+	if blobs := smokeScalar(t, tgt, `SELECT count(*) FROM magneticod.torrent_file_blobs`); blobs != n {
+		t.Fatalf("blob rows = %d, want %d", blobs, n)
+	}
+	t.Logf("%s: full import of %d torrents completed against the SELECT-only source role", faultTS(), n)
 }
