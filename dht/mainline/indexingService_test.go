@@ -706,3 +706,54 @@ func TestOnGetPeersQuery(t *testing.T) {
 		}
 	}
 }
+
+// TestOnSampleInfohashesResponseSliceBoundaries guards against the upstream
+// slicing bug (Samples[i:(i+1)*20]): with three samples, every hash must be
+// built from its own 20-byte window.
+func TestOnSampleInfohashesResponseSliceBoundaries(t *testing.T) {
+	t.Parallel()
+
+	_, cidr, _ := net.ParseCIDR("127.0.0.0/8")
+	transport := &Transport{
+		conn:         &net.UDPConn{},
+		started:      true,
+		onMessage:    func(*Message, *net.UDPAddr) {},
+		maxNeighbors: 10,
+	}
+	is := &IndexingService{
+		nodes:            newRoutingTable(10, []net.IPNet{*cidr}),
+		protocol:         &Protocol{transport: transport},
+		nodeID:           randomNodeID(),
+		getPeersRequests: make(map[[2]byte][20]byte),
+	}
+
+	var samples []byte
+	var want [][20]byte
+	for i := 0; i < 3; i++ {
+		var h [20]byte
+		for j := range h {
+			h[j] = byte(i*20 + j + 1)
+		}
+		want = append(want, h)
+		samples = append(samples, h[:]...)
+	}
+
+	is.onSampleInfohashesResponse(&Message{R: ResponseValues{
+		Samples: samples, Num: 3, Interval: 30,
+	}}, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 6881})
+
+	// The get_peers requests registered by the handler map transaction ids to
+	// the hashes that were built from the samples.
+	got := map[[20]byte]bool{}
+	for _, h := range is.getPeersRequests {
+		got[h] = true
+	}
+	if len(got) != 3 {
+		t.Fatalf("registered %d distinct hashes, want 3", len(got))
+	}
+	for _, h := range want {
+		if !got[h] {
+			t.Errorf("hash %x missing from requests", h)
+		}
+	}
+}

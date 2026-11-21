@@ -39,31 +39,52 @@ func NewManager(addrs []string, maxNeighbors uint, bootstrappingNodes []string, 
 }
 
 func (m *Manager) Output() <-chan Result {
-	m.mu.Lock()
-	ch := m.output
-	m.mu.Unlock()
-	return ch
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.output
 }
 
+// onIndexingResult delivers a result without blocking. When the channel is
+// full it is replaced, under the write lock, by a larger one: pending results
+// are moved over in order without blocking, the old channel is closed (a
+// consumer holding it sees it drained and closed, then re-reads Output()) and
+// the new result is appended. The new channel has cap(old)+10 slots, so the
+// transfer cannot block while the write lock excludes other producers.
 func (m *Manager) onIndexingResult(res mainline.IndexingResult) {
+	m.deliver(res)
+}
+
+func (m *Manager) deliver(res Result) {
+	m.mu.RLock()
+	select {
+	case m.output <- res:
+		m.mu.RUnlock()
+		return
+	default:
+		m.mu.RUnlock()
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	select {
 	case m.output <- res:
 		return
 	default:
-		// Channel full: swap to a larger channel under mutex so the consumer
-		// gets the new channel from Output() on the next call. We close the
-		// old channel only after draining it; the consumer may still be
-		// receiving from the old channel and will get (nil, false) when closed.
-		m.mu.Lock()
-		oldChan := m.output
-		newChan := make(chan Result, cap(oldChan)+10)
-		m.output = newChan
-		m.mu.Unlock()
-		for oldRes := range oldChan {
+	}
+
+	oldChan := m.output
+	newChan := make(chan Result, cap(oldChan)+10)
+	m.output = newChan
+	for {
+		select {
+		case oldRes := <-oldChan:
 			newChan <- oldRes
+		default:
+			close(oldChan)
+			newChan <- res
+			return
 		}
-		close(oldChan)
-		newChan <- res
 	}
 }
 

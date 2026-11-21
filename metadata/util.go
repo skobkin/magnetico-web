@@ -7,13 +7,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	mrand "math/rand/v2"
+	"sync"
 	"time"
 
 	"github.com/skobkin/magnetico-web/bencode"
 	"github.com/skobkin/magnetico-web/metainfo"
 	"github.com/skobkin/magnetico-web/persistence"
+	"github.com/skobkin/magnetico-web/stats"
 )
 
 // ErrV2OnlyUnsupported reports BEP 52 metadata that has a v2 file tree but
@@ -45,8 +48,40 @@ func totalSize(files []persistence.File) (uint64, error) {
 	return totalSize, nil
 }
 
+// MaxNestingDepth bounds list/dictionary nesting of peer-supplied metadata.
+// The bencode decoder recurses per level, a Go stack overflow is fatal, and
+// the file-tree parser re-decodes every subtree; legitimate metadata nests a
+// handful of levels (it equals the codec's MaxTrieDepth).
+const MaxNestingDepth = 256
+
+// nestingWarnInterval spaces out the over-deep metadata warnings: a hostile
+// swarm can produce them far faster than they are worth logging.
+const nestingWarnInterval = time.Hour
+
+var nestingWarn struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+// noteTooDeep counts a rejected over-deep metadata blob and logs a throttled
+// warning. The detail is fixed text: nothing peer-controlled is logged.
+func noteTooDeep() {
+	stats.GetInstance().IncInvalidMetadata()
+	nestingWarn.mu.Lock()
+	defer nestingWarn.mu.Unlock()
+	if !nestingWarn.last.IsZero() && time.Since(nestingWarn.last) < nestingWarnInterval {
+		return
+	}
+	nestingWarn.last = time.Now()
+	log.Printf("dropping peer metadata: bencode nesting deeper than %d levels", MaxNestingDepth)
+}
+
 // Unmarshal the metainfo from the metadata
 func unmarshalMetainfo(metadata []byte) (info *metainfo.Info, err error) {
+	if err = bencode.CheckDepth(metadata, MaxNestingDepth); err != nil {
+		noteTooDeep()
+		return nil, err
+	}
 	info = new(metainfo.Info)
 	err = bencode.Unmarshal(metadata, info)
 	if err != nil {

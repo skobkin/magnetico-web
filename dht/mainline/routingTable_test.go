@@ -116,6 +116,23 @@ func Test_routingTable_dump(t *testing.T) {
 		}
 	})
 }
+func Test_routingTable_dumpCap(t *testing.T) {
+	t.Parallel()
+
+	rt := newRoutingTable(1000, nil)
+	var addrs []net.UDPAddr
+	for i := 0; i < 250; i++ {
+		addrs = append(addrs, net.UDPAddr{IP: net.IPv4(8, 8, byte(i/200+1), byte(i%200+1)), Port: 6881})
+	}
+	rt.addNodes(addrs)
+	if got := len(rt.nodes); got < 200 {
+		t.Fatalf("setup: only %d nodes stored", got)
+	}
+	if got := len(rt.dump(true)); got != 100 {
+		t.Errorf("dump returned %d nodes, want the 100-node cap", got)
+	}
+}
+
 func Test_routingTable_isAllowed(t *testing.T) {
 	t.Parallel()
 
