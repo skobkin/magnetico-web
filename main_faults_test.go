@@ -444,8 +444,9 @@ func TestFaultImportKilledBySignalResumes(t *testing.T) {
 // durability proof to the intercepted transaction itself — and only then is
 // the client connection severed without the ack. Any deviation (ErrorResponse,
 // missing or malformed CommandComplete, truncated reply, failed evidence read)
-// is a REJECTED injection: the connection keeps relaying and the test fails
-// loudly on the recorded reason, so the scenario can never pass vacuously.
+// is a REJECTED injection and is fail-closed: handle returns right after the
+// interception attempt, terminating the intercepted connection, and the test
+// fails loudly on the recorded reason, so the scenario can never pass vacuously.
 //
 // It requires simple query protocol (default_query_exec_mode=simple_protocol)
 // so every statement travels as one 'Q' message, and sslmode=disable so the
@@ -578,9 +579,10 @@ func (p *commitCutProxy) readCheckpoint() (int64, error) {
 }
 
 // reject records a rejected injection: the server reply or an evidence read
-// did not support a lost-ack simulation, so the client connection stays up
-// and keeps relaying; the test fails on the recorded reason instead of
-// passing vacuously.
+// did not support a lost-ack simulation. Rejection is fail-closed: handle
+// returns immediately after intercept, so the intercepted connection is
+// terminated, and the test fails on the recorded reason instead of passing
+// vacuously.
 func (p *commitCutProxy) reject(format string, args ...any) {
 	p.mu.Lock()
 	p.armed = false
@@ -689,7 +691,9 @@ func (p *commitCutProxy) handle(client net.Conn) {
 				// Verify the server reply, capture the checkpoint evidence on
 				// both sides of the intercepted transaction, and only then
 				// sever the client without delivering the ack. On any
-				// deviation the injection is rejected and the relay continues.
+				// deviation the injection is rejected; this handler returns
+				// right after intercept, terminating the intercepted
+				// connection, and the test fails with the recorded reason.
 				p.intercept(up, f, serverFrames)
 				return
 			}
@@ -725,7 +729,9 @@ func writeProxyFrame(w io.Writer, f proxyFrame) bool {
 // not progress made by unrelated earlier or later commits. The reply must be
 // CommandComplete with the exact "COMMIT" tag (no ErrorResponse) terminated
 // by ReadyForQuery; only then is the client connection severed without the
-// ack. Any deviation is recorded as a rejected injection.
+// ack. Any deviation is recorded as a rejected injection and is fail-closed:
+// handle returns right after this call, terminating the intercepted
+// connection, and the test fails with the recorded reason.
 func (p *commitCutProxy) intercept(up net.Conn, f proxyFrame, serverFrames <-chan proxyFrame) {
 	pre, err := p.readCheckpoint()
 	if err != nil {
