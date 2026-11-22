@@ -49,12 +49,45 @@ func procStatus() map[string]int {
 	return out
 }
 
+// loopbackOnly rejects any pprof listen address that is not a literal loopback
+// IP with an explicit port. Host names, empty hosts (":6060", all interfaces)
+// and wildcard or non-loopback addresses are refused, so the profiling
+// listener can never be reachable from the network, however the wrapper is
+// started.
+func loopbackOnly(addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("pprof address %q: %w", addr, err)
+	}
+	if port == "" {
+		return fmt.Errorf("pprof address %q: port required", addr)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("pprof address %q: host must be a literal loopback IP (127.0.0.0/8 or ::1)", addr)
+	}
+	return nil
+}
+
+// cpuMillis returns this process's cumulative user and system CPU time.
+func cpuMillis() (user, sys int64) {
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		return 0, 0
+	}
+	ms := func(t syscall.Timeval) int64 { return int64(t.Sec)*1000 + int64(t.Usec)/1000 }
+	return ms(ru.Utime), ms(ru.Stime)
+}
+
 func main() {
 	var pprofAddr string
 	if v := os.Getenv("INGESTD_PPROF"); v != "" {
 		pprofAddr = v
 	}
 	if pprofAddr != "" {
+		if err := loopbackOnly(pprofAddr); err != nil {
+			log.Fatalf("ingestd: %v", err)
+		}
 		// A separate mux listener on loopback only; the ingest API itself does
 		// not expose pprof.
 		ln, err := net.Listen("tcp", pprofAddr)
@@ -76,6 +109,7 @@ func main() {
 			{Name: "/memory/classes/total:bytes"},
 			{Name: "/memory/classes/heap/released:bytes"},
 			{Name: "/memory/classes/heap/unused:bytes"},
+			{Name: "/cpu/classes/gc/total:cpu-seconds"},
 		}
 		start := time.Now()
 		for range time.Tick(interval) {
@@ -89,12 +123,19 @@ func main() {
 				return 0
 			}
 			ps := procStatus()
+			gcCPU := int64(0)
+			if samples[5].Value.Kind() == metrics.KindFloat64 {
+				gcCPU = int64(samples[5].Value.Float64() * 1000)
+			}
+			cpuU, cpuS := cpuMillis()
 			fmt.Printf("MEM t=%d rss_kib=%d rss_anon_kib=%d rss_file_kib=%d hwm_kib=%d "+
 				"heap_alloc=%d heap_inuse=%d heap_idle=%d heap_released=%d heap_sys=%d stack_inuse=%d sys=%d "+
-				"live=%d goal=%d total_classes=%d unused=%d num_gc=%d pause_total_ms=%d goroutines=%d mallocs=%d frees=%d\n",
+				"live=%d goal=%d total_classes=%d unused=%d num_gc=%d pause_total_ms=%d goroutines=%d mallocs=%d frees=%d "+
+				"cpu_user_ms=%d cpu_sys_ms=%d gc_cpu_ms=%d\n",
 				int(time.Since(start).Seconds()), ps["VmRSS"], ps["RssAnon"], ps["RssFile"], ps["VmHWM"],
 				ms.HeapAlloc, ms.HeapInuse, ms.HeapIdle, ms.HeapReleased, ms.HeapSys, ms.StackInuse, ms.Sys,
-				u(0), u(1), u(2), u(4), ms.NumGC, ms.PauseTotalNs/1e6, runtime.NumGoroutine(), ms.Mallocs, ms.Frees)
+				u(0), u(1), u(2), u(4), ms.NumGC, ms.PauseTotalNs/1e6, runtime.NumGoroutine(), ms.Mallocs, ms.Frees,
+				cpuU, cpuS, gcCPU)
 		}
 	}()
 
