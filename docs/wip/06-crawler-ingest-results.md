@@ -43,10 +43,23 @@ Earlier milestones' measurements (spec §11): SQLite disk/payload 1.0–1.35×; 
 
 ## Known limitations and open observations
 
-1. **Ingest memory (321 MiB RSS at 40 records/s)** is higher than expected for this load; it was not
-   investigated. Suspects: the 8-slot submit handlers' request buffers (up to 17 MiB each plus JSON
-   decoding), the codec encoder workers and Go's heap retention. It is below any configured limit and
-   stable in the run, but worth profiling before a long soak.
+1. **Ingest memory — investigated (post-M7 review).** Method: `TestE2EIngestMemoryProfile` (opt-in via
+   `MAGNETICO_E2E_PROFILE_DIR`) runs the test-only `internal/e2e/ingestd` wrapper (production `server.Run` +
+   loopback pprof + a MEM line every 2 s) under 90 s at 40 records/s (measured size mix) followed by a
+   3,000-record burst, with heap/allocs/goroutine profiles. Default settings: idle RSS 24 MiB; peak RSS
+   395 MiB (HWM 450 MiB); after settling 387 / 326 MiB; heap live at last GC 169 MiB, goal ≈ 340 MiB. After
+   `debug.FreeOSMemory`: **live heap 8 MiB, RSS 38 MiB** — so the memory is runtime-retained garbage and
+   freed-but-unreturned heap, not a leak and not live data; goroutines stay at 12. Allocation profile:
+   **68 % of all allocated bytes are `brotli.(*h5).Initialize`** (hasher tables of the Brotli encoder inside
+   `codec.compress`, reached via `AddTorrent` → `Encoder.Encode`); HTTP body/JSON decoding is ≈ 10 %; the
+   8 MiB existence cache is as configured. The in-use snapshot at steady load shows ≈ 160 MB held by Brotli
+   hasher state. This follows from the codec's documented design (`codec/compress.go`: fresh writer for
+   payloads ≥ 256 KiB, pooled writer below, kept for determinism), which is wire-format territory and was not
+   changed. **Operational mitigation, measured:** `GOMEMLIMIT=128MiB` → peak RSS 144 MiB (HWM 167 MiB), same
+   workload fully drained, at the price of more GC cycles (1,230 vs 10; total GC pause 230 ms over the run;
+   CPU cost not separately measured). Recommendation: run `ingest` with `GOMEMLIMIT` ≈ 256–512 MiB, and
+   treat reducing Brotli encoder allocation as a separate codec issue. Raw data: the run directories are in
+   the investigator's scratchpad, not committed. Not done: multi-hour soak (see plan below).
 2. One 32-second run is an acceptance check of bounded behaviour, not a soak test. Long-duration, many-hour
    behaviour (autovacuum of the queue table, WAL growth of the SQLite file, cache hit rate) is unmeasured.
 3. The crawler's DHT/leech path was validated in isolation (`metadata` tests under `-race`, shutdown with
@@ -59,9 +72,17 @@ Earlier milestones' measurements (spec §11): SQLite disk/payload 1.0–1.35×; 
 6. The consumer is single and sequential; throughput headroom is ≈19 k rec/s on the measurement host against
    an expected 10–50 rec/s.
 7. The M0–M7 test runs avoided an unrestricted `go test -race ./...`. **Not executed:** the full-repository
-   race run; the controlled pre-M0 baseline comparison of `internal/migration` and `legacy/original`
-   (the earlier teardown timeouts therefore remain unexplained, not attributed); `-race` on the root
-   package. Targeted `-race` was run on every package changed by M4–M6.
+   race run and `-race` on the root package. Targeted `-race` was run on every package changed by M4–M6 and
+   by the post-M7 corrections.
+8. **Baseline comparison of `internal/migration` and `legacy/original` (post-M7 review).** Clean worktree at
+   `879903ba` (immediately before M0) versus the current branch, each package run separately, no `-race`,
+   `-p 1`, `-count=1`, 25 min timeout, `GOMAXPROCS=4`, `GOMEMLIMIT=2GiB`, inside a 6 GiB cgroup memory cap,
+   sequentially, one disposable PostgreSQL 17 container (the harness's). Results — baseline: `original` ok
+   (13.5 s; 30 pass, 1 skip), `migration` ok (132 s; 72 top-level pass). Current: `original` ok (19.0 s;
+   30 pass, 1 skip), `migration` ok (124 s; 72 pass). **The earlier teardown timeouts did not reproduce in
+   either tree in one run each.** One run per tree cannot show that they are fixed or were never present
+   (they were reported under concurrent load, and two unrelated `postgres:17` containers were also running
+   on the machine); the cause remains unattributed.
 
 ## Deployment instructions (staging)
 
@@ -83,3 +104,20 @@ Checklist before staging:
       means a stuck goroutine was abandoned on purpose (crawler: the SQLite writer, recovered by the next
       start; ingest: the consumer or a handler, whose interrupted record is reprocessed idempotently).
 - [ ] Operator SQL for quarantine reviewed (`UPGRADE.md`).
+
+## Soak / profiling plan for a separate job (PVE VM, ≈ 16–24 GiB RAM)
+
+Not executed; the VM was not touched and its readiness is not assumed. The workload is synthetic, so no
+torrent dump is needed. Prerequisites to confirm first: Go toolchain matching `go.mod`; a disposable
+PostgreSQL 17 (native binaries, or `MAGNETICO_TEST_POSTGRES_DSN` pointing at an explicitly authorised
+throw-away instance — the VM has no Docker); a checkout of this branch; ≥ 20 GiB free disk.
+
+```
+MAGNETICO_E2E_PROFILE_DIR=/var/tmp/ingest-prof MAGNETICO_E2E_PROFILE_SECONDS=14400 \
+MAGNETICO_E2E_PROFILE_ENV="GOMEMLIMIT=384MiB" \
+go test -count=1 -p 1 -timeout 6h -run TestE2EIngestMemoryProfile -v ./internal/e2e/
+```
+
+Run it twice (with and without `GOMEMLIMIT`). Watch: RSS/heap trend in `ingestd-mem.log` (flat vs growing),
+queue table bloat (`pg_total_relation_size('magnetico_ingest.queue')`) and autovacuum, GC CPU share at the
+limit, and heap profiles at the start, middle and end.

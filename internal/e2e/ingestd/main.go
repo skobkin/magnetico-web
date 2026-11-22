@@ -1,0 +1,115 @@
+// Command ingestd is a TEST-ONLY wrapper around the production ingest service
+// (internal/ingest/server.Run) used for the memory investigation. It adds what
+// the shipped binary deliberately does not have: a loopback pprof listener and
+// a periodic line of runtime/process memory statistics. The service code path
+// is the production one; configuration comes from the same MAGNETICO_INGEST_*
+// environment variables. It is never part of the shipped binary.
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
+	"os"
+	"os/signal"
+	"regexp"
+	"runtime"
+	"runtime/debug"
+	"runtime/metrics"
+	"strconv"
+	"syscall"
+	"time"
+
+	"github.com/skobkin/magnetico-web/internal/ingest/server"
+)
+
+func envInt(name string, def int64) int64 {
+	if v, err := strconv.ParseInt(os.Getenv(name), 10, 64); err == nil {
+		return v
+	}
+	return def
+}
+
+var statusRe = regexp.MustCompile(`(?m)^(VmRSS|RssAnon|RssFile|VmHWM):\s+(\d+) kB`)
+
+// procStatus returns VmRSS, RssAnon, RssFile and VmHWM in KiB.
+func procStatus() map[string]int {
+	out := map[string]int{}
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return out
+	}
+	for _, m := range statusRe.FindAllSubmatch(b, -1) {
+		n, _ := strconv.Atoi(string(m[2]))
+		out[string(m[1])] = n
+	}
+	return out
+}
+
+func main() {
+	var pprofAddr string
+	if v := os.Getenv("INGESTD_PPROF"); v != "" {
+		pprofAddr = v
+	}
+	if pprofAddr != "" {
+		// A separate mux listener on loopback only; the ingest API itself does
+		// not expose pprof.
+		ln, err := net.Listen("tcp", pprofAddr)
+		if err != nil {
+			log.Fatalf("pprof listen: %v", err)
+		}
+		http.HandleFunc("/debug/freeos", func(w http.ResponseWriter, _ *http.Request) {
+			debug.FreeOSMemory()
+			fmt.Fprintln(w, "ok")
+		})
+		go func() { _ = http.Serve(ln, nil) }()
+	}
+
+	interval := time.Duration(envInt("INGESTD_SAMPLE_MS", 2000)) * time.Millisecond
+	go func() {
+		samples := []metrics.Sample{
+			{Name: "/gc/heap/live:bytes"},
+			{Name: "/gc/heap/goal:bytes"},
+			{Name: "/memory/classes/total:bytes"},
+			{Name: "/memory/classes/heap/released:bytes"},
+			{Name: "/memory/classes/heap/unused:bytes"},
+		}
+		start := time.Now()
+		for range time.Tick(interval) {
+			var ms runtime.MemStats
+			runtime.ReadMemStats(&ms)
+			metrics.Read(samples)
+			u := func(i int) uint64 {
+				if samples[i].Value.Kind() == metrics.KindUint64 {
+					return samples[i].Value.Uint64()
+				}
+				return 0
+			}
+			ps := procStatus()
+			fmt.Printf("MEM t=%d rss_kib=%d rss_anon_kib=%d rss_file_kib=%d hwm_kib=%d "+
+				"heap_alloc=%d heap_inuse=%d heap_idle=%d heap_released=%d heap_sys=%d stack_inuse=%d sys=%d "+
+				"live=%d goal=%d total_classes=%d unused=%d num_gc=%d pause_total_ms=%d goroutines=%d mallocs=%d frees=%d\n",
+				int(time.Since(start).Seconds()), ps["VmRSS"], ps["RssAnon"], ps["RssFile"], ps["VmHWM"],
+				ms.HeapAlloc, ms.HeapInuse, ms.HeapIdle, ms.HeapReleased, ms.HeapSys, ms.StackInuse, ms.Sys,
+				u(0), u(1), u(2), u(4), ms.NumGC, ms.PauseTotalNs/1e6, runtime.NumGoroutine(), ms.Mallocs, ms.Frees)
+		}
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	err := server.Run(ctx, server.Options{
+		Listen:           os.Getenv("MAGNETICO_INGEST_LISTEN"),
+		DatabaseURL:      os.Getenv("MAGNETICO_INGEST_DATABASE"),
+		QueueDatabaseURL: os.Getenv("MAGNETICO_INGEST_QUEUE_DATABASE"),
+		Token:            os.Getenv("MAGNETICO_INGEST_TOKEN"),
+		QueueMaxBytes:    envInt("MAGNETICO_INGEST_QUEUE_MAX_BYTES", 2<<30),
+		CacheMaxBytes:    envInt("MAGNETICO_INGEST_CACHE_MAX_BYTES", 8<<20),
+	})
+	if err != nil {
+		log.Printf("ingestd: %v", err)
+		os.Exit(1)
+	}
+}
