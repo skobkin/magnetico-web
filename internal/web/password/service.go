@@ -6,7 +6,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/bcrypt"
@@ -45,8 +45,8 @@ type Service struct {
 	limiter *Limiter
 	params  Params
 
-	mu    sync.Mutex
-	dummy string
+	prepSlot chan struct{} // capacity 1: serialises Prepare, cancellable
+	dummy    atomic.Pointer[string]
 }
 
 // NewService panics on parameters outside the verifier bounds: a hash that
@@ -56,7 +56,7 @@ func NewService(l *Limiter, p Params) *Service {
 		p.Time < 1 || p.Time > maxArgonTime || p.Threads < 1 || p.Threads > maxArgonThreads {
 		panic("password: invalid limiter or parameters")
 	}
-	return &Service{limiter: l, params: p}
+	return &Service{limiter: l, params: p, prepSlot: make(chan struct{}, 1)}
 }
 
 // Default is the process-wide service: the default limiter and CurrentParams.
@@ -136,30 +136,46 @@ func (s *Service) Verify(ctx context.Context, pw, hash string) (bool, error) {
 	return false, ErrUnsupportedHash
 }
 
-// DummyVerify spends the work of a real verification at current parameters
+// ErrNotPrepared is returned by DummyVerify before a successful Prepare.
+var ErrNotPrepared = errors.New("password service is not prepared")
+
+// Prepare computes the reference hash DummyVerify uses, exactly once per
+// service, through the shared limiter. Concurrent callers queue and then
+// observe the finished result; a failed or cancelled attempt leaves the
+// service unprepared so Prepare can simply be called again. The login path
+// must call Prepare before it accepts traffic.
+func (s *Service) Prepare(ctx context.Context) error {
+	select {
+	case s.prepSlot <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-s.prepSlot }()
+	if s.dummy.Load() != nil {
+		return nil
+	}
+	hash, err := s.hash(ctx, "dummy-password-that-matches-nobody")
+	if err != nil {
+		return err
+	}
+	s.dummy.Store(&hash)
+	return nil
+}
+
+// DummyVerify spends the work of one real verification at current parameters
 // (through the same limiter) so unknown, NULL-hash and inactive accounts
 // cost the same as a wrong password (spec §4.3.6). It reports only
-// ErrBusy or a context error; the comparison result is discarded.
+// ErrNotPrepared, ErrBusy or a context error; the comparison result is
+// discarded.
 func (s *Service) DummyVerify(ctx context.Context, pw string) error {
-	s.mu.Lock()
-	dummy := s.dummy
-	s.mu.Unlock()
-	if dummy == "" {
-		var err error
-		if dummy, err = s.hash(ctx, "dummy-password-that-matches-nobody"); err != nil {
-			return err
-		}
-		s.mu.Lock()
-		if s.dummy == "" {
-			s.dummy = dummy
-		}
-		dummy = s.dummy
-		s.mu.Unlock()
+	dummy := s.dummy.Load()
+	if dummy == nil {
+		return ErrNotPrepared
 	}
 	if len(pw) > MaxLoginLength {
 		pw = pw[:MaxLoginLength]
 	}
-	_, err := s.Verify(ctx, pw, dummy)
+	_, err := s.Verify(ctx, pw, *dummy)
 	return err
 }
 

@@ -60,3 +60,21 @@ Memory test (two concurrent maximum-parameter verifications, m=64 MiB,t=10,p=16,
 (budget 256 MiB); a third concurrent caller got `ErrBusy`. Run alone, RSS growth was 63 MiB; in a full-package run the RSS
 figure is not meaningful (earlier tests leave pages resident), so only the heap figure is asserted strictly in both modes.
 Not run: `dht`, `crawler`, `e2e`, full `go test ./...`.
+
+## S2 review corrections
+
+1. **PHC length bound.** `parseArgon` rejects any string longer than `maxPHCLen = 256` before splitting or decoding (the longest valid
+   form is 206 characters: 64-byte salt and key at m=65536,t=10,p=16). No parameter bound was loosened. Tests: the longest valid
+   string still parses; oversized salt/key fields, a 1 MiB hash, 4 MiB of `$` and a 1 MiB bcrypt-prefixed string give
+   `ClassUnsupported` / `ErrUnsupportedHash`; `AllocsPerRun` on a 4 MiB input is 0.
+2. **Dummy hash.** `Service.Prepare(ctx)` computes the reference once (serialised by a cancellable one-slot gate, through the shared
+   limiter; a failed or cancelled attempt leaves the service unprepared and retryable). `DummyVerify` performs exactly one
+   verification and returns `ErrNotPrepared` until `Prepare` succeeded; W3 must call `Prepare` before accepting logins. Tests:
+   16 concurrent `Prepare` calls observe one reference and a prepared service does not re-enter the limiter; `ErrBusy` and
+   cancellation leave it retryable; waiting for the gate honours the context.
+3. **Cancellation.** `Limiter.Do` checks `ctx` before admission and again after obtaining a slot, so `fn` never starts under a cancelled
+   context; documented that a running Argon2/bcrypt computation cannot be interrupted and that no goroutine simulates cancellation.
+   Tests: pre-cancelled `Do`, `Hash` and `Verify`; cancellation while waiting, then the slot frees.
+4. **Memory test.** Only the heap growth (128 MiB observed against a 256 MiB budget) is asserted; RSS is logged as diagnostic.
+5. **Run:** `go build ./...`, `go vet ./...`, `go test -race -short ./internal/web/password` and `go test ./internal/web/password`
+   (34 PHP vectors, memory test): all passed.

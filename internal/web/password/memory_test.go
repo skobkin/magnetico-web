@@ -114,11 +114,9 @@ func TestLimiterMemoryBudget(t *testing.T) {
 	if growth > budget {
 		t.Errorf("heap growth %d MiB exceeds the %d MiB budget", growth>>20, budget>>20)
 	}
+	// RSS is diagnostic only: it depends on allocator state and on what
+	// earlier tests left resident, so asserting on it would be flaky.
 	if rssOK {
-		rssGrowth := (peakRSS.Load() - rssBase) << 10
-		t.Logf("RSS growth %d MiB", rssGrowth>>20)
-		if rssGrowth > budget {
-			t.Errorf("RSS growth %d MiB exceeds the %d MiB budget", rssGrowth>>20, budget>>20)
-		}
+		t.Logf("RSS growth %d MiB (diagnostic, not asserted)", ((peakRSS.Load()-rssBase)<<10)>>20)
 	}
 }

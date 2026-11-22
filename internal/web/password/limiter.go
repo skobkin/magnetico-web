@@ -38,8 +38,16 @@ func (l *Limiter) Capacity() int { return cap(l.slots) }
 func (l *Limiter) BusyCount() uint64 { return l.busy.Load() }
 
 // Do runs fn while holding a slot. It returns ErrBusy when no slot frees up
-// within the wait, or the context error if ctx ends first.
+// within the wait, or the context error if ctx ends first. Cancellation is
+// checked before admission and again after a slot is obtained, so fn never
+// starts under a cancelled context. Once fn is running it cannot be
+// interrupted: Argon2 and bcrypt are synchronous computations, and no
+// goroutine is spawned to simulate cancellation (that would leave the
+// computation, and its memory, running unbounded).
 func (l *Limiter) Do(ctx context.Context, fn func()) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	select {
 	case l.slots <- struct{}{}:
 	default:
@@ -55,6 +63,9 @@ func (l *Limiter) Do(ctx context.Context, fn func()) error {
 		}
 	}
 	defer func() { <-l.slots }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	fn()
 	return nil
 }

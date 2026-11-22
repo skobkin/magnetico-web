@@ -33,6 +33,13 @@ const (
 	minBcryptCost     = 4
 	maxBcryptCost     = 16
 	bcryptMaxInput    = 72
+
+	// maxPHCLen bounds the whole encoded string before anything is split or
+	// decoded. The longest valid form is
+	// "$argon2id$v=19$m=65536,t=10,p=16$" (33) + 86 (64-byte salt) + "$" +
+	// 86 (64-byte key) = 206 characters; 256 leaves headroom without
+	// loosening any parameter bound (those are still checked below).
+	maxPHCLen = 256
 )
 
 var (
@@ -54,6 +61,9 @@ type argonHash struct {
 // parseArgon parses $argon2i|argon2id$v=19$m=..,t=..,p=..$salt$hash strictly
 // and enforces the parameter bounds. ok is false for anything else.
 func parseArgon(s string) (h argonHash, ok bool) {
+	if len(s) > maxPHCLen {
+		return h, false
+	}
 	parts := strings.Split(s, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[2] != "v=19" {
 		return h, false

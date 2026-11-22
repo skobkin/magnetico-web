@@ -232,6 +232,9 @@ func TestEverythingPassesThroughTheLimiter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := svc.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.DummyVerify(ctx, "x"); err != nil {
 		t.Fatal(err)
 	}
@@ -254,21 +257,168 @@ func TestEverythingPassesThroughTheLimiter(t *testing.T) {
 	}
 }
 
-func TestDummyVerifyUsesCurrentParametersAndCachesTheHash(t *testing.T) {
+func TestDummyVerifyRequiresPreparationAndRunsOneVerification(t *testing.T) {
 	svc := fastService()
 	ctx := context.Background()
-	if err := svc.DummyVerify(ctx, strings.Repeat("z", 5000)); err != nil {
+	if err := svc.DummyVerify(ctx, "x"); !errors.Is(err, ErrNotPrepared) {
+		t.Fatalf("before Prepare: %v", err)
+	}
+	if err := svc.Prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
-	first := svc.dummy
+	first := *svc.dummy.Load()
 	if svc.params.Classify(first) != ClassCurrent {
 		t.Fatalf("dummy hash %q is not at current parameters", first)
 	}
-	if err := svc.DummyVerify(ctx, ""); err != nil {
+	// DummyVerify performs a single verification (no initialization hash).
+	if err := svc.DummyVerify(ctx, strings.Repeat("z", 5000)); err != nil {
 		t.Fatal(err)
 	}
-	if svc.dummy != first {
-		t.Fatal("dummy hash was recomputed")
+	if err := svc.Prepare(ctx); err != nil || *svc.dummy.Load() != first {
+		t.Fatal("a second Prepare recomputed the reference")
+	}
+}
+
+func TestConcurrentPrepareGeneratesOnce(t *testing.T) {
+	svc := fastService()
+	var wg sync.WaitGroup
+	seen := make(chan string, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := svc.Prepare(context.Background()); err != nil {
+				t.Error(err)
+				return
+			}
+			seen <- *svc.dummy.Load()
+		}()
+	}
+	wg.Wait()
+	close(seen)
+	var first string
+	for h := range seen {
+		if first == "" {
+			first = h
+		} else if h != first {
+			t.Fatal("concurrent callers produced different reference hashes")
+		}
+	}
+	// Exactly one hash computation went through the limiter: with capacity 1
+	// held by us, a further Prepare is a no-op and does not queue.
+	hold := make(chan struct{})
+	started := make(chan struct{})
+	l := svc.limiter
+	go l.Do(context.Background(), func() { close(started); <-hold })
+	<-started
+	defer close(hold)
+	if err := svc.Prepare(context.Background()); err != nil {
+		t.Fatalf("prepared service re-entered the limiter: %v", err)
+	}
+}
+
+func TestPrepareFailureLeavesServiceRetryable(t *testing.T) {
+	l := NewLimiter(1, 20*time.Millisecond)
+	svc := NewService(l, fastParams)
+	hold := make(chan struct{})
+	started := make(chan struct{})
+	go l.Do(context.Background(), func() { close(started); <-hold })
+	<-started
+	if err := svc.Prepare(context.Background()); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Prepare under load: %v", err)
+	}
+	if svc.dummy.Load() != nil {
+		t.Fatal("failed Prepare left a reference behind")
+	}
+	cctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.Prepare(cctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Prepare: %v", err)
+	}
+	close(hold)
+	if err := svc.Prepare(context.Background()); err != nil {
+		t.Fatalf("retry after failure: %v", err)
+	}
+	if svc.dummy.Load() == nil {
+		t.Fatal("not prepared after the retry")
+	}
+}
+
+func TestPrepareWaitHonoursContext(t *testing.T) {
+	svc := fastService()
+	svc.prepSlot <- struct{}{} // a Prepare is "in progress"
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	if err := svc.Prepare(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestCancelledContextNeverRunsTheFunction(t *testing.T) {
+	l := NewLimiter(2, time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := l.Do(ctx, func() { t.Error("fn ran under a cancelled context") }); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	svc := fastService()
+	if _, err := svc.Hash(ctx, "a long enough password"); !errors.Is(err, context.Canceled) {
+		t.Errorf("Hash: %v", err)
+	}
+	hash, _ := svc.Hash(context.Background(), "a long enough password")
+	if _, err := svc.Verify(ctx, "a long enough password", hash); !errors.Is(err, context.Canceled) {
+		t.Errorf("Verify: %v", err)
+	}
+	// Cancelled while waiting for a slot, then the slot frees: still no run.
+	l1 := NewLimiter(1, time.Minute)
+	hold := make(chan struct{})
+	started := make(chan struct{})
+	go l1.Do(context.Background(), func() { close(started); <-hold })
+	<-started
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- l1.Do(ctx2, func() { t.Error("fn ran after cancellation") }) }()
+	time.Sleep(30 * time.Millisecond)
+	cancel2()
+	close(hold)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("waiter: %v", err)
+	}
+}
+
+func TestOverlongPHCStringsAreRejectedBeforeDecoding(t *testing.T) {
+	salt, key := "c29tZXNhbHRzYWx0", "AAAAAAAAAAAAAAAAAAAAAA"
+	valid := "$argon2id$v=19$m=65536,t=3,p=4$" + salt + "$" + key
+	// The longest legal string still parses (64-byte salt and key).
+	b64 := func(n int) string { return strings.Repeat("A", (n*4+2)/3) } // unpadded length for n bytes
+	longest := "$argon2id$v=19$m=65536,t=10,p=16$" + b64(64) + "$" + b64(64)
+	if len(longest) > maxPHCLen {
+		t.Fatalf("maxPHCLen %d is below the longest valid string (%d)", maxPHCLen, len(longest))
+	}
+	if _, ok := parseArgon(longest); !ok {
+		t.Fatal("the longest valid string was rejected")
+	}
+	bad := map[string]string{
+		"oversized salt field": "$argon2id$v=19$m=65536,t=3,p=4$" + strings.Repeat("A", 100000) + "$" + key,
+		"oversized key field":  "$argon2id$v=19$m=65536,t=3,p=4$" + salt + "$" + strings.Repeat("A", 100000),
+		"just over the limit":  valid + strings.Repeat("A", maxPHCLen),
+		"megabytes of dollars": strings.Repeat("$", 4<<20),
+		"megabyte hash":        "$argon2id$v=19$m=65536,t=3,p=4$" + salt + "$" + strings.Repeat("A", 1<<20),
+		"megabyte bcrypt":      "$2y$10$" + strings.Repeat("a", 1<<20),
+	}
+	svc := fastService()
+	for name, h := range bad {
+		if got := Classify(h); got != ClassUnsupported {
+			t.Errorf("%s: Classify = %v", name, got)
+		}
+		if _, err := svc.Verify(context.Background(), "pw", h); !errors.Is(err, ErrUnsupportedHash) {
+			t.Errorf("%s: Verify err = %v", name, err)
+		}
+	}
+	// No allocation amplification: rejecting a 4 MiB string allocates (almost) nothing.
+	big := strings.Repeat("$", 4<<20)
+	if allocs := testing.AllocsPerRun(5, func() { parseArgon(big) }); allocs != 0 {
+		t.Errorf("parseArgon allocated %v times for an overlong string", allocs)
 	}
 }
 
