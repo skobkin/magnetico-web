@@ -276,6 +276,12 @@ func runIngest(opFlags *opflags.IngestOptions) {
 		CacheDisabled:    opFlags.CacheDisabled,
 		AllowNonDurable:  opFlags.AllowNonDurable,
 	})
+	if errors.Is(err, ingestserver.ErrShutdownIncomplete) {
+		// Same convention as `crawl`: a stuck goroutine was abandoned within
+		// the shutdown budget; interrupted work is redone after the next start.
+		log.Println(ingestserver.ErrShutdownIncomplete)
+		os.Exit(3)
+	}
 	if err != nil {
 		log.Fatalln(appendSchemaStateDetails(fmt.Sprintf(
 			"The ingest service stopped: database %s. %s",

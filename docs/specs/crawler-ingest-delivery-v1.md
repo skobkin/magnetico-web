@@ -413,8 +413,19 @@ One bounded, process-local LRU (array-backed list + `map[[20]byte]int32`) behind
   in a non-cancellable stall, a cancellable stall, and a full queue (`internal/crawlqueue/closewithin_test.go`,
   `internal/crawler/pipeline_test.go`).
 - **SIGKILL/power loss:** committed rows survive; sent-but-unacknowledged rows are resent.
-- **Ingest SIGTERM:** `http.Server.Shutdown` → in-flight commits finish → consumer finishes its current
-  record and releases the lock → pools close.
+- **Ingest SIGTERM (bounded):** the consumer and the HTTP server stop concurrently. The consumer stops taking
+  rows and may finish the record it is on for `ConsumerGrace` (10 s); that record is then interrupted
+  (`Consumer.Abort` cancels its context) and given `AbortGrace` (5 s) to return. The HTTP server drains in-flight
+  requests for `HTTPGrace` (20 s) and then drops their connections (cancelling the request contexts); handlers
+  get `HandlerGrace` (3 s) to return. Guarantee: `Run` returns within
+  `max(HTTPGrace, ConsumerGrace+AbortGrace) + HandlerGrace` plus ≤ 5 s for the final summary — **28 s** with
+  the defaults. If the consumer or a handler is still running after its budget (a call that ignores its context),
+  it is **abandoned**: the database pools are *not* closed (closing blocks on checked-out connections and would
+  pull them from under the stuck goroutine), `Run` returns `ErrShutdownIncomplete` and the process exits with
+  status 3. Interrupted work needs no repair: the queue row is deleted only after `AddTorrent` succeeded, so the
+  record is reprocessed after the next start and `AddTorrent` is idempotent. The advisory-lock connection is
+  released at process exit. Container stop timeout for ingest: **≥ 40 s**. Tested with a stalled interruptible
+  and a stalled uninterruptible `AddTorrent` (`internal/ingest/server/service_shutdown_test.go`).
 - **Known DHT overflow defects** (confirmed by code review against `dht/managers.go`): `range` over a
   channel that is never closed (producer goroutine blocks forever, result lost); unlocked read of
   `m.output`. M0 ports the minimal upstream fix (`tgragnato/magnetico` 5092b922) with `-race` overflow

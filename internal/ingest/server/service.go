@@ -7,7 +7,8 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"sync"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/skobkin/magnetico-web/internal/ingest/cache"
@@ -23,9 +24,42 @@ const (
 	writeTimeout      = 60 * time.Second
 	idleTimeout       = 120 * time.Second
 	maxHeaderBytes    = 16 << 10
-	shutdownGrace     = 30 * time.Second
 	summaryInterval   = 5 * time.Minute
 )
+
+// Shutdown budgets (see Run). The documented guarantee is that Run returns
+// within max(HTTPGrace, ConsumerGrace+AbortGrace) + HandlerGrace plus at most
+// 5 s for the final summary: 28 s with the defaults.
+const (
+	DefaultHTTPGrace     = 20 * time.Second
+	DefaultConsumerGrace = 10 * time.Second
+	DefaultAbortGrace    = 5 * time.Second
+	DefaultHandlerGrace  = 3 * time.Second
+)
+
+// ErrShutdownIncomplete is returned by Run when a goroutine using the database
+// pools could not be stopped within its budget. The pools were left open and
+// the process must exit; interrupted work is reprocessed after the next start.
+var ErrShutdownIncomplete = errors.New("ingest: shutdown incomplete; a stuck goroutine was abandoned")
+
+type graces struct{ httpGrace, consumerGrace, abortGrace, handlerGrace time.Duration }
+
+func (o Options) durations() graces {
+	g := graces{o.HTTPGrace, o.ConsumerGrace, o.AbortGrace, o.HandlerGrace}
+	if g.httpGrace <= 0 {
+		g.httpGrace = DefaultHTTPGrace
+	}
+	if g.consumerGrace <= 0 {
+		g.consumerGrace = DefaultConsumerGrace
+	}
+	if g.abortGrace <= 0 {
+		g.abortGrace = DefaultAbortGrace
+	}
+	if g.handlerGrace <= 0 {
+		g.handlerGrace = DefaultHandlerGrace
+	}
+	return g
+}
 
 // Options configures Run.
 type Options struct {
@@ -46,24 +80,41 @@ type Options struct {
 
 	// SummaryInterval overrides the counter-summary period (tests).
 	SummaryInterval time.Duration
+
+	// Shutdown budgets; zero selects the defaults above.
+	HTTPGrace, ConsumerGrace, AbortGrace, HandlerGrace time.Duration
+
+	// consumerStore, set by tests only, wraps the consumer's store.
+	consumerStore func(real pgqueue.Store) pgqueue.Store
 }
 
 // Run opens the store and queue, starts the consumer and the HTTP server and
-// blocks until ctx is cancelled. Shutdown order: stop accepting and finish
-// in-flight requests (http.Server.Shutdown) → let the consumer finish its
-// current record and release the lock → close the pools. It returns nil on a
-// clean shutdown.
+// blocks until ctx is cancelled. Shutdown is bounded (see the Default*Grace
+// constants and the end of this function): the consumer finishes or is
+// interrupted at its current record while the HTTP server drains, and the
+// pools are closed only if nothing that uses them had to be abandoned. It
+// returns nil on a clean shutdown and ErrShutdownIncomplete otherwise.
 func Run(ctx context.Context, o Options) error {
 	lg := o.Logger
 	if lg == nil {
 		lg = log.Default()
 	}
 
+	// abandoned is set when a goroutine that uses the pools could not be
+	// stopped within its shutdown budget. Closing a pool with a connection
+	// still checked out blocks forever and would yank it from under the stuck
+	// goroutine, so in that case the pools are left to process exit.
+	var abandoned atomic.Bool
+
 	store, err := persistence.MakeDatabase(ctx, o.DatabaseURL)
 	if err != nil {
 		return fmt.Errorf("opening the database: %w", err)
 	}
-	defer func() { _ = store.Close() }()
+	defer func() {
+		if !abandoned.Load() {
+			_ = store.Close()
+		}
+	}()
 
 	queueDSN := o.QueueDatabaseURL
 	if queueDSN == "" {
@@ -75,7 +126,11 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return fmt.Errorf("opening the ingest queue: %w", err)
 	}
-	defer q.Close()
+	defer func() {
+		if !abandoned.Load() {
+			q.Close()
+		}
+	}()
 
 	if st, err := q.Stats(ctx); err == nil {
 		lg.Printf("ingest queue: %d pending (%d bytes), %d quarantined (%d bytes)",
@@ -92,7 +147,11 @@ func Run(ctx context.Context, o Options) error {
 		c = cache.New(cache.Options{MaxBytes: o.CacheMaxBytes})
 	}
 	exist := existence.New(store, c, existence.Options{})
-	consumer := pgqueue.NewConsumer(q, store, pgqueue.ConsumerOptions{OnStored: exist.MarkExisting})
+	var consumerStore pgqueue.Store = store
+	if o.consumerStore != nil {
+		consumerStore = o.consumerStore(store)
+	}
+	consumer := pgqueue.NewConsumer(q, consumerStore, pgqueue.ConsumerOptions{OnStored: exist.MarkExisting})
 
 	srv, err := New(Config{
 		Token: o.Token, Queue: q, Exist: exist, OnAdmitted: consumer.Wake, Logger: lg,
@@ -105,8 +164,16 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return fmt.Errorf("listening on %s: %w", o.Listen, err)
 	}
+	// Requests in flight are counted so shutdown can tell when no handler can
+	// still be using the pools.
+	var inflight atomic.Int64
+	handler := srv.Handler()
 	httpSrv := &http.Server{
-		Handler:           srv.Handler(),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inflight.Add(1)
+			defer inflight.Add(-1)
+			handler.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -115,12 +182,14 @@ func Run(ctx context.Context, o Options) error {
 		ErrorLog:          lg,
 	}
 
+	// Cancelling consumerCtx asks the consumer to stop after its current
+	// record; consumer.Abort() interrupts that record (see shutdown below).
 	consumerCtx, stopConsumer := context.WithCancel(context.WithoutCancel(ctx))
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); _ = consumer.Run(consumerCtx) }()
+	consumerDone := make(chan struct{})
+	summaryDone := make(chan struct{})
+	go func() { defer close(consumerDone); _ = consumer.Run(consumerCtx) }()
 	go func() {
-		defer wg.Done()
+		defer close(summaryDone)
 		interval := o.SummaryInterval
 		if interval <= 0 {
 			interval = summaryInterval
@@ -153,13 +222,56 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}
 
-	sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-	if err := httpSrv.Shutdown(sctx); err != nil {
-		_ = httpSrv.Close()
-	}
-	cancel()
+	// Bounded shutdown. The consumer and the HTTP server stop concurrently:
+	//   - the consumer finishes the record it is on (ConsumerGrace), then that
+	//     record is interrupted (Abort) and given AbortGrace to return;
+	//   - the HTTP server drains in-flight requests for HTTPGrace, then drops
+	//     their connections, which cancels the request contexts;
+	//   - finally handlers get HandlerGrace to return.
+	// Anything still running after its budget is abandoned and the pools are
+	// not closed (see abandoned); the interrupted work is idempotent and is
+	// redone by the next start. The worst case is
+	// max(HTTPGrace, ConsumerGrace+AbortGrace) + HandlerGrace + the summary.
 	stopConsumer()
-	wg.Wait()
+	httpDone := make(chan struct{})
+	go func() {
+		defer close(httpDone)
+		sctx, cancel := context.WithTimeout(context.Background(), o.durations().httpGrace)
+		defer cancel()
+		if err := httpSrv.Shutdown(sctx); err != nil {
+			_ = httpSrv.Close()
+		}
+	}()
+
+	d := o.durations()
+	var stuck []string
+	select {
+	case <-consumerDone:
+	case <-time.After(d.consumerGrace):
+		lg.Printf("shutdown: the consumer did not finish its record in %s; interrupting it", d.consumerGrace)
+		consumer.Abort()
+		select {
+		case <-consumerDone:
+		case <-time.After(d.abortGrace):
+			stuck = append(stuck, "queue consumer")
+		}
+	}
+	<-httpDone
+	handlersDone := time.Now().Add(d.handlerGrace)
+	for inflight.Load() > 0 && time.Now().Before(handlersDone) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := inflight.Load(); n > 0 {
+		stuck = append(stuck, fmt.Sprintf("%d HTTP request handler(s)", n))
+	}
+	<-summaryDone
+
+	if len(stuck) > 0 {
+		abandoned.Store(true)
+		lg.Printf("shutdown: abandoned %s; database pools are left open and interrupted work will be "+
+			"reprocessed idempotently after the next start", strings.Join(stuck, ", "))
+		return errors.Join(runErr, ErrShutdownIncomplete)
+	}
 	logSummary(lg, srv, exist, consumer, q)
 	return runErr
 }

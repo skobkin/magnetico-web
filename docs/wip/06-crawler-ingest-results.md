@@ -79,6 +79,7 @@ Checklist before staging:
 - [ ] Alerting on the periodic summary lines: `crawl_dropped_queue_full`, `crawl_send_unrecognised_rejections`,
       `guard_trips`, ingest `queue_full`, `storage_errors`, `lock_losses`, and growing quarantine counts.
 - [ ] Container stop timeout ≥ 60 s for the crawler (shutdown grace: 5 s writer + 30 s sender + 10 s queue
-      close) and ≥ 40 s for ingest. A crawler exit status of 3 means the SQLite writer was abandoned; the
-      next start recovers the queue.
+      close) and ≥ 40 s for ingest (bounded: ingest returns within 28 s of SIGTERM; see spec §8). Exit status 3
+      means a stuck goroutine was abandoned on purpose (crawler: the SQLite writer, recovered by the next
+      start; ingest: the consumer or a handler, whose interrupted record is reprocessed idempotently).
 - [ ] Operator SQL for quarantine reviewed (`UPGRADE.md`).

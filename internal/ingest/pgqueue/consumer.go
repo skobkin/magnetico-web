@@ -76,6 +76,12 @@ type Consumer struct {
 
 	wake chan struct{}
 
+	// abortCtx is the parent of every in-flight record's context. Cancelling
+	// the Run context only asks the consumer to stop after the current record;
+	// Abort cancels the record itself.
+	abortCtx context.Context
+	abort    context.CancelFunc
+
 	owned atomic.Bool
 
 	stored, already, quarantined, retried, storageErrs, acquisitions, lockLosses atomic.Uint64
@@ -98,8 +104,20 @@ func NewConsumer(q *Queue, store Store, o ConsumerOptions) *Consumer {
 	if o.Limits == (codec.Limits{}) {
 		o.Limits = codec.DefaultLimits()
 	}
-	return &Consumer{q: q, store: store, o: o, wake: make(chan struct{}, 1)}
+	c := &Consumer{q: q, store: store, o: o, wake: make(chan struct{}, 1)}
+	c.abortCtx, c.abort = context.WithCancel(context.Background())
+	return c
 }
+
+// Abort cancels the record currently being processed. Run's context only
+// requests a graceful stop (the record in flight finishes); a caller that must
+// bound shutdown cancels Run's context, waits its grace period and then calls
+// Abort. The interrupted record is settled by idempotent reprocessing: its
+// queue row is untouched unless the whole step completed, and AddTorrent
+// answers "already present" the second time. A store that ignores its context
+// cannot be interrupted; Run then stays blocked and the caller must abandon it
+// (and must not close the pools it uses).
+func (c *Consumer) Abort() { c.abort() }
 
 // Wake nudges an idle consumer (called after a successful admission).
 func (c *Consumer) Wake() {
@@ -139,7 +157,7 @@ func (c *Consumer) Run(ctx context.Context) error {
 		c.owned.Store(false)
 		if lost {
 			c.lockLosses.Add(1)
-			conn.Close(context.Background()) // drops the session lock if it still exists
+			closeConn(conn) // drops the session lock if it still exists
 			if !sleep(ctx, c.o.BackoffMin) {
 				return nil
 			}
@@ -149,9 +167,17 @@ func (c *Consumer) Run(ctx context.Context) error {
 		uctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_, _ = conn.Exec(uctx, `SELECT pg_advisory_unlock($1)`, consumerLockKey)
 		cancel()
-		conn.Close(context.Background())
+		closeConn(conn)
 	}
 	return nil
+}
+
+// closeConn closes a pinned connection without ever blocking on a stalled
+// peer.
+func closeConn(conn *pgx.Conn) {
+	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = conn.Close(cctx)
 }
 
 // acquire opens the pinned connection and tries the session lock.
@@ -162,7 +188,7 @@ func (c *Consumer) acquire(ctx context.Context) (*pgx.Conn, bool) {
 	}
 	var got bool
 	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock($1)`, consumerLockKey).Scan(&got); err != nil || !got {
-		conn.Close(context.Background())
+		closeConn(conn)
 		return nil, false
 	}
 	c.owned.Store(true)
@@ -230,9 +256,10 @@ func (c *Consumer) processOwned(ctx context.Context, conn *pgx.Conn) (lost bool)
 			if !c.verifyOwnership(ctx, conn) {
 				return ctx.Err() == nil
 			}
-			// The record in flight is allowed to finish after a shutdown
-			// request (bounded); its work is idempotent either way.
-			wctx, wcancel := context.WithTimeout(context.WithoutCancel(ctx), recordGrace)
+			// The record in flight is allowed to finish after a graceful
+			// stop request, bounded by recordGrace and by Abort; its work
+			// is idempotent either way.
+			wctx, wcancel := context.WithTimeout(c.abortCtx, recordGrace)
 			err := c.processRow(wctx, id)
 			wcancel()
 			if err == nil {
