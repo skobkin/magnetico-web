@@ -19,6 +19,7 @@
 package crawlqueue
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -27,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -108,6 +110,9 @@ type Options struct {
 type hooks struct {
 	// checkpointErr, when set, replaces the result of a checkpoint attempt.
 	checkpointErr func() error
+	// beforeOp, when set, runs in the writer goroutine before each operation
+	// is handled; tests use it to hold an operation in flight.
+	beforeOp func()
 }
 
 func (o *Options) applyDefaults() {
@@ -496,16 +501,19 @@ func (q *Queue) usable() error {
 // Append durably enqueues one record. It returns appended=false (and nil) if
 // a record with the same info hash is already queued. A nil error means the
 // row is committed and fsynced. If ctx ends while waiting, the record may
-// still be committed.
+// still be committed. The payload is copied before the handoff, so the caller
+// may reuse it as soon as Append returns, whatever the outcome. A duplicate of
+// an already queued hash is reported as appended=false even when the queue is
+// at its byte quota.
 func (q *Queue) Append(ctx context.Context, infoHash [20]byte, format int, payload []byte) (appended bool, err error) {
-	r, err := q.submit(ctx, &op{kind: opAppend, hash: infoHash, format: format, payload: payload})
+	r, err := q.submit(ctx, &op{kind: opAppend, hash: infoHash, format: format, payload: bytes.Clone(payload)})
 	return r.appended, err
 }
 
 // AppendQuarantined stores a record directly in quarantine (for example
 // record_too_large at enqueue time). It counts toward the byte quota.
 func (q *Queue) AppendQuarantined(ctx context.Context, infoHash [20]byte, format int, payload []byte, reason string) error {
-	_, err := q.submit(ctx, &op{kind: opAppendQuarantined, hash: infoHash, format: format, payload: payload, reason: reason})
+	_, err := q.submit(ctx, &op{kind: opAppendQuarantined, hash: infoHash, format: format, payload: bytes.Clone(payload), reason: reason})
 	return err
 }
 
@@ -514,7 +522,7 @@ func (q *Queue) Ack(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := q.submit(ctx, &op{kind: opAck, ids: ids})
+	_, err := q.submit(ctx, &op{kind: opAck, ids: slices.Clone(ids)})
 	return err
 }
 
@@ -525,7 +533,7 @@ func (q *Queue) Quarantine(ctx context.Context, ids []int64, reason string, http
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := q.submit(ctx, &op{kind: opQuarantine, ids: ids, reason: reason, status: httpStatus})
+	_, err := q.submit(ctx, &op{kind: opQuarantine, ids: slices.Clone(ids), reason: reason, status: httpStatus})
 	return err
 }
 

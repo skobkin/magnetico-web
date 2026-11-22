@@ -45,6 +45,9 @@ func (q *Queue) drainClosed() {
 }
 
 func (q *Queue) handle(o *op) {
+	if h := q.opts.hooks.beforeOp; h != nil {
+		h()
+	}
 	if err := q.Err(); err != nil {
 		o.resp <- result{err: err}
 		return
@@ -130,7 +133,21 @@ func (q *Queue) commitAppends(batch []*op) {
 	for i, o := range batch {
 		size := int64(len(o.payload))
 		if curBytes+size > q.opts.MaxBytes {
-			res[i].err = ErrQueueFull
+			// Over quota. A hash that is already queued is still an
+			// idempotent no-op, so look only on this (rare) path; a normal
+			// append pays no extra query.
+			var one int
+			err := tx.QueryRowContext(ctx, "SELECT 1 FROM queue WHERE info_hash = ?", o.hash[:]).Scan(&one)
+			switch {
+			case err == nil:
+				// duplicate: appended=false, no error
+			case errors.Is(err, sql.ErrNoRows):
+				res[i].err = ErrQueueFull
+			default:
+				_ = tx.Rollback()
+				failAll(q.writeErr("append lookup", err))
+				return
+			}
 			continue
 		}
 		r, err := tx.ExecContext(ctx,

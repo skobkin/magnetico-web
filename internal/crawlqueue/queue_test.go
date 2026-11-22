@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -651,3 +652,168 @@ func TestSecondProcessIsRefused(t *testing.T) {
 		t.Fatalf("second process was not refused:\n%s", out)
 	}
 }
+
+// --------------------------------------------- review follow-ups (ownership)
+
+// holdWriter makes the writer block before its next operation until release
+// is called.
+func holdWriter(o *Options) (release func()) {
+	gate := make(chan struct{})
+	var once sync.Once
+	o.hooks.beforeOp = func() { <-gate }
+	return func() { once.Do(func() { close(gate) }) }
+}
+
+// submitCancelled runs fn with a context that is cancelled as soon as the
+// operation has been handed to the writer, then waits for fn to return.
+func submitCancelled(t *testing.T, fn func(ctx context.Context) error) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(bg)
+	done := make(chan error, 1)
+	go func() { done <- fn(ctx) }()
+	time.Sleep(50 * time.Millisecond) // let the op reach the writer
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+func TestAppendCopiesPayloadBeforeHandoff(t *testing.T) {
+	var release func()
+	q := open(t, func(o *Options) { release = holdWriter(o) })
+	defer release()
+
+	buf := bytes.Repeat([]byte{'A'}, 64)
+	submitCancelled(t, func(ctx context.Context) error {
+		_, err := q.Append(ctx, h(1), 1, buf)
+		return err
+	})
+	for i := range buf { // the caller reuses its buffer
+		buf[i] = 'Z'
+	}
+	quar := bytes.Repeat([]byte{'B'}, 64)
+	submitCancelled(t, func(ctx context.Context) error {
+		return q.AppendQuarantined(ctx, h(2), 1, quar, "record_too_large")
+	})
+	for i := range quar {
+		quar[i] = 'Z'
+	}
+	release()
+
+	items := waitPeek(t, q, 1)
+	if !bytes.Equal(items[0].Payload, bytes.Repeat([]byte{'A'}, 64)) {
+		t.Fatalf("queued payload was mutated: %q", items[0].Payload)
+	}
+	// Quarantined payload: close and read the table directly.
+	dir := q.opts.Dir
+	if err := q.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "queue.db")+"?mode=ro")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var got []byte
+	if err := db.QueryRow("SELECT payload FROM quarantine WHERE info_hash = ?", func() []byte { x := h(2); return x[:] }()).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte{'B'}, 64)) {
+		t.Fatalf("quarantined payload was mutated: %q", got)
+	}
+}
+
+func TestAckAndQuarantineCopyIDsBeforeHandoff(t *testing.T) {
+	var release func()
+	var holding atomicBool
+	q := open(t, func(o *Options) {
+		gate := make(chan struct{})
+		var once sync.Once
+		release = func() { once.Do(func() { close(gate) }) }
+		o.hooks.beforeOp = func() {
+			if holding.Load() {
+				<-gate
+			}
+		}
+	})
+	defer release()
+	for i := 1; i <= 4; i++ {
+		if _, err := q.Append(bg, h(i), 1, payload(i, 10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := q.Peek(bg, 4, 1<<20)
+	if err != nil || len(items) != 4 {
+		t.Fatalf("peek: %v %d", err, len(items))
+	}
+	holding.Store(true)
+
+	ackIDs := []int64{items[0].ID, items[1].ID}
+	submitCancelled(t, func(ctx context.Context) error { return q.Ack(ctx, ackIDs) })
+	ackIDs[0], ackIDs[1] = items[2].ID, items[3].ID // reuse: must not affect the op
+
+	quarIDs := []int64{items[2].ID}
+	submitCancelled(t, func(ctx context.Context) error { return q.Quarantine(ctx, quarIDs, "x", 400) })
+	quarIDs[0] = items[3].ID
+	release()
+
+	// Items 0 and 1 acked; item 2 quarantined; item 3 must remain queued.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rest, err := q.Peek(bg, 10, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rest) == 1 && rest[0].ID == items[3].ID {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("remaining queue = %+v, want only id %d", rest, items[3].ID)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if s := q.Stats(); s.QuarantineRecords != 1 {
+		t.Fatalf("stats: %+v", s)
+	}
+}
+
+func TestDuplicateAtFullCapacityIsIdempotent(t *testing.T) {
+	t.Parallel()
+	q := open(t, func(o *Options) { o.MaxBytes = 100 })
+	if ok, err := q.Append(bg, h(1), 1, payload(1, 100)); err != nil || !ok {
+		t.Fatalf("fill: %v %v", ok, err)
+	}
+	ok, err := q.Append(bg, h(1), 1, payload(1, 100))
+	if err != nil || ok {
+		t.Fatalf("duplicate at full: appended=%v err=%v, want false,nil", ok, err)
+	}
+	if _, err := q.Append(bg, h(2), 1, payload(2, 1)); !errors.Is(err, ErrQueueFull) {
+		t.Fatalf("new hash at full: %v", err)
+	}
+	if s := q.Stats(); s.FullRejections != 1 || s.QueueRecords != 1 || s.QueueBytes != 100 {
+		t.Fatalf("stats: %+v", s)
+	}
+}
+
+func waitPeek(t *testing.T, q *Queue, n int) []Item {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		items, err := q.Peek(bg, 10, 1<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) >= n {
+			return items
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queue never reached %d items", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+type atomicBool struct{ v atomic.Bool }
+
+func (b *atomicBool) Load() bool   { return b.v.Load() }
+func (b *atomicBool) Store(x bool) { b.v.Store(x) }
