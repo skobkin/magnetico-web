@@ -543,9 +543,9 @@ func TestConsumerCrashAfterAddTorrentIsIdempotent(t *testing.T) {
 	if _, err := q.Admit(context.Background(), []Item{item}); err != nil {
 		t.Fatal(err)
 	}
-	// The hook cancels the context after AddTorrent committed: the DELETE
-	// then fails, exactly like a process death at that point.
-	c1 := NewConsumer(q, e.store, fastOpts(ConsumerOptions{beforeDelete: func([20]byte) { cancel() }}))
+	// The hook fails after AddTorrent committed and before the DELETE and
+	// stops the consumer, like a process death at that point.
+	c1 := NewConsumer(q, e.store, fastOpts(ConsumerOptions{beforeDelete: func([20]byte) error { cancel(); return errors.New("simulated crash") }}))
 	done := make(chan struct{})
 	go func() { defer close(done); _ = c1.Run(ctx) }()
 	<-done
@@ -750,10 +750,9 @@ func TestConsumerSingleOwnerAndTakeoverAfterBackendKill(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "owner to notice the loss", func() bool { return owner.Stats().LockLosses >= 1 })
-	waitFor(t, "takeover", func() bool { return standby.Owns() })
-	if owner.Owns() && standby.Owns() {
-		t.Fatal("two owners after the loss was observed")
-	}
+	// Either consumer may win the race to reacquire; exactly one must.
+	waitFor(t, "takeover", func() bool { return owner.Owns() != standby.Owns() })
+	waitFor(t, "a single new lock holder", func() bool { return len(advisoryHolders(t, e)) == 1 })
 
 	items := []Item{payloadFor(t, 10, 10), payloadFor(t, 11, 10), payloadFor(t, 12, 10)}
 	if _, err := q.Admit(context.Background(), items); err != nil {

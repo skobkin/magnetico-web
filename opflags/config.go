@@ -156,6 +156,8 @@ func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 	switch command {
 	case "crawl":
 		return o.applyEnvConfig(explicit)
+	case "ingest":
+		return o.applyEnvIngestConfig(explicit)
 	case "migrate":
 		if err := o.applyEnvMigrateConfig(explicit); err != nil {
 			return err

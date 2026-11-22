@@ -20,6 +20,7 @@ import (
 	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/dht/mainline"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
+	ingestserver "github.com/skobkin/magnetico-web/internal/ingest/server"
 	"github.com/skobkin/magnetico-web/internal/migration"
 	"github.com/skobkin/magnetico-web/internal/migration/forensics"
 	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
@@ -43,6 +44,8 @@ func main() {
 	switch command {
 	case "crawl":
 		runCrawl(&opFlags.Crawl)
+	case "ingest":
+		runIngest(&opFlags.Ingest)
 	case "web":
 		notImplemented("web",
 			"the authenticated web UI will be designed from the historical PHP application in a later phase")
@@ -250,6 +253,47 @@ func runMigrateSchemaInit(opFlags *opflags.SchemaInitOptions) {
 	// The redacted URL carries no credentials by construction.
 	log.Printf("the database schema on %s is ready (created now or already up to date)",
 		redactDatabaseURL(opFlags.DatabaseURL))
+}
+
+// runIngest implements `magnetico ingest`: the authenticated HTTP ingest
+// service plus the single queue consumer. It runs until SIGINT/SIGTERM and
+// then shuts down gracefully (in-flight requests, current record, pools).
+// Error text is reduced to controlled content: database URLs and driver
+// messages never reach the log.
+func runIngest(opFlags *opflags.IngestOptions) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	err := ingestserver.Run(ctx, ingestserver.Options{
+		Listen:           opFlags.Listen,
+		DatabaseURL:      opFlags.DatabaseURL,
+		QueueDatabaseURL: opFlags.QueueDatabaseURL,
+		Token:            opFlags.Token,
+		QueueMaxBytes:    opFlags.QueueMaxBytes,
+		CacheMaxBytes:    opFlags.CacheMaxBytes,
+		CacheDisabled:    opFlags.CacheDisabled,
+		AllowNonDurable:  opFlags.AllowNonDurable,
+	})
+	if err != nil {
+		log.Fatalln(appendSchemaStateDetails(fmt.Sprintf(
+			"The ingest service stopped: database %s. %s",
+			redactDatabaseURL(opFlags.DatabaseURL), ingestErrorDetail(err)), err))
+	}
+	log.Println("the ingest service stopped cleanly")
+}
+
+// ingestErrorDetail is controlledErrorDetail plus the ingest-specific
+// sentinels (fixed messages only).
+func ingestErrorDetail(err error) string {
+	switch {
+	case errors.Is(err, pgqueue.ErrSchemaMissing):
+		return pgqueue.ErrSchemaMissing.Error()
+	case errors.Is(err, pgqueue.ErrImportIncomplete):
+		return pgqueue.ErrImportIncomplete.Error()
+	case errors.Is(err, pgqueue.ErrNonDurableDatabase):
+		return pgqueue.ErrNonDurableDatabase.Error()
+	}
+	return controlledErrorDetail(err)
 }
 
 // runMigrateIngestSchemaInit implements `magnetico migrate ingest-schema-init`:

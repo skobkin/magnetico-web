@@ -29,6 +29,7 @@ const (
 	defaultBackoffMin    = time.Second
 	defaultBackoffMax    = 60 * time.Second
 	maxRowBackoffSeconds = 300
+	recordGrace          = 2 * time.Minute
 )
 
 // Store is the persistence seam of the consumer; persistence.Store satisfies it.
@@ -51,7 +52,7 @@ type ConsumerOptions struct {
 	BackoffMax   time.Duration
 
 	// Hooks for tests; never set in production.
-	beforeDelete func(infoHash [20]byte) // after AddTorrent, before DELETE
+	beforeDelete func(infoHash [20]byte) error // after AddTorrent, before DELETE; an error simulates a crash
 }
 
 // ConsumerStats are the consumer counters.
@@ -229,13 +230,14 @@ func (c *Consumer) processOwned(ctx context.Context, conn *pgx.Conn) (lost bool)
 			if !c.verifyOwnership(ctx, conn) {
 				return ctx.Err() == nil
 			}
-			err := c.processRow(ctx, id)
+			// The record in flight is allowed to finish after a shutdown
+			// request (bounded); its work is idempotent either way.
+			wctx, wcancel := context.WithTimeout(context.WithoutCancel(ctx), recordGrace)
+			err := c.processRow(wctx, id)
+			wcancel()
 			if err == nil {
 				backoff = c.o.BackoffMin
 				continue
-			}
-			if ctx.Err() != nil {
-				return false
 			}
 			// Global storage backoff: the row stays untouched.
 			c.storageErrs.Add(1)
@@ -322,7 +324,9 @@ func (c *Consumer) processRow(ctx context.Context, id int64) error {
 		return c.retryRow(ctx, id, attempts)
 	}
 	if c.o.beforeDelete != nil {
-		c.o.beforeDelete(rec.InfoHash)
+		if err := c.o.beforeDelete(rec.InfoHash); err != nil {
+			return err
+		}
 	}
 	if _, err := c.q.pool.Exec(ctx, `DELETE FROM magnetico_ingest.queue WHERE id = $1`, id); err != nil {
 		return err // reprocessed later; AddTorrent is idempotent

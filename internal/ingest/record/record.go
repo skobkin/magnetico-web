@@ -298,3 +298,9 @@ func parseHex4(data []byte, at int) (rune, bool) {
 	}
 	return v, true
 }
+
+// CheckVersion reports ErrUnsupportedVersion (or ErrInvalidRecord for a
+// missing/unreadable "v") without applying any other rule, regardless of the
+// record size. The ingest service uses it to honour the documented
+// precedence unsupported_version > record_too_large > invalid_record.
+func CheckVersion(data []byte) error { return checkVersion(data) }

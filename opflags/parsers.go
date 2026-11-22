@@ -28,7 +28,7 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 
 	active := parser.Active
 	if active == nil {
-		return "", errors.New("no command given; expected one of: crawl, web, migrate (see --help)")
+		return "", errors.New("no command given; expected one of: crawl, ingest, web, migrate (see --help)")
 	}
 	command := active.Name
 
@@ -38,6 +38,13 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 			return "", err
 		}
 		if err := o.Crawl.check(); err != nil {
+			return "", err
+		}
+	case "ingest":
+		if err := o.applyConfig(explicitOptions(parser.Command), command); err != nil {
+			return "", err
+		}
+		if err := o.Ingest.check(); err != nil {
 			return "", err
 		}
 	case "migrate":

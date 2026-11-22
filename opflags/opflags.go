@@ -15,6 +15,7 @@ type OpFlags struct {
 	ConfigFilePath string `long:"config-file-path" description:"Configuration YAML file path. If not filled in, it will default to disabled." default:""`
 
 	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT indexer (storage is not implemented yet, it fails closed)."`
+	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer)."`
 	Web     StubOptions    `command:"web" description:"Reserved for the future authenticated web UI (not implemented yet)."`
 	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
 }

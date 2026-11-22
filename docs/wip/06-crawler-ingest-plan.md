@@ -1,7 +1,14 @@
 # Task 06 — Implementation plan (Task 06A deliverable)
 
-**Status:** M0–M4 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M5–M7 in
+**Status:** M0–M5 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M6–M7 in
 progress (authorized after review of `9f62f51f`).
+
+M5 notes: packages `internal/ingest/server` (handlers, `Run` lifecycle) and `opflags/ingest.go`. The `ingest`
+command has CLI flags and `MAGNETICO_INGEST_*` variables but **no config-file layer** (deviation: YAML keys for
+ingest are not supported; the token is ENV-only by design). `/exists` answers 503 `storage_unavailable` when
+every requested hash is `unknown` (nothing could be answered) and 200 with an `unknown` list otherwise.
+`record.CheckVersion` was exported so single-record precedence `unsupported_version > record_too_large >
+invalid_record` also holds for oversize records.
 
 M4 notes: package `internal/ingest/pgqueue`. `ingest-schema-init` verifies the 0.8.0 schema through
 `persistence.MakeDatabase` before creating `magnetico_ingest`. The usage triggers additionally reject
