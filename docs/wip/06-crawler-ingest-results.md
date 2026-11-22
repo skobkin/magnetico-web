@@ -59,9 +59,11 @@ Earlier milestones' measurements (spec §11): SQLite disk/payload 1.0–1.35×; 
    workload fully drained, at the price of more GC cycles (1,230 vs 10; total GC pause 230 ms over the run;
    CPU cost not separately measured). Recommendation: run `ingest` with `GOMEMLIMIT` ≈ 256–512 MiB, and
    treat reducing Brotli encoder allocation as a separate codec issue. Raw data: the run directories are in
-   the investigator's scratchpad, not committed. Not done: multi-hour soak (see plan below).
-2. One 32-second run is an acceptance check of bounded behaviour, not a soak test. Long-duration, many-hour
-   behaviour (autovacuum of the queue table, WAL growth of the SQLite file, cache hit rate) is unmeasured.
+   the investigator's scratchpad, not committed. The multi-hour soak and a controlled CPU comparison were
+   done afterwards: see "VM qualification" below, which supersedes the 128 MiB suggestion.
+2. One 32-second run is an acceptance check of bounded behaviour, not a soak test. The two-hour soaks
+   (queue-table autovacuum, SQLite WAL growth) are now measured, see "VM qualification". The ingest existence
+   cache hit rate is still unmeasured: the synthetic workload issues no `exists` requests.
 3. The crawler's DHT/leech path was validated in isolation (`metadata` tests under `-race`, shutdown with
    stalled peers) and through a loopback smoke without live DHT traffic. No run against the real BitTorrent
    network was performed.
@@ -71,9 +73,8 @@ Earlier milestones' measurements (spec §11): SQLite disk/payload 1.0–1.35×; 
    quarantine automatically.
 6. The consumer is single and sequential; throughput headroom is ≈19 k rec/s on the measurement host against
    an expected 10–50 rec/s.
-7. The M0–M7 test runs avoided an unrestricted `go test -race ./...`. **Not executed:** the full-repository
-   race run and `-race` on the root package. Targeted `-race` was run on every package changed by M4–M6 and
-   by the post-M7 corrections.
+7. The M0–M7 test runs avoided an unrestricted `go test -race ./...`. This was later executed in full on the
+   VM and passed, see "VM qualification".
 8. **Baseline comparison of `internal/migration` and `legacy/original` (post-M7 review).** Clean worktree at
    `879903ba` (immediately before M0) versus the current branch, each package run separately, no `-race`,
    `-p 1`, `-count=1`, 25 min timeout, `GOMAXPROCS=4`, `GOMEMLIMIT=2GiB`, inside a 6 GiB cgroup memory cap,
@@ -105,19 +106,166 @@ Checklist before staging:
       start; ingest: the consumer or a handler, whose interrupted record is reprocessed idempotently).
 - [ ] Operator SQL for quarantine reviewed (`UPGRADE.md`).
 
-## Soak / profiling plan for a separate job (PVE VM, ≈ 16–24 GiB RAM)
+## VM qualification (Task 06 qualification run, 2026-11-22)
 
-Not executed; the VM was not touched and its readiness is not assumed. The workload is synthetic, so no
-torrent dump is needed. Prerequisites to confirm first: Go toolchain matching `go.mod`; a disposable
-PostgreSQL 17 (native binaries, or `MAGNETICO_TEST_POSTGRES_DSN` pointing at an explicitly authorised
-throw-away instance — the VM has no Docker); a checkout of this branch; ≥ 20 GiB free disk.
+Nothing here touched production or the public DHT; all databases were disposable `postgres:17` containers
+and the workload is synthetic (the harness's measured size mix: 70 % one file, 25 % 30 files, 5 % 400 files).
+Raw profiles, CSV time series and logs are in `/home/herdr/qual/` on the VM, outside Git.
+
+### Environment
+
+| | |
+|---|---|
+| VM | PVE guest under Herdr Core, Debian 13, kernel 6.12.117 |
+| CPU / RAM | AMD Ryzen 9 7950X3D, 8 vCPU / 31 GiB (7 GiB swap, never used) |
+| Go / Docker / PostgreSQL | go1.27.0 linux/amd64 / 29.10.0 / `postgres:17` (default configuration, `fsync=on`) |
+| Commit | race run: `a9c794ef`; profile runs: `deee89d5` (= `a9c794ef` + the test-harness commit below) |
+| Disk | `/home` 113 GiB free (> 20 GiB). `/` has only ≈ 10 GiB and holds `/var/lib/docker`; `/tmp` is a RAM tmpfs |
+
+**Deviation (disk).** Because Docker's root is on the small `/`, the profile/soak runs did not use the
+harness's per-process container (its data would have lived on `/`). They used pgtest's documented
+`MAGNETICO_TEST_POSTGRES_DSN` path with one dedicated, freshly created disposable `postgres:17` container
+(data directory on `/home`, bound to `127.0.0.1` only), recreated before every run. The race run used the
+default harness (containers on `/`). `TMPDIR` was on `/home` for every run. Docker's configuration and the
+unrelated `beszel-agent` container were not touched.
+
+### Full-repository race test
 
 ```
-MAGNETICO_E2E_PROFILE_DIR=/var/tmp/ingest-prof MAGNETICO_E2E_PROFILE_SECONDS=14400 \
-MAGNETICO_E2E_PROFILE_ENV="GOMEMLIMIT=384MiB" \
-go test -count=1 -p 1 -timeout 6h -run TestE2EIngestMemoryProfile -v ./internal/e2e/
+go test -race -count=1 -p 1 -timeout 45m -v ./...      # in a worktree at a9c794ef
 ```
 
-Run it twice (with and without `GOMEMLIMIT`). Watch: RSS/heap trend in `ingestd-mem.log` (flat vs growing),
-queue table bloat (`pg_total_relation_size('magnetico_ingest.queue')`) and autovacuum, GC CPU share at the
-limit, and heap profiles at the start, middle and end.
+**Pass:** 30 packages `ok`, 3 without test files, no failure, no `DATA RACE`, 7 min wall (06:13:17–06:20:13).
+Slowest: `codec` 65.7 s, `internal/e2e` 65.6 s, root 64.8 s, `persistence` 21.4 s, `metadata` 18.6 s,
+`internal/migration` 16.6 s. Host observations (10 s samples): load average ≤ 7.5, memory used ≤ 7.6 GiB,
+no swap, `/` free ≥ 10 GiB, ≤ 3 containers. No timeout was extended; none was needed. The earlier teardown
+timeouts of the laptop runs did not occur. Finding: `internal/migration/forensics` uses pgtest without
+`pgtest.RunTests` in `TestMain`, so its container was **left running** after the run (removed by hand; it
+was the run's own container). Not changed here (out of scope), a one-line follow-up.
+
+### Harness extension (test-only, commit `deee89d5`)
+
+`ingestd` reports process CPU and GC CPU (`runtime/metrics`) and now **refuses any pprof address that is not
+a literal loopback IP** (unit-tested, also when started by hand). `TestE2EIngestMemoryProfile` writes a
+10-second time series (`timeseries.csv`: memory, CPU, crawler queue/WAL, PostgreSQL backlog, queue relation
+size, dead tuples, autovacuum counters, free disk), checks integrity (exactly-once persistence, no
+quarantine, usage accounting, error-like log lines, crawler `DONE` counters), and ends the run with
+diagnostics preserved on any **early-stop condition**:
+
+- ingest anonymous RSS > 1.5 GiB, goroutines > 200, free disk < 12 GiB, ingest or crawler exited;
+- steady-phase crawler queue > 500 or PostgreSQL backlog > 2,000 records for 5 min;
+- no persistence progress for 2 min with a backlog, records lost (queue empty, count short), or a drain
+  not finished within 15 min;
+- live heap or anonymous RSS median growing in two consecutive 20-min windows (> 50 % and 64 MiB, or > 25 %
+  and 100 MiB) after a 20-min warm-up;
+- GC > 60 % of ingest CPU over 10 min; any quarantine row; usage drift in 3 consecutive samples; any
+  error-like log line.
+
+None triggered in any run.
+
+### Short comparison (12 min at 40 records/s, then a 3,000-record burst; identical workload)
+
+Command per row: `MAGNETICO_E2E_PROFILE_SECONDS=720 MAGNETICO_E2E_PROFILE_ENV="<env>" go test -count=1 -p 1
+-run TestE2EIngestMemoryProfile -v ./internal/e2e/` (disposable PostgreSQL via the DSN variable above).
+
+| | default | `GOMEMLIMIT=256MiB` | `384MiB` | `512MiB` |
+|---|---|---|---|---|
+| Accepted / persisted per s | 40.0 / 40.0 | 40.0 / 40.0 | 40.0 / 40.0 | 40.0 / 40.0 |
+| RSS mean / p95 / max (MiB) | 403 / 469 / 499 | **269 / 280 / 292** | 363 / 426 / 453 | 408 / 502 / 524 |
+| Peak RSS incl. burst; HWM (MiB) | 499; 516 | **292; 293** | 453; 454 | 524; 524 |
+| Live heap mean / max (MiB) | 171 / 202 | 137 / 169 | 160 / 169 | 166 / 201 |
+| Heap alloc mean / max (MiB) | 268 / 383 | 196 / 229 | 249 / 333 | 264 / 392 |
+| Heap in use max (MiB) | 388 | 231 | 336 | 398 |
+| Heap released at end (MiB) | 162 | 93 | 229 | 231 |
+| GC cycles (steady) / total pause | 29 / 3 ms | 104 / 8 ms | 23 / 2 ms | 35 / 7 ms |
+| Ingest CPU, steady | 4.9 % of a core (34.8 s) | 4.9 % (34.6 s) | 5.0 % (35.3 s) | 5.3 % (37.3 s) |
+| of which GC CPU | 0.1 s (0.2 %) | 0.2 s (0.6 %) | 0.0 s (0.1 %) | 0.1 s (0.3 %) |
+| Crawler queue depth max (steady) | 0 | 0 | 0 | 0 |
+| PostgreSQL backlog max, steady / burst | 0 / 2,403 | 0 / 2,415 | 0 / 2,431 | 1 / 2,416 |
+| Burst fully persisted after producer finished | 4.0 s | 4.0 s | 4.0 s | 4.0 s |
+| Queue relation max (KiB); dead tuples max | 1,816 → 3,952; 4,261 | 1,816 → 3,944; 4,232 | 1,824 → 3,952; 4,250 | 1,824 → 4,112; 4,269 |
+| Autovacuum runs (analyze) | 12 (12) | 12 (12) | 12 (12) | 12 (12) |
+| Final | 31,800 of 31,800 stored; 0 quarantined; usage drift 0 | same | same | same |
+
+Reading: the ingest process uses ≈ 5 % of one core in every configuration. The limit changes memory, not CPU:
+at 256 MiB GC takes 0.6 % of that 5 % (≈ 4× the cycles, 8 ms total pause). 384 and 512 MiB barely bind
+(the default GC goal is already 340–410 MiB), so they save little or nothing. The ingest-side time was
+dominated by system time (≈ 45 %), i.e. HTTP and PostgreSQL I/O, not GC.
+
+### Long soaks (7,200 s at 40.0 records/s, then a 3,000-record burst; run sequentially)
+
+Both: 288,000 + 3,000 records. Command: `MAGNETICO_E2E_PROFILE_SECONDS=7200 MAGNETICO_E2E_PROFILE_PROFILE_EVERY_MIN=30
+MAGNETICO_E2E_PROFILE_ENV="<env>"` as above. A: default (07:13–09:14), B: `GOMEMLIMIT=256MiB` (09:14–11:14).
+
+| | A default | B `GOMEMLIMIT=256MiB` |
+|---|---|---|
+| Verdict | **pass** | **pass** |
+| Stored / expected; distinct hashes | 291,000 / 291,000; equal | 291,000 / 291,000; equal |
+| Ingest summary (final) | `storage_errors=0 quarantined=0 retried=0 lock_losses=0 queue_full=0` | same |
+| Quarantine rows / usage drift / error lines | 0 / 0 / 0 | 0 / 0 / 0 |
+| RSS mean / p95 / max / HWM (MiB) | 459 / 552 / 621 / 634 | **304 / 313 / 354 / 355** |
+| Live heap mean / max (MiB) | 167 / 205 | 141 / 201 |
+| GC cycles / total pause | 301 / 59 ms | 900 / 91 ms |
+| Ingest CPU (steady) | 358 s = 5.0 % of a core | 374 s = 5.2 % |
+| GC CPU | 0.9 s (0.3 %) | 2.0 s (0.5 %) |
+| Goroutines max | 12 | 12 |
+| Crawler queue depth max / PostgreSQL backlog max (steady) | 1 / 1 | 0 / 1 |
+| Burst: peak backlog; persisted after producer finished | 2,325; 4.1 s | 2,343; 4.1 s |
+| Burst peak RSS (MiB) | 401 | 310 |
+
+Time-series observations (four 30-min windows each, medians): **no sustained growth after warm-up.**
+Anonymous RSS median A 431 / 459 / 429 / 447 MiB, B 292 / 293 / 293 / 294 MiB. Live heap median A 169 / 169 / 169 / 172,
+B 137 / 137 / 137 / 140 MiB. Goroutines ≤ 12 throughout. Backlogs never recovered from anything because they
+never grew. Twelve profiles each (every 30 min plus start, mid, after-load, after-burst): in-use heap at
+steady state is ≈ 10 MiB at the sample point after GC (the 8 MiB existence cache dominates); the rest is
+garbage awaiting collection.
+
+Storage behaviour. **PostgreSQL queue table:** autovacuum ran 120 times over 2 h (one per minute, `autoanalyze`
+counted the same) in both soaks; the queue relation stayed ≤ 1.8 MiB (heap ≤ 0.98 MiB) in the steady phase and
+≤ 4.0 MiB at the burst peak, dead tuples ≤ 2.3 k (≤ 4.3 k at the burst), never accumulating across windows
+(per-window maxima 2,319 → 2,289 → 2,278 → 2,248). No bloat. The `torrents` relation grew linearly to 65 MiB
+(122 MiB database; 126 MiB after the burst). **SQLite (crawler queue):** database file 44 KiB, `-wal` peak
+4.0 MiB, flat (4,035–4,055 KiB per window), no unreclaimed growth; the queue was empty after every drain.
+**Disk:** `/home` free 111 → 110 GiB, no pressure. Crawler RSS ≤ 28 MiB, CPU ≈ 280–290 s per 2 h.
+
+### Deviations and limits
+
+- Disk-root deviation and the forensics container leak: above.
+- The first 60-second smoke run exposed two harness errors (steady rate diluted by a sample taken after the
+  producer exited; negative crawler CPU), fixed before the reported runs. No reported number comes from it.
+- The profiling wrapper's heap figures are measured in the test-only `ingestd` (production `server.Run`); the
+  shipped `magnetico ingest` has no pprof or sampler.
+- Not covered: real DHT traffic; records larger than the measured mix (up to the 17 MiB request limit);
+  concurrent crawlers during a soak; the existence endpoint; PostgreSQL on a separate host or under
+  `shared_buffers` tuning; the PostgreSQL container's own CPU. One run per configuration (the two soaks are
+  independent, but the short comparison is single-run each). Three-thousand-record bursts are small relative
+  to the 2 GiB queue limit.
+
+### Recommendation: `GOMEMLIMIT=256MiB` for `magnetico ingest`
+
+Evidence: over two hours it lowered mean RSS from 459 to 304 MiB and peak RSS from 621 to 354 MiB, with no
+measurable throughput, backlog, drain-time, correctness or CPU difference (≈ 5 % of a core either way; GC
+0.5 %). It must be read as a **Go runtime memory target**, not a hard limit: it cannot lower live data, and
+the process may exceed it (here the live heap was ≤ 205 MiB, close to it; a workload with a larger live
+set, e.g. larger records, makes the GC run more often rather than keeping RSS below the figure). Leave the
+container memory limit at least 2× higher (≥ 512 MiB; the default-runtime peak was 634 MiB HWM). Watch the GC
+share if records grow: `ingest` CPU must stay in the single digits percent. 384/512 MiB are not worth
+setting (no benefit measured). Added to `UPGRADE.md`.
+
+### Follow-up proposal (not done; wire format and Brotli encoder untouched)
+
+*Reduce Brotli encoder allocation churn in `codec.compress`.* Evidence: in the 2 h default soak
+`brotli.(*h5).Initialize` allocated 24.9 GB = **53 % of all 46.7 GB** allocated (≈ 85 KB per stored record),
+`buildTrie`/`appendTrieNode` 14 %, JSON decoding 8 %. It is what makes the default GC goal 340–410 MiB for a
+≈ 170 MiB live set; the runtime-retained heap, not live data, is the memory. It does not currently cost
+measurable CPU (GC 0.3 %), so this is an optimisation, not a defect. Any change must keep the codec's
+determinism rules (`codec/compress.go`) and needs its own task and owner approval.
+
+### Verdicts and readiness
+
+Race suite **pass**; short comparison **pass** (no anomalies); soak A **pass**; soak B **pass**; no early stop,
+no correctness defect, no lost, duplicated or quarantined records, usage accounting exact, all queues drained.
+Remaining blockers from this qualification: **none**. Open items unrelated to the verdicts: the
+`forensics` TestMain container leak; real-DHT acceptance check (separate, not run); behaviour with large
+records and several concurrent crawlers (not covered). The implementation is, on this evidence, ready for the
+next staging-review decision.

@@ -45,6 +45,12 @@ crawler's), `DATABASE`, optional `QUEUE_DATABASE`, `QUEUE_MAX_BYTES` (default 2 
 PostgreSQL must run with `fsync=on` (ingest refuses to start otherwise). The proxy must allow request
 bodies of at least 17 MiB on `/api/ingest/v1/torrents`.
 
+**Memory:** set `GOMEMLIMIT=256MiB` on `magnetico ingest` (measured on synthetic load at 40 records/s over two
+hours plus bursts: mean RSS 459 → 304 MiB, peak 621 → 354 MiB, no throughput or CPU cost; see
+`docs/wip/06-crawler-ingest-results.md`). This is a Go runtime memory *target*, not a hard RSS or
+container limit: the process can exceed it, and the container limit should stay at least twice as high
+(≥ 512 MiB). The crawler needs no setting (RSS ≈ 30 MiB).
+
 **Deployment order** (new databases or after the migration):
 
 1. `magnetico migrate schema-init`
