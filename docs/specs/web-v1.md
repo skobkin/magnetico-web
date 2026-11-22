@@ -1,7 +1,7 @@
 # Magnetico 0.8.0 — Web Service Specification (web-v1)
 
 > **DRAFT — FOR OWNER REVIEW. NOT APPROVED AS A WHOLE. NOT IMPLEMENTED.**
-> Revision 4 (account lifecycle: `disable` suspends rather than revokes tokens and invitations, password reset revokes all credentials, `revoke-tokens`) on top of revision 3 (final owner corrections after review of `15b76d20`: separate RSS and API credentials, final answers on the open items, tracker CLI, `AGENTS.md` rule) and revision 2 (review of `17b4c2f0`). Tags used below:
+> Revision 5 (W2 schema contract: DDL realized in `internal/web/webschema`, version table `web_version`, one-time links deleted on consumption, no triggers, structural verification, minimum privileges) on top of revision 4 (account lifecycle: `disable` suspends rather than revokes tokens and invitations, password reset revokes all credentials, `revoke-tokens`) on top of revision 3 (final owner corrections after review of `15b76d20`: separate RSS and API credentials, final answers on the open items, tracker CLI, `AGENTS.md` rule) and revision 2 (review of `17b4c2f0`). Tags used below:
 > **[APPROVED]** — decided by the owner; **[PROPOSAL]** — a recommendation, not a decision; **[OPEN]** — an undecided owner question.
 > Rationale and the legacy inventory are in [`docs/wip/07A-web-design-plan.md`](../wip/07A-web-design-plan.md). This document remains DRAFT until the owner's final review.
 
@@ -47,13 +47,13 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 | `MAGNETICO_WEB_SMTP_PASSWORD` | unset | environment only |
 | `MAGNETICO_WEB_LOG_LEVEL`, `_LOG_FORMAT` | `info`, `text` | `text` or `json` |
 
-2.4 Startup MUST fail fast, with an actionable message and without modifying the database, if: PostgreSQL is unreachable; `pg_trgm` is missing; the torrent schema or its `schema_version` is not the supported one; the `magnetico_web` schema is missing or has an unsupported version; the tracker list cannot be loaded; the database role lacks the needed privileges; SMTP is partially configured or its `_SECURITY` is not `starttls`/`tls`. It MUST NOT run any automatic migration (`postgresql-persistence-v2.md` §2, §6).
+2.4 Startup MUST fail fast, with an actionable message and without modifying the database, if: PostgreSQL is unreachable; `pg_trgm` is missing; the torrent schema or its `schema_version` is not the supported one; the `magnetico_web` schema is missing, has an unsupported version, **or differs structurally from version 1 (columns, constraints, indexes, unexpected triggers; §5.5)**; the tracker list cannot be loaded; the database role lacks the needed privileges; SMTP is partially configured or its `_SECURITY` is not `starttls`/`tls`. It MUST NOT run any automatic migration (`postgresql-persistence-v2.md` §2, §6).
 
 2.5 Graceful shutdown on `SIGINT`/`SIGTERM`: stop accepting connections, let in-flight requests finish within a bounded grace period, then close pools. A stuck handler MUST NOT prevent exit beyond the bound; the exit status distinguishes an incomplete shutdown (as `ingest` does).
 
 2.6 `GET /healthz` (process alive) and `GET /readyz` (database reachable and schema verified). Both unauthenticated; MUST NOT disclose versions, counts or configuration.
 
-2.7 Database role **[PROPOSAL]**: `SELECT` on `magneticod.*`; `SELECT/INSERT/UPDATE/DELETE` on `magnetico_web.*`; no DDL.
+2.7 Database role **[APPROVED, W2]**: `USAGE` on `magneticod` and `SELECT` on `magneticod.torrents`, `magneticod.torrent_file_blobs` **and `magneticod.schema_version`** (the startup verification reads it); `USAGE` on `magnetico_web`, `SELECT/INSERT/UPDATE` on `users`, `api_tokens`, `rss_tokens`, `invites`, `SELECT/INSERT/UPDATE/DELETE` on `sessions` and `one_time_tokens`, `SELECT` on `trackers`, `settings`, `web_version`; no DDL. The administrator CLI additionally needs `INSERT/UPDATE/DELETE` on `trackers`. The exact `GRANT` statements are in `docs/web-deployment.md` §4 and are executed verbatim by the tests. A missing privilege is a controlled startup failure that names it.
 
 2.8 Pools and deadlines. The pool has an explicit maximum. Every request has a context deadline. A search can run up to the search timeout (default 60 s), so **search concurrency is bounded separately** (a weighted semaphore of `SEARCH_CONCURRENCY` slots, bounded queue wait, then a `503` "busy") so that slow searches cannot starve authentication or other pages of connections.
 
@@ -227,7 +227,7 @@ Existing clients using `/api/v1/feed/rss/last?api-token=<legacy-token>` keep wor
 
 4.9.4 Link tokens: 32 random bytes, stored as SHA-256, single use, expiring (**[PROPOSAL]** setup 72 h, reset 1 h, email verification 24 h), bound to one account, purpose `setup` | `reset` | `email_verify`.
 
-4.9.5 **Completing a setup or reset link** runs in one transaction that locks the user row, checks the token, sets `password_hash`, records `password_changed_at`, marks the token used, and applies the revocations of §4.7 (all sessions, all API tokens and all RSS tokens). It MUST NOT write `active`. If the account is inactive, the link is refused with the same generic message as an invalid link and **is not consumed** (it works again after `enable` unless it expired). Completing a link for an account whose `active` is false therefore can never reactivate it. Setting a password MUST NOT affect email verification, and email verification MUST NOT set a password.
+4.9.5 **Completing a setup or reset link** runs in one transaction that locks the user row, checks the token, sets `password_hash`, records `password_changed_at`, consumes the token by deleting it (and deletes the user's other outstanding password links), and applies the revocations of §4.7 (all sessions, all API tokens and all RSS tokens). It MUST NOT write `active`. If the account is inactive, the link is refused with the same generic message as an invalid link and **is not consumed** (it works again after `enable` unless it expired). Completing a link for an account whose `active` is false therefore can never reactivate it. Setting a password MUST NOT affect email verification, and email verification MUST NOT set a password.
 
 4.9.6 **[APPROVED]** The reset email and the confirmation page MUST each state explicitly that completing the reset (a) **invalidates all existing API tokens**, (b) **stops all existing RSS tokens and RSS URLs from working**, and (c) means the user **must generate new credentials and update their torrent clients**; both credential types are named separately. The CLI output of `reset-password` states the same to the operator.
 
@@ -260,7 +260,7 @@ Commands MUST NOT print secrets other than the single link or token they were as
 
 ## 5. Web schema (`magnetico_web`; proposal, not applied)
 
-5.1 **[APPROVED]** schema name `magnetico_web`. It holds accounts, authentication state, sessions, invitations, API tokens, RSS tokens, the public tracker list and future web-specific settings. It is created by an explicit, non-destructive, idempotent command (never implicitly by `web`) with its own version table. Detailed DDL is a separate prerequisite (§13.3). The torrent/file identifiers of `magneticod` are unchanged.
+5.1 **[APPROVED]** schema name `magnetico_web`. It holds accounts, authentication state, sessions, invitations, API tokens, RSS tokens, the public tracker list and future web-specific settings. It is created by the explicit, non-destructive, idempotent command **`magnetico migrate web-schema-init`** (never implicitly by `web`; database from `--database` / `MAGNETICO_MIGRATE_DATABASE` / `migrateDatabaseURL`) with its own version table **`web_version`**. The DDL (version 1) is `internal/web/webschema/ddl.go`. The version table is not called `schema_version` because the torrent-schema verification treats a table of that name in any schema as one of its own markers. The torrent/file identifiers of `magneticod` are unchanged.
 
 5.2 **Identifier strategy [APPROVED].** Historical numeric user and invitation IDs are **preserved**; no UUID/ULID without a concrete requirement.
 - `users.id`, `invites.id`: `bigint GENERATED ALWAYS AS IDENTITY`; **legacy values are preserved verbatim** (the migrator inserts with `OVERRIDING SYSTEM VALUE`, then advances each sequence past the maximum, e.g. with `setval`; foreign-key consistency is verified after the run). The mapping is the identity, so no mapping table exists and the check is simple: row counts per table, foreign-key integrity, per-user invitation and token counts equal to the source.
@@ -273,11 +273,13 @@ Commands MUST NOT print secrets other than the single link or token they were as
 - `sessions`: token_hash (PK), user_id, created_at, last_seen_at, expires_at (**not null**, absolute), remember.
 - `api_tokens`: id, token_hash (unique), user_id, label, created_at, last_used_at, expires_at, revoked_at. JSON REST API only.
 - `rss_tokens`: id, token_hash (unique), user_id, label, created_at, last_used_at, expires_at, revoked_at, `legacy` boolean. RSS feeds only. Physically separate from `api_tokens`; no shared scope column.
-- `invites`: id, owner_id, code (plaintext, unique **[APPROVED]**), used_by, used_at, created_at, expires_at (nullable), revoked_at.
-- `one_time_tokens`: token_hash (PK), user_id, purpose (`setup` | `reset` | `email_verify`), email (target address, for `email_verify`), created_at, expires_at, used_at.
+- `invites`: id, owner_id, code (plaintext, unique **[APPROVED]**), used_by, used_at, created_at (`NOT NULL DEFAULT now()`; a migrated legacy invitation, which has no creation time, takes its owner's `users.created_at` — an intentional approximation, not an exact reconstruction), expires_at (nullable), revoked_at.
+- `one_time_tokens`: token_hash (PK), user_id, purpose (`setup` | `reset` | `email_verify`), email (target address, for `email_verify`), created_at, expires_at. **No `used_at` and no history:** a row exists only while the link is outstanding; successful consumption, replacement and revocation all `DELETE` it, in the transaction of the operation they authorize. A plain UNIQUE index allows at most one outstanding password link (`setup`|`reset`) and one outstanding email link per user, so issuance deletes the user's older link of that kind (even if expired) first, with the user row locked.
 - `trackers`: id, url (unique), position, created_at, updated_at (§8.3).
 - `settings`: key, value, updated_at (holds, among other future values, the tracker-seed marker).
-- `schema_version`.
+- `web_version` (exactly one row, the supported version `1`).
+
+5.5 **Structural verification and lifecycle enforcement [APPROVED, W2].** `web-schema-init` and the startup verification apply the same targeted catalog check: exact relation set, columns (type, nullability, identity, defaults), primary/unique/foreign-key/check constraints and indexes by name and definition, validity (no `NOT VALID`, no deferrable constraint), no row-level security, no unexpected triggers, and exactly one `web_version` row `{1}`. Any deviation fails closed with an error naming the objects; an existing incompatible schema is **never repaired or modified**. The schema contains **no triggers and no PL/pgSQL**: permanent revocation (`revoked_at` set only by a conditional `UPDATE … WHERE revoked_at IS NULL`), set-once invitation consumption (row lock plus `used_by IS NULL`) and one-time link consumption (row lock plus `DELETE … RETURNING`) are enforced by the stores and proven by concurrency tests; the database enforces the declarative invariants (keys, foreign keys, uniqueness, checks, NOT NULL). Foreign keys are `NO ACTION`.
 
 5.4 Database-level invariants: an invitation is used at most once; `role` is one of two values; at most one account per verified email; session `expires_at` not null. Registration and disable semantics (§4.7.3) rely on row locking.
 
@@ -517,4 +519,4 @@ Minor proposals still unconfirmed, not blockers: the notice to the previous addr
 
 ### 13.3 Remaining implementation prerequisites (separate from this design)
 
-Legacy password-hash distribution audit (**does not block W1**); selection of a maintained `golang.org/x/crypto` version; detailed schema DDL; selection of the API-documentation renderer (and the OpenAPI version it supports); the user-migration implementation, including the handling of historical email addresses; CI/OCI images and release-candidate testing.
+Legacy password-hash distribution audit (**does not block W1**); selection of a maintained `golang.org/x/crypto` version; selection of the API-documentation renderer (and the OpenAPI version it supports); the user-migration implementation, including the handling of historical email addresses; CI/OCI images and release-candidate testing.
