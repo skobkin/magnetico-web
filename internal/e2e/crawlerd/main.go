@@ -7,11 +7,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +22,7 @@ import (
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/crawler"
 	"github.com/skobkin/magnetico-web/internal/crawlqueue"
+	"github.com/skobkin/magnetico-web/internal/ingest/record"
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -51,6 +55,115 @@ func synth(n int) metadata.Metadata {
 		TotalSize: uint64(total), DiscoveredOn: 1700000000 + int64(n), Files: fs}
 }
 
+// bigMeta builds a valid record whose serialized JSON is exactly target bytes
+// (record.Encode output), made of many files so the size comes from the file
+// list as in a real large torrent. The name stays short.
+func bigMeta(id, target int) metadata.Metadata {
+	mk := func(n, pad int) metadata.Metadata {
+		fs := make([]persistence.File, n)
+		var total int64
+		for i := range fs {
+			p := fmt.Sprintf("media/set-%06d/season-%02d/episode-%06d.mkv", i/50, i%50, i)
+			if i == n-1 {
+				p += strings.Repeat("x", pad)
+			}
+			fs[i] = persistence.File{Path: p, Size: 1000 + int64(i)}
+			total += fs[i].Size
+		}
+		return metadata.Metadata{InfoHash: hashOf(id), Name: fmt.Sprintf("e2e big %d", id),
+			TotalSize: uint64(total), DiscoveredOn: 1700000000 + int64(id), Files: fs}
+	}
+	encLen := func(md metadata.Metadata) int {
+		r, err := record.FromMetadata(&md)
+		if err != nil {
+			log.Fatalf("bigMeta: %v", err)
+		}
+		data, err := record.Encode(r, codec.DefaultLimits())
+		if err != nil && !errors.Is(err, record.ErrRecordTooLarge) {
+			log.Fatalf("bigMeta: %v", err)
+		}
+		return len(data)
+	}
+	n := target / 90
+	if n < 1 {
+		n = 1
+	}
+	for iter := 0; iter < 40; iter++ {
+		md := mk(n, 0)
+		l := encLen(md)
+		switch {
+		case l > target:
+			n -= (l-target)/90 + 1
+		case target-l >= 120:
+			n += (target - l) / 100
+		default:
+			md = mk(n, target-l)
+			if got := encLen(md); got != target {
+				log.Fatalf("bigMeta: wanted %d bytes, built %d", target, got)
+			}
+			return md
+		}
+	}
+	log.Fatalf("bigMeta: did not converge on %d bytes", target)
+	return metadata.Metadata{}
+}
+
+type phase struct {
+	rate  float64
+	count int
+}
+
+// parsePhases parses "rate:count,rate:count" (rate 0 = unthrottled).
+func parsePhases(s string) ([]phase, error) {
+	var out []phase
+	for _, part := range strings.Split(s, ",") {
+		rc := strings.Split(strings.TrimSpace(part), ":")
+		if len(rc) != 2 {
+			return nil, fmt.Errorf("bad phase %q (want rate:count)", part)
+		}
+		r, err1 := strconv.ParseFloat(rc[0], 64)
+		c, err2 := strconv.Atoi(rc[1])
+		if err1 != nil || err2 != nil || r < 0 || c < 0 {
+			return nil, fmt.Errorf("bad phase %q", part)
+		}
+		out = append(out, phase{r, c})
+	}
+	return out, nil
+}
+
+// parseBig parses "bytes:count,bytes:count" into a list of target JSON sizes,
+// interleaved round-robin across the kinds.
+func parseBig(s string) ([]int, error) {
+	if s == "" {
+		return nil, nil
+	}
+	var kinds [][2]int
+	for _, part := range strings.Split(s, ",") {
+		sc := strings.Split(strings.TrimSpace(part), ":")
+		if len(sc) != 2 {
+			return nil, fmt.Errorf("bad big spec %q (want bytes:count)", part)
+		}
+		sz, err1 := strconv.Atoi(sc[0])
+		c, err2 := strconv.Atoi(sc[1])
+		if err1 != nil || err2 != nil || sz <= 0 || c < 0 {
+			return nil, fmt.Errorf("bad big spec %q", part)
+		}
+		kinds = append(kinds, [2]int{sz, c})
+	}
+	var out []int
+	for more := true; more; {
+		more = false
+		for i := range kinds {
+			if kinds[i][1] > 0 {
+				out = append(out, kinds[i][0])
+				kinds[i][1]--
+				more = true
+			}
+		}
+	}
+	return out, nil
+}
+
 func main() {
 	dir := flag.String("queue-dir", "", "queue directory")
 	url := flag.String("url", "", "ingest URL")
@@ -58,6 +171,10 @@ func main() {
 	count := flag.Int("count", 100, "number of synthetic records")
 	rate := flag.Float64("rate", 0, "records per second (0 = as fast as possible)")
 	poison := flag.Int("poison", 0, "append N strictly invalid payloads directly to the queue first")
+	phasesFlag := flag.String("phases", "", "rate:count[,rate:count...]; overrides -rate/-count (ordinary records only)")
+	bigFlag := flag.String("big", "", "bytes:count[,bytes:count...] large records (target JSON size) interleaved with the ordinary ones")
+	bigFrom := flag.Int("big-from", 7_000_000, "first synthetic id of the large records")
+	poisonLarge := flag.Int("poison-large", 0, "append N over-limit (16 MiB + 4 KiB) records directly to the queue first")
 	hold := flag.Bool("hold", false, "keep running after everything is delivered")
 	maxBytes := flag.Int64("queue-max-bytes", 1<<30, "queue limit")
 	flag.Parse()
@@ -85,6 +202,34 @@ func main() {
 		}
 	}
 
+	for i := 0; i < *poisonLarge; i++ {
+		md := bigMeta(9_500_000+i, record.MaxRecordBytes+4096)
+		r, _ := record.FromMetadata(&md)
+		data, err := record.Encode(r, codec.DefaultLimits())
+		if !errors.Is(err, record.ErrRecordTooLarge) {
+			log.Fatalf("poison-large: expected ErrRecordTooLarge, got %v", err)
+		}
+		if _, err := q.Append(context.Background(), r.InfoHash, 1, data); err != nil {
+			log.Fatalf("poison-large: %v", err)
+		}
+	}
+
+	phases := []phase{{*rate, *count}}
+	if *phasesFlag != "" {
+		var err error
+		if phases, err = parsePhases(*phasesFlag); err != nil {
+			log.Fatalf("phases: %v", err)
+		}
+	}
+	bigs, err := parseBig(*bigFlag)
+	if err != nil {
+		log.Fatalf("big: %v", err)
+	}
+	ordinary := 0
+	for _, ph := range phases {
+		ordinary += ph.count
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); sender.Run(ctx, 5*time.Second) }()
@@ -94,23 +239,51 @@ func main() {
 	go func() {
 		defer close(drain)
 		defer close(producedAll)
-		var tick <-chan time.Time
-		if *rate > 0 {
-			t := time.NewTicker(time.Duration(float64(time.Second) / *rate))
-			defer t.Stop()
-			tick = t.C
+		bigEvery := 0
+		if len(bigs) > 0 {
+			bigEvery = ordinary / len(bigs)
+			if bigEvery < 1 {
+				bigEvery = 1
+			}
 		}
-		for i := 0; i < *count; i++ {
-			if tick != nil {
-				select {
-				case <-tick:
-				case <-ctx.Done():
+		emit := func(md metadata.Metadata) bool {
+			select {
+			case drain <- md:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
+		next, bi := *from, 0
+		for _, ph := range phases {
+			var tick <-chan time.Time
+			if ph.rate > 0 {
+				t := time.NewTicker(time.Duration(float64(time.Second) / ph.rate))
+				defer t.Stop()
+				tick = t.C
+			}
+			for i := 0; i < ph.count; i++ {
+				if tick != nil {
+					select {
+					case <-tick:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if bigEvery > 0 && bi < len(bigs) && i%bigEvery == bigEvery/2 {
+					if !emit(bigMeta(*bigFrom+bi, bigs[bi])) {
+						return
+					}
+					bi++
+				}
+				if !emit(synth(next)) {
 					return
 				}
+				next++
 			}
-			select {
-			case drain <- synth(*from + i):
-			case <-ctx.Done():
+		}
+		for ; bi < len(bigs); bi++ { // any not yet placed
+			if !emit(bigMeta(*bigFrom+bi, bigs[bi])) {
 				return
 			}
 		}
@@ -147,9 +320,10 @@ loop:
 	stop()
 	wg.Wait()
 	s := q.Stats()
-	fmt.Printf("DONE queue_records=%d quarantine_records=%d appended=%d duplicate=%d acked=%d quarantined=%d\n",
+	fmt.Printf("DONE queue_records=%d quarantine_records=%d appended=%d duplicate=%d acked=%d quarantined=%d too_large=%d invalid=%d dropped_shutdown=%d\n",
 		s.QueueRecords, s.QuarantineRecords, counters.EnqueueAppended.Load(), counters.EnqueueDuplicate.Load(),
-		counters.SendAcked.Load(), counters.SendQuarantined.Load())
+		counters.SendAcked.Load(), counters.SendQuarantined.Load(), counters.EnqueueTooLarge.Load(),
+		counters.EnqueueInvalid.Load(), counters.DroppedShutdown.Load())
 	if err := q.CloseWithin(5 * time.Second); err != nil {
 		log.Printf("close: %v", err)
 		exit = 3
