@@ -19,6 +19,7 @@ import (
 
 	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/dht/mainline"
+	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/migration"
 	"github.com/skobkin/magnetico-web/internal/migration/forensics"
 	"github.com/skobkin/magnetico-web/internal/migration/legacy/original"
@@ -49,6 +50,8 @@ func main() {
 		switch opFlags.Migrate.Subcommand {
 		case "schema-init":
 			runMigrateSchemaInit(&opFlags.Migrate.SchemaInit)
+		case "ingest-schema-init":
+			runMigrateIngestSchemaInit(&opFlags.Migrate.IngestSchemaInit)
 		case "torrents":
 			runMigrateTorrents(&opFlags.Migrate.Torrents)
 		case "retry-errors":
@@ -63,7 +66,7 @@ func main() {
 			runMigrateCleanup(&opFlags.Migrate.Cleanup)
 		default:
 			// parseArgs guarantees a subcommand; this is defense in depth.
-			log.Fatalln("migrate: expected a subcommand; expected: schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
+			log.Fatalln("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 	}
 }
@@ -246,6 +249,26 @@ func runMigrateSchemaInit(opFlags *opflags.SchemaInitOptions) {
 	}
 	// The redacted URL carries no credentials by construction.
 	log.Printf("the database schema on %s is ready (created now or already up to date)",
+		redactDatabaseURL(opFlags.DatabaseURL))
+}
+
+// runMigrateIngestSchemaInit implements `magnetico migrate ingest-schema-init`:
+// it creates the magnetico_ingest queue schema next to a verified 0.8.0
+// schema (non-destructive, idempotent, advisory-locked).
+func runMigrateIngestSchemaInit(opFlags *opflags.SchemaInitOptions) {
+	if err := pgqueue.InitSchema(context.Background(), opFlags.DatabaseURL); err != nil {
+		switch {
+		case errors.Is(err, pgqueue.ErrSchemaMissing):
+			log.Fatalln(appendSchemaStateDetails(fmt.Sprintf(
+				"Could not initialize the ingest schema on %s. %s",
+				redactDatabaseURL(opFlags.DatabaseURL), err.Error()), err))
+		default:
+			log.Fatalln(appendSchemaStateDetails(fmt.Sprintf(
+				"Could not initialize the ingest schema on %s. %s",
+				redactDatabaseURL(opFlags.DatabaseURL), controlledErrorDetail(err)), err))
+		}
+	}
+	log.Printf("the magnetico_ingest schema on %s is ready (created now or already up to date)",
 		redactDatabaseURL(opFlags.DatabaseURL))
 }
 

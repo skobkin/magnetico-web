@@ -200,6 +200,7 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 	// The migrate target DSN key feeds whichever migrate subcommand runs.
 	if _, found := present[migrateDatabaseYamlKey]; found && !explicit["database"] {
 		o.Migrate.SchemaInit.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.IngestSchemaInit.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.Torrents.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.VerifyDecode.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.VerifyContent.DatabaseURL = file.MigrateDatabaseURL
@@ -269,6 +270,7 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 	if !explicit["database"] {
 		if value, ok := os.LookupEnv(migrateDatabaseEnvName); ok && value != "" {
 			o.Migrate.SchemaInit.DatabaseURL = value
+			o.Migrate.IngestSchemaInit.DatabaseURL = value
 			o.Migrate.Torrents.DatabaseURL = value
 			o.Migrate.VerifyDecode.DatabaseURL = value
 			o.Migrate.VerifyContent.DatabaseURL = value

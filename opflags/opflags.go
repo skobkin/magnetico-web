@@ -21,12 +21,13 @@ type OpFlags struct {
 
 // MigrateOptions carries the subcommands of `migrate`.
 type MigrateOptions struct {
-	SchemaInit    SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
-	Torrents      TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)." subcommands-optional:"true"`
-	VerifyDecode  VerifyOptions     `command:"verify-decode" description:"Full target-only decode scan of an imported database: every stored torrent is fetched and decoded, metadata revalidated, orphan blobs reported. The source database is never contacted."`
-	VerifyContent VerifyOptions     `command:"verify-content" description:"Full source↔target equality scan of an imported database: every source row is compared against its target counterpart. Read-only on both databases."`
-	Errors        ErrorsOptions     `command:"errors" description:"Forensic access to the migration error/verification registry."`
-	Cleanup       CleanupOptions    `command:"cleanup" description:"Gated, fail-closed teardown of the magnetico_migration operational schema. The default is a non-destructive gate-by-gate preview; --execute drops the schema in one transaction after every gate passes."`
+	SchemaInit       SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
+	IngestSchemaInit SchemaInitOptions `command:"ingest-schema-init" description:"Create the magnetico_ingest queue schema (requires a verified 0.8.0 schema; run after the import and before starting ingest). Non-destructive and idempotent."`
+	Torrents         TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)." subcommands-optional:"true"`
+	VerifyDecode     VerifyOptions     `command:"verify-decode" description:"Full target-only decode scan of an imported database: every stored torrent is fetched and decoded, metadata revalidated, orphan blobs reported. The source database is never contacted."`
+	VerifyContent    VerifyOptions     `command:"verify-content" description:"Full source↔target equality scan of an imported database: every source row is compared against its target counterpart. Read-only on both databases."`
+	Errors           ErrorsOptions     `command:"errors" description:"Forensic access to the migration error/verification registry."`
+	Cleanup          CleanupOptions    `command:"cleanup" description:"Gated, fail-closed teardown of the magnetico_migration operational schema. The default is a non-destructive gate-by-gate preview; --execute drops the schema in one transaction after every gate passes."`
 
 	// Subcommand records the selected migrate subcommand for main's
 	// dispatch (the nested repair pass records "retry-errors"; the nested

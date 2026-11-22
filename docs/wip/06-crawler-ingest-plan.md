@@ -1,7 +1,13 @@
 # Task 06 — Implementation plan (Task 06A deliverable)
 
-**Status:** M0–M3 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M4–M7 not
-started.
+**Status:** M0–M4 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M5–M7 in
+progress (authorized after review of `9f62f51f`).
+
+M4 notes: package `internal/ingest/pgqueue`. `ingest-schema-init` verifies the 0.8.0 schema through
+`persistence.MakeDatabase` before creating `magnetico_ingest`. The usage triggers additionally reject
+`UPDATE` of `payload`/`payload_bytes` and `TRUNCATE` of both tables. `Open` also refuses to start while a
+`magnetico_migration.progress` row is not `import_complete*`. An admission batch consisting only of
+duplicates never fails on quota. A quarantined row records the true attempt count (10 for `max_attempts`).
 
 Design: [`docs/specs/crawler-ingest-delivery-v1.md`](../specs/crawler-ingest-delivery-v1.md) (draft).
 **No milestone below may start before the owner approves the specification.** Each milestone is
