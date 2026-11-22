@@ -687,3 +687,77 @@ func TestNewLogger(t *testing.T) {
 		t.Fatal("bad format")
 	}
 }
+
+// The write margin must not extend handler work: the context is cancelled at
+// REQUEST_TIMEOUT, and the (timeout) error response can still be written
+// inside the margin.
+func TestMarginDoesNotExtendHandlerContextButAllowsErrorResponse(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.RequestTimeout = 150 * time.Millisecond })
+	f.srv.router.dl.requestMargin = 2 * time.Second
+	var cancelledAfter time.Duration
+	f.srv.Router().Handle("GET /slowdb", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		<-r.Context().Done() // stands in for a query honouring its context
+		cancelledAfter = time.Since(start)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, "timed out")
+	}))
+	addr, done, cancel := startServer(t, f)
+	defer func() { cancel(); <-done }()
+
+	resp, err := http.Get("http://" + addr + "/slowdb")
+	if err != nil {
+		t.Fatalf("the error response could not be written: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 503 || string(b) != "timed out" {
+		t.Fatalf("%d %q", resp.StatusCode, b)
+	}
+	if cancelledAfter < 100*time.Millisecond || cancelledAfter > 600*time.Millisecond {
+		t.Fatalf("context cancelled after %v, want about 150ms (not 150ms + margin)", cancelledAfter)
+	}
+}
+
+type stuckCloseBackend struct {
+	fakeBackend
+	release chan struct{}
+}
+
+func (b *stuckCloseBackend) Close() { <-b.release }
+
+func TestBackendCloseIsBounded(t *testing.T) {
+	f := newFixture(t, nil)
+	be := &stuckCloseBackend{release: make(chan struct{})}
+	defer close(be.release)
+	s, err := New(f.srv.cfg, be)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.closeWait = 150 * time.Millisecond
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	s.cfg.Listener = ln
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	for i := 0; i < 100; i++ {
+		if resp, err := http.Get("http://" + ln.Addr().String() + "/healthz"); err == nil {
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t0 := time.Now()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrShutdownIncomplete) {
+			t.Fatalf("Run = %v, want ErrShutdownIncomplete", err)
+		}
+		if time.Since(t0) > 2*time.Second {
+			t.Fatalf("shutdown blocked on Close for %v", time.Since(t0))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return although Close is stuck")
+	}
+}

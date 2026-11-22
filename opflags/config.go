@@ -167,11 +167,6 @@ func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 		}
 	}
 
-	if configPath != "" && command == "web" {
-		// No file layer for web (spec §2.2): never ignore a supplied file.
-		return errors.New("the web command does not read a configuration file; remove --config-file-path / MAGNETICO_CONFIG_FILE_PATH and use flags or MAGNETICO_WEB_* variables")
-	}
-
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
@@ -220,6 +215,8 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		CrawlOptions             `yaml:",inline"`
 		MigrateDatabaseURL       string `yaml:"migrateDatabaseURL"`
 		MigrateSourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
+		// Web is the `web:` section; its keys are checked by mergeWebYaml.
+		Web any `yaml:"web"`
 	}
 	if err := yaml.UnmarshalWithOptions(data, &file, yaml.Strict()); err != nil {
 		return fmt.Errorf("config file: %s", redactSecrets(err.Error()))
@@ -233,6 +230,10 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 			continue
 		}
 		s.copyFrom(&o.Crawl, &file.CrawlOptions)
+	}
+
+	if err := o.mergeWebYaml(file.Web, explicit); err != nil {
+		return err
 	}
 
 	// The migrate target DSN key feeds whichever migrate subcommand runs.

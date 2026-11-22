@@ -85,9 +85,9 @@ func TestWebBinaryRejectsBadConfiguration(t *testing.T) {
 		args []string
 		want string
 	}{
-		"missing public URL": {nil, nil, "public URL"},
-		"unknown variable":   {[]string{"MAGNETICO_WEB_NOPE=1"}, []string{"--public-url", "https://m.example.org"}, "MAGNETICO_WEB_NOPE"},
-		"config file":        {[]string{"MAGNETICO_CONFIG_FILE_PATH=/nonexistent.yml"}, []string{"--public-url", "https://m.example.org"}, "does not read a configuration file"},
+		"missing public URL":  {nil, nil, "public URL"},
+		"unknown variable":    {[]string{"MAGNETICO_WEB_NOPE=1"}, []string{"--public-url", "https://m.example.org"}, "MAGNETICO_WEB_NOPE"},
+		"missing config file": {[]string{"MAGNETICO_CONFIG_FILE_PATH=/nonexistent.yml"}, []string{"--public-url", "https://m.example.org"}, "nonexistent.yml"},
 	} {
 		out, code := runWebBinary(t, bin, webEnv(c.env...), c.args...)
 		if code == 0 || !strings.Contains(out, c.want) {
@@ -198,6 +198,77 @@ func TestWebBinaryServesAndStopsOnSIGTERM(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "stopped cleanly") {
 		t.Fatalf("log lacks the clean-stop line:\n%s", out.String())
+	}
+}
+
+// A request that is still being sent when SIGTERM arrives keeps the server
+// busy; with a 1 s grace period the shutdown is forced and the process must
+// exit with status 3 (the incomplete-shutdown convention).
+func TestWebBinaryExitsWithStatus3WhenGraceExpires(t *testing.T) {
+	bin := buildBinary(t)
+	dsn := webTarget(t)
+	conn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(context.Background(),
+		`CREATE SCHEMA magnetico_web; CREATE TABLE magnetico_web.schema_version (version int)`); err != nil {
+		t.Fatal(err)
+	}
+	conn.Close(context.Background())
+
+	addr := freeLoopbackAddr(t)
+	cmd := exec.Command(bin, "web")
+	cmd.Env = webEnv("MAGNETICO_WEB_DATABASE="+dsn, "MAGNETICO_WEB_LISTEN="+addr,
+		"MAGNETICO_WEB_PUBLIC_URL=http://"+addr, "MAGNETICO_WEB_SHUTDOWN_TIMEOUT=1s")
+	var out bytes.Buffer
+	cmd.Stderr, cmd.Stdout = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	defer func() { _ = cmd.Process.Kill() }()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if resp, err := http.Get("http://" + addr + "/readyz"); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not ready:\n%s", out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Half a request: the connection stays busy until the header timeout.
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("GET /healthz HTTP/1.1\r\nHost: x\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 3 {
+			t.Fatalf("exit = %v, want status 3\n%s", err, out.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no exit after SIGTERM:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "shutdown incomplete") {
+		t.Fatalf("log lacks the incomplete-shutdown line:\n%s", out.String())
 	}
 }
 

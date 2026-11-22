@@ -25,13 +25,14 @@ const (
 // WebOptions carries the options of the `web` subcommand
 // (docs/specs/web-v1.md §2.3). Precedence: CLI > ENV > built-in defaults.
 //
-// There is no configuration-file layer for this command in the first
-// version (§2.2). A file given through --config-file-path or
-// MAGNETICO_CONFIG_FILE_PATH is refused explicitly instead of being ignored.
+// An optional configuration file (--config-file-path /
+// MAGNETICO_CONFIG_FILE_PATH, the repository-wide mechanism) may carry a
+// `web:` section; precedence is CLI > ENV > file > defaults. The container
+// deployment remains ENV-based.
 //
-// Secrets are environment-only: the SMTP password has no flag, and a
-// password-bearing database URL is refused on the command line, where it
-// would be visible in process listings.
+// Secrets are environment-only: the SMTP password has no flag and no file
+// key, and a password-bearing database URL is refused on the command line
+// and in the file.
 type WebOptions struct {
 	Listen         string `long:"listen" description:"HTTP listen address (plain HTTP; terminate TLS in a reverse proxy)." default:"127.0.0.1:8081"`
 	PublicURL      string `long:"public-url" description:"Public base URL of the service: https://, or http:// to a loopback host (development mode). All absolute URLs are built from it, never from the Host header." default:""`
@@ -76,6 +77,7 @@ func (o *WebOptions) SMTPConfigured() bool { return o.SMTPHost != "" }
 type webEnv struct {
 	name string
 	flag string // the CLI long name an explicit flag of which wins
+	yaml string // key inside the `web:` section of the configuration file
 	set  func(o *WebOptions, v string) error
 }
 
@@ -98,27 +100,27 @@ func envDuration(dst func(o *WebOptions) *time.Duration) func(*WebOptions, strin
 }
 
 var webEnvs = []webEnv{
-	{webEnvPrefix + "LISTEN", "listen", envString(func(o *WebOptions) *string { return &o.Listen })},
-	{webEnvPrefix + "PUBLIC_URL", "public-url", envString(func(o *WebOptions) *string { return &o.PublicURL })},
-	{webEnvPrefix + "DATABASE", "database", envString(func(o *WebOptions) *string { return &o.DatabaseURL })},
-	{webEnvPrefix + "POOL_MAX_CONNS", "pool-max-conns", envInt(func(o *WebOptions) *int { return &o.PoolMaxConns })},
-	{webEnvPrefix + "TRUSTED_PROXIES", "trusted-proxies", envString(func(o *WebOptions) *string { return &o.TrustedProxies })},
-	{webEnvPrefix + "SESSION_IDLE_TIMEOUT", "session-idle-timeout", envDuration(func(o *WebOptions) *time.Duration { return &o.SessionIdleTimeout })},
-	{webEnvPrefix + "SESSION_ABSOLUTE_LIFETIME", "session-absolute-lifetime", envDuration(func(o *WebOptions) *time.Duration { return &o.SessionAbsoluteLifetime })},
-	{webEnvPrefix + "SESSION_REMEMBER_LIFETIME", "session-remember-lifetime", envDuration(func(o *WebOptions) *time.Duration { return &o.SessionRememberLifetime })},
-	{webEnvPrefix + "SEARCH_TIMEOUT", "search-timeout", envDuration(func(o *WebOptions) *time.Duration { return &o.SearchTimeout })},
-	{webEnvPrefix + "SEARCH_CONCURRENCY", "search-concurrency", envInt(func(o *WebOptions) *int { return &o.SearchConcurrency })},
-	{webEnvPrefix + "REQUEST_TIMEOUT", "request-timeout", envDuration(func(o *WebOptions) *time.Duration { return &o.RequestTimeout })},
-	{webEnvPrefix + "SHUTDOWN_TIMEOUT", "shutdown-timeout", envDuration(func(o *WebOptions) *time.Duration { return &o.ShutdownTimeout })},
-	{webEnvPrefix + "INVITE_QUOTA", "invite-quota", envInt(func(o *WebOptions) *int { return &o.InviteQuota })},
-	{webEnvPrefix + "TRACKER_CACHE_TTL", "tracker-cache-ttl", envDuration(func(o *WebOptions) *time.Duration { return &o.TrackerCacheTTL })},
-	{webEnvPrefix + "SMTP_HOST", "smtp-host", envString(func(o *WebOptions) *string { return &o.SMTPHost })},
-	{webEnvPrefix + "SMTP_PORT", "smtp-port", envInt(func(o *WebOptions) *int { return &o.SMTPPort })},
-	{webEnvPrefix + "SMTP_SECURITY", "smtp-security", envString(func(o *WebOptions) *string { return &o.SMTPSecurity })},
-	{webEnvPrefix + "SMTP_USERNAME", "smtp-username", envString(func(o *WebOptions) *string { return &o.SMTPUsername })},
-	{webEnvPrefix + "SMTP_FROM", "smtp-from", envString(func(o *WebOptions) *string { return &o.SMTPFrom })},
-	{webEnvPrefix + "LOG_LEVEL", "log-level", envString(func(o *WebOptions) *string { return &o.LogLevel })},
-	{webEnvPrefix + "LOG_FORMAT", "log-format", envString(func(o *WebOptions) *string { return &o.LogFormat })},
+	{webEnvPrefix + "LISTEN", "listen", "listen", envString(func(o *WebOptions) *string { return &o.Listen })},
+	{webEnvPrefix + "PUBLIC_URL", "public-url", "publicURL", envString(func(o *WebOptions) *string { return &o.PublicURL })},
+	{webEnvPrefix + "DATABASE", "database", "databaseURL", envString(func(o *WebOptions) *string { return &o.DatabaseURL })},
+	{webEnvPrefix + "POOL_MAX_CONNS", "pool-max-conns", "poolMaxConns", envInt(func(o *WebOptions) *int { return &o.PoolMaxConns })},
+	{webEnvPrefix + "TRUSTED_PROXIES", "trusted-proxies", "trustedProxies", envString(func(o *WebOptions) *string { return &o.TrustedProxies })},
+	{webEnvPrefix + "SESSION_IDLE_TIMEOUT", "session-idle-timeout", "sessionIdleTimeout", envDuration(func(o *WebOptions) *time.Duration { return &o.SessionIdleTimeout })},
+	{webEnvPrefix + "SESSION_ABSOLUTE_LIFETIME", "session-absolute-lifetime", "sessionAbsoluteLifetime", envDuration(func(o *WebOptions) *time.Duration { return &o.SessionAbsoluteLifetime })},
+	{webEnvPrefix + "SESSION_REMEMBER_LIFETIME", "session-remember-lifetime", "sessionRememberLifetime", envDuration(func(o *WebOptions) *time.Duration { return &o.SessionRememberLifetime })},
+	{webEnvPrefix + "SEARCH_TIMEOUT", "search-timeout", "searchTimeout", envDuration(func(o *WebOptions) *time.Duration { return &o.SearchTimeout })},
+	{webEnvPrefix + "SEARCH_CONCURRENCY", "search-concurrency", "searchConcurrency", envInt(func(o *WebOptions) *int { return &o.SearchConcurrency })},
+	{webEnvPrefix + "REQUEST_TIMEOUT", "request-timeout", "requestTimeout", envDuration(func(o *WebOptions) *time.Duration { return &o.RequestTimeout })},
+	{webEnvPrefix + "SHUTDOWN_TIMEOUT", "shutdown-timeout", "shutdownTimeout", envDuration(func(o *WebOptions) *time.Duration { return &o.ShutdownTimeout })},
+	{webEnvPrefix + "INVITE_QUOTA", "invite-quota", "inviteQuota", envInt(func(o *WebOptions) *int { return &o.InviteQuota })},
+	{webEnvPrefix + "TRACKER_CACHE_TTL", "tracker-cache-ttl", "trackerCacheTTL", envDuration(func(o *WebOptions) *time.Duration { return &o.TrackerCacheTTL })},
+	{webEnvPrefix + "SMTP_HOST", "smtp-host", "smtpHost", envString(func(o *WebOptions) *string { return &o.SMTPHost })},
+	{webEnvPrefix + "SMTP_PORT", "smtp-port", "smtpPort", envInt(func(o *WebOptions) *int { return &o.SMTPPort })},
+	{webEnvPrefix + "SMTP_SECURITY", "smtp-security", "smtpSecurity", envString(func(o *WebOptions) *string { return &o.SMTPSecurity })},
+	{webEnvPrefix + "SMTP_USERNAME", "smtp-username", "smtpUsername", envString(func(o *WebOptions) *string { return &o.SMTPUsername })},
+	{webEnvPrefix + "SMTP_FROM", "smtp-from", "smtpFrom", envString(func(o *WebOptions) *string { return &o.SMTPFrom })},
+	{webEnvPrefix + "LOG_LEVEL", "log-level", "logLevel", envString(func(o *WebOptions) *string { return &o.LogLevel })},
+	{webEnvPrefix + "LOG_FORMAT", "log-format", "logFormat", envString(func(o *WebOptions) *string { return &o.LogFormat })},
 }
 
 // applyEnvWebConfig applies MAGNETICO_WEB_* variables (an explicit flag wins;
@@ -149,6 +151,78 @@ func (o *OpFlags) applyEnvWebConfig(explicit map[string]bool) error {
 		}
 	}
 	return nil
+}
+
+// webYamlSection is the strict key set of the `web:` section of the
+// configuration file. There is deliberately no key for the SMTP password
+// (environment only), and a password-bearing databaseURL is refused.
+//
+// mergeWebYaml applies the present keys with CLI-explicit flags winning;
+// environment variables are applied afterwards and win over the file
+// (CLI > ENV > YAML > defaults).
+func (o *OpFlags) mergeWebYaml(section any, explicit map[string]bool) error {
+	if section == nil {
+		return nil
+	}
+	m, ok := section.(map[string]any)
+	if !ok {
+		return errors.New("config file: web must be a mapping")
+	}
+	byKey := make(map[string]webEnv, len(webEnvs))
+	for _, e := range webEnvs {
+		byKey[e.yaml] = e
+	}
+	for key, raw := range m {
+		e, known := byKey[key]
+		if !known {
+			return fmt.Errorf("config file: unknown key web.%s", key)
+		}
+		var v string
+		switch t := raw.(type) {
+		case string:
+			v = t
+		case int, int64, uint64:
+			v = fmt.Sprint(t)
+		case []any:
+			if key != "trustedProxies" {
+				return fmt.Errorf("config file: web.%s must be a scalar", key)
+			}
+			parts := make([]string, 0, len(t))
+			for _, it := range t {
+				str, ok := it.(string)
+				if !ok {
+					return fmt.Errorf("config file: web.%s must be a list of strings", key)
+				}
+				parts = append(parts, str)
+			}
+			v = strings.Join(parts, ",")
+		default:
+			return fmt.Errorf("config file: web.%s has an unsupported value type", key)
+		}
+		if key == "databaseURL" && urlCarriesPassword(v) {
+			return errors.New("config file: web.databaseURL must not contain a password; use MAGNETICO_WEB_DATABASE")
+		}
+		if explicit[e.flag] || v == "" {
+			continue
+		}
+		if err := e.set(&o.Web, v); err != nil {
+			return fmt.Errorf("config file: web.%s: invalid value", key)
+		}
+	}
+	return nil
+}
+
+func urlCarriesPassword(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	if u.User != nil {
+		if _, has := u.User.Password(); has {
+			return true
+		}
+	}
+	return u.Query().Has("password")
 }
 
 // check validates the web options and derives PublicBaseURL, DevMode and
@@ -233,12 +307,7 @@ func (o *WebOptions) checkDatabase(explicit bool) error {
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return errors.New("the database must be a postgres:// or postgresql:// URL (--database / MAGNETICO_WEB_DATABASE)")
 	}
-	if explicit && u.User != nil {
-		if _, hasPassword := u.User.Password(); hasPassword {
-			return errors.New("a database URL containing a password must not be given with --database (it would be visible in process listings): use MAGNETICO_WEB_DATABASE")
-		}
-	}
-	if q := u.Query(); q.Has("password") && explicit {
+	if explicit && urlCarriesPassword(o.DatabaseURL) {
 		return errors.New("a database URL containing a password must not be given with --database (it would be visible in process listings): use MAGNETICO_WEB_DATABASE")
 	}
 	return nil

@@ -98,22 +98,138 @@ func TestWebRejectsUnknownEnvAndBadValues(t *testing.T) {
 	}
 }
 
-func TestWebConfigFileIsRefusedNotIgnored(t *testing.T) {
-	webEnvClean(t)
-	file := filepath.Join(t.TempDir(), "c.yml")
-	if err := os.WriteFile(file, []byte("queueDir: x\n"), 0o600); err != nil {
+func writeWebConfig(t *testing.T, body string) string {
+	t.Helper()
+	f := filepath.Join(t.TempDir(), "c.yml")
+	if err := os.WriteFile(f, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// CLI form (global option before the subcommand).
+	return f
+}
+
+func parseWebFile(t *testing.T, file string, args ...string) (*OpFlags, error) {
+	t.Helper()
 	o := &OpFlags{}
-	_, err := o.parseArgs([]string{"--config-file-path", file, "web", "--public-url", webPublic})
-	if err == nil || !strings.Contains(err.Error(), "does not read a configuration file") {
-		t.Fatalf("CLI config file: %v", err)
+	_, err := o.parseArgs(append([]string{"--config-file-path", file, "web"}, args...))
+	return o, err
+}
+
+func TestWebYamlConfig(t *testing.T) {
+	webEnvClean(t)
+	file := writeWebConfig(t, `
+web:
+  publicURL: https://magnet.example.org
+  listen: 0.0.0.0:9100
+  poolMaxConns: 16
+  searchConcurrency: 6
+  requestTimeout: 45s
+  shutdownTimeout: 20s
+  trustedProxies: [10.0.0.0/8, 192.0.2.1]
+  logFormat: json
+  databaseURL: postgres://magnetico@db/magnetico?sslmode=disable
+`)
+	o, err := parseWebFile(t, file)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Environment form.
+	w := o.Web
+	if w.Listen != "0.0.0.0:9100" || w.PoolMaxConns != 16 || w.SearchConcurrency != 6 ||
+		w.RequestTimeout != 45*time.Second || w.ShutdownTimeout != 20*time.Second ||
+		w.LogFormat != "json" || len(w.TrustedProxyPrefixes) != 2 ||
+		w.DatabaseURL != "postgres://magnetico@db/magnetico?sslmode=disable" {
+		t.Fatalf("file not applied: %+v", w)
+	}
+	if w.SearchTimeout != 60*time.Second {
+		t.Fatalf("untouched keys must keep defaults: %v", w.SearchTimeout)
+	}
+	// The same file via MAGNETICO_CONFIG_FILE_PATH.
 	t.Setenv("MAGNETICO_CONFIG_FILE_PATH", file)
-	if _, err = parseWeb(t, "--public-url", webPublic); err == nil || !strings.Contains(err.Error(), "does not read a configuration file") {
-		t.Fatalf("ENV config file: %v", err)
+	o2 := &OpFlags{}
+	if _, err := o2.parseArgs([]string{"web"}); err != nil || o2.Web.Listen != "0.0.0.0:9100" {
+		t.Fatalf("env-selected file: %v", err)
+	}
+}
+
+func TestWebPrecedenceCLIOverEnvOverYamlOverDefault(t *testing.T) {
+	webEnvClean(t)
+	file := writeWebConfig(t, `
+web:
+  publicURL: https://magnet.example.org
+  listen: 0.0.0.0:9100
+  requestTimeout: 45s
+  searchTimeout: 90s
+  logLevel: warn
+`)
+	t.Setenv("MAGNETICO_WEB_REQUEST_TIMEOUT", "50s")
+	t.Setenv("MAGNETICO_WEB_SEARCH_TIMEOUT", "100s")
+	o, err := parseWebFile(t, file, "--request-timeout", "20s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := o.Web
+	if w.RequestTimeout != 20*time.Second {
+		t.Errorf("CLI must beat ENV and file: %v", w.RequestTimeout)
+	}
+	if w.SearchTimeout != 100*time.Second {
+		t.Errorf("ENV must beat file: %v", w.SearchTimeout)
+	}
+	if w.Listen != "0.0.0.0:9100" || w.LogLevel != "warn" {
+		t.Errorf("file must beat defaults: %+v", w)
+	}
+}
+
+func TestWebYamlIsStrict(t *testing.T) {
+	webEnvClean(t)
+	pub := "web:\n  publicURL: https://magnet.example.org\n"
+	for name, body := range map[string]string{
+		"unknown web key":      pub + "  listn: x\n",
+		"unknown top-level":    pub + "bogusKey: 1\n",
+		"smtp password key":    pub + "  smtpPassword: hunter2\n",
+		"bad duration":         pub + "  requestTimeout: 90 parsecs\n",
+		"bad type":             pub + "  requestTimeout: [1, 2]\n",
+		"list for scalar key":  pub + "  listen: [a]\n",
+		"web not a mapping":    "web: nope\n",
+		"password in database": pub + "  databaseURL: postgres://u:hunter2@db/m\n",
+		"password in query":    pub + "  databaseURL: postgres://u@db/m?password=hunter2\n",
+	} {
+		_, err := parseWebFile(t, writeWebConfig(t, body))
+		if err == nil {
+			t.Errorf("%s: must be rejected", name)
+		} else if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "parsecs") {
+			t.Errorf("%s: error echoes a value: %v", name, err)
+		}
+	}
+	// Values from the file are validated like any other.
+	if _, err := parseWebFile(t, writeWebConfig(t, pub+"  poolMaxConns: 1\n")); err == nil {
+		t.Error("file values must be validated")
+	}
+	// The password stays available through the environment.
+	t.Setenv("MAGNETICO_WEB_DATABASE", "postgres://u:hunter2@db/m")
+	o, err := parseWebFile(t, writeWebConfig(t, pub))
+	if err != nil || o.Web.DatabaseURL != "postgres://u:hunter2@db/m" {
+		t.Fatalf("env database password: %v", err)
+	}
+}
+
+// Existing configuration files keep working, and a web section does not
+// disturb the other commands.
+func TestWebYamlCompatibleWithExistingCommands(t *testing.T) {
+	webEnvClean(t)
+	t.Setenv("MAGNETICO_INGEST_TOKEN", goodToken)
+	o := &OpFlags{}
+	file := writeWebConfig(t, "web:\n  publicURL: https://magnet.example.org\n  requestTimeout: 45s\n")
+	if _, err := o.parseArgs([]string{"--config-file-path", file, "ingest"}); err != nil {
+		t.Fatalf("ingest with a web section: %v", err)
+	}
+	// A legacy crawl-only file is still accepted by web.
+	legacy := writeWebConfig(t, "queueDir: x\nleechMaxActive: 8\n")
+	if _, err := parseWebFile(t, legacy, "--public-url", webPublic); err != nil {
+		t.Fatalf("legacy file with web: %v", err)
+	}
+	t.Setenv("MAGNETICO_CONFIG_FILE_PATH", "")
+	// A missing file is an error, never silently ignored.
+	if _, err := parseWebFile(t, filepath.Join(t.TempDir(), "missing.yml"), "--public-url", webPublic); err == nil {
+		t.Fatal("missing config file must fail")
 	}
 }
 

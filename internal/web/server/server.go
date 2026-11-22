@@ -77,6 +77,8 @@ type Server struct {
 	draining atomic.Bool
 	inflight atomic.Int64
 
+	closeWait time.Duration // bound on backend.Close during shutdown
+
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 }
@@ -112,7 +114,7 @@ func New(cfg Config, backend Backend) (*Server, error) {
 		return nil, fmt.Errorf("server: templates: %w", err)
 	}
 
-	s := &Server{cfg: cfg, log: cfg.Logger, backend: backend, assets: assets, renderer: renderer}
+	s := &Server{cfg: cfg, log: cfg.Logger, backend: backend, assets: assets, renderer: renderer, closeWait: backendCloseWait}
 	s.baseCtx, s.baseCancel = context.WithCancel(context.Background())
 	s.router = &Router{mux: http.NewServeMux(), dl: deadlines{
 		request: cfg.RequestTimeout, search: cfg.SearchTimeout,
@@ -291,7 +293,7 @@ func (s *Server) shutdown(srv *http.Server) error {
 	go func() { s.backend.Close(); close(closed) }()
 	select {
 	case <-closed:
-	case <-time.After(backendCloseWait):
+	case <-time.After(s.closeWait):
 		incomplete = true
 		s.log.Warn("database resources did not close in time")
 	}
