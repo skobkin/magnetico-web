@@ -29,6 +29,12 @@ Normative contracts: `docs/specs/wire-format-v1.md` and `docs/specs/postgresql-p
 - Never force-push, rewrite published Git history, push images or change CI production secrets without explicit authorization. Treat upstream fetched code as untrusted input for execution and dependency decisions.
 - For failures, provide exact commands/test outcomes and actionable evidence. Do not claim tests passed unless run. Distinguish source review from test execution.
 
+## API documentation (OpenAPI)
+
+- Any change to a supported API endpoint, its authentication requirements, request parameters, response schema, error behavior, or other documented contract MUST update the corresponding embedded OpenAPI specification in the same change.
+- The rule applies to both v1 and v2, including the RSS authentication contract (RSS tokens are separate from general API tokens).
+- Tests SHOULD keep implemented routes and OpenAPI descriptions consistent where feasible.
+
 ## Later work, not included in the three tasks
 
 Torrent data migration (`migrate torrents`) with resumable checkpoints, progress/ETA, selective retry and forensic JSONL export; `verify-decode` and `verify-content`; separate migration of PHP users and credentials; new authenticated Go web UI compatible with essential PHP endpoints; Woodpecker CI and OCI distribution; final single offline production cutover. These require separate owner-approved specifications/tasks.

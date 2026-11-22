@@ -1,6 +1,6 @@
 # Task 07A — Web UI, authentication and legacy compatibility: design plan
 
-**Status:** design only. Nothing here is implemented. **Revision 2** incorporates the owner decisions given in the review of commit `17b4c2f0` (see §0); settled choices are marked **owner-approved**, recommendations are marked *proposal*, and what is still undecided is listed in §10. The companion draft contract is [`docs/specs/web-v1.md`](../specs/web-v1.md), which stays **DRAFT** pending the owner's final review.
+**Status:** design only. Nothing here is implemented. **Revision 3** incorporates the owner decisions given in the reviews of commits `17b4c2f0` (revision 2) and `15b76d20` (revision 3) (see §0); settled choices are marked **owner-approved**, recommendations are marked *proposal*, and what is still undecided is listed in §10. The companion draft contract is [`docs/specs/web-v1.md`](../specs/web-v1.md), which stays **DRAFT** pending the owner's final review.
 **Branch:** `refactor/0.8.0-unify-and-new-storage`. `master` was read as a historical reference and was not modified.
 **Not done, by design:** no web code, no schema change, no user migration, no new dependency, no database access, no DHT traffic.
 
@@ -10,23 +10,24 @@ Sources: the PHP/Symfony application on `master` (file paths below are `master:`
 
 | # | Decision | Where |
 |---|---|---|
-| 1 | Schema is **`magnetico_web`** (accounts, auth, sessions, invitations, tokens, trackers, future web settings). Legacy user IDs need not be preserved; recommended strategy: keep them (identity mapping), no UUIDs | §3.10, spec §5 |
+| 1 | Schema is **`magnetico_web`** (accounts, auth, sessions, invitations, API tokens, RSS tokens, trackers, future web settings). **Historical user and invitation IDs are preserved** (identity columns, sequences advanced); no UUIDs | §3.10, spec §5 |
 | 2 | **`pending_setup` removed.** Independent `active`, nullable `password_hash`, and email verification | §3.2, §3.5 |
 | 3 | Two roles `user` / `admin` with `web user set-role`; no RBAC; legacy roles are not used to infer admins | §3.3, §3.10 |
 | 4 | Invitation codes stored in **plaintext**; suspension and transaction rules unchanged | §3.3, §3.5 |
 | 5 | Sessions: 12 h idle, 90 d remember; configurable via `MAGNETICO_WEB_*`; finite absolute expiry always | §3.6 |
-| 6 | Email optional; verified-only recovery; strict-TLS SMTP; reset/admin-reset revokes sessions **and** tokens (email says so); password change keeps tokens by default with revoke-all option | §3.5, §3.11 |
+| 6 | Email optional; verified-only recovery; strict-TLS SMTP; email changes need the current password; reset/admin-reset revokes sessions **and API tokens** (email says so); password change keeps tokens by default with explicit revoke options | §3.5, §3.11 |
 | 7 | Search accepted as proposed; **60 s** configurable timeout (`MAGNETICO_WEB_SEARCH_TIMEOUT`); no short default; HTTP/proxy deadlines must not defeat it; friendly timeout error; no new indexes without measured, approved gain | §6 |
-| 8 | v1 RSS preserved incl. query token; offset fix recommended as an intentional change; **new RSS URL question stays open** and the UI keeps offering the v1 URL | §5.2 |
+| 8 | v1 RSS preserved incl. query token (RSS tokens only); offset fix recommended as an intentional change; **RSS credentials are separate from API credentials** (revision 3); new `/api/v2/feeds/latest.rss?feed_token=` | §3.13, §5.2 |
 | 9 | Trackers in `magnetico_web`, idempotent verbatim import of `master:config/public_trackers.json`; `/magnet` still public and never checks the torrent exists, but reads cached tracker settings | §5.5 |
 | 10 | **No legacy UI redirects**; only `/api/v1/feed/rss/last` and `/magnet/{infohash}` are retained | §5.1 |
 | 11 | `GET /robots.txt` = `Disallow: /` plus `X-Robots-Tag: noindex, nofollow` everywhere; private by default without baking that assumption into the architecture | §3.12 |
 | 12 | `log/slog`; public `/api` documentation; embedded OpenAPI; vendored client-side renderer; no CDN; latest OpenAPI version the chosen renderer supports | §4.4, §5.4 |
 | 13 | v2 non-UTF-8 paths: `path: null` + `path_base64` | §5.3 |
-| 14 | Provisional numeric file-tree budgets (proposals, to be measured in W4) | §6.4 |
+| 14 | File-tree budgets are **benchmark targets, not hard release gates**; W4 measures and reports, the owner selects the solution | §6.4 |
 | 15 | Remaining prerequisites kept separate (hash audit — does not block W1; `x/crypto` version; DDL; renderer; migration; CI/OCI) | §10 |
+| 16 | **Revision 3:** separate `rss_tokens` / `api_tokens`; legacy tokens → `rss_tokens` only; case-sensitive usernames; one instance; session lifetimes 12 h / 168 h / 2160 h; tracker CLI; seed at explicit schema init only; budgets are benchmark targets, not gates; `AGENTS.md` OpenAPI rule added | §3.13, §10 |
 
-*Not done in this revision:* `AGENTS.md` was not edited (this revision is limited to this plan and the spec). The owner asked for a rule there to keep the embedded OpenAPI documents current on every API change; it is recorded as a prerequisite (§10) and as W7 scope.
+*`AGENTS.md`:* the restriction to the two documents was lifted for `AGENTS.md` in revision 3; the OpenAPI-maintenance rule has been added there (§5.4). No other file outside the three documents changed.
 
 ## 1. Legacy inventory
 
@@ -128,8 +129,8 @@ Envelope on every response, `ApiResponse`: `{ "code": int, "status": "success"|"
 | 4 | Private by default, local accounts | **Essential** | Keep; redesign sessions/CSRF/limits |
 | 5 | Invite-based registration | **Essential** (owner decision) | Keep, plus an admin CLI |
 | 6 | Email password reset | **Essential** (owner decision) | Keep, hardened; optional SMTP; only to a **verified** address; strict-TLS transport |
-| 7 | API tokens (create, list, revoke) | **Essential** | Keep, hashed at rest; same tokens usable on v2 |
-| 8 | RSS at `/api/v1/feed/rss/last` | **Essential** (known consumer) | Preserve URL and `api-token` auth |
+| 7 | API tokens (create, list, revoke) | **Redesign** | Two separate credential types: **API tokens** (new, Bearer, JSON API only, created explicitly) and **RSS tokens** (feeds only); legacy tokens become RSS tokens (§3.13) |
+| 8 | RSS at `/api/v1/feed/rss/last` | **Essential** (known consumer) | Preserve URL and `api-token` auth for RSS tokens (legacy migrated and new); add `/api/v2/feeds/latest.rss?feed_token=` |
 | 9 | Public short magnet redirect | **Essential** | Keep at `/magnet/{infohash}`; linked from the UI; trackers now from PostgreSQL (cached), no torrent-existence lookup |
 | 10 | Account page, password change | **Essential** | Keep, redesign |
 | 11 | JSON torrent list/detail API | Worth redesigning | New `/api/v2`; v1 JSON endpoints removed |
@@ -190,8 +191,8 @@ FROM users.users GROUP BY 1, 2 ORDER BY 3 DESC;
 ```
 
    The result decides which verifiers must be built and which test vectors are required. It is an open prerequisite for the migration task.
-3. **Case collisions.** The legacy unique index on `username` is case-sensitive. Whether usernames become case-insensitive is an owner decision (§10); the migrator must report collisions rather than choose.
-4. **API tokens.** Legacy tokens are 32-hex plaintext. Hashing them with SHA-256 keeps verification working (the same string presented in an old RSS URL hashes to the stored value) but **cannot recover the plaintext**. The account page must therefore show migrated tokens as masked entries ("legacy token, created …") and must not pretend to display them. New tokens are shown exactly once. Existing RSS URLs keep working.
+3. **Usernames are case-sensitive (owner-approved)**, as in the legacy application: exact spelling and identity are preserved, no case folding, no case-insensitive uniqueness.
+4. **Legacy API tokens → `rss_tokens` only (owner-approved, supersedes the earlier plan).** See §3.13. They are never copied into `api_tokens`; no general API token is created by the migration.
 5. **Invites.** Legacy invite codes are 32-hex plaintext and **stay plaintext (owner-approved)**, so users keep seeing and copying their unused links; migrated invitations remain available and follow the suspension rule of §3.5. Mitigations accepted with that choice: codes never logged, visible only to the owner, CSRF on invitation management, single-use consumption and explicit revocation enforced in the database.
 6. **Not migrated:** sessions, remember-me cookies, reset tokens, reCAPTCHA state. All users sign in once after cutover.
 7. **Roles (owner-approved).** Historical PHP roles were not meaningfully used for administration. All migrated accounts become ordinary `user`s; **no administrator is inferred** from legacy role data. The operator becomes the first administrator with `web user set-role <username> admin`. Registration through an invitation always creates a `user`.
@@ -211,13 +212,15 @@ FROM users.users GROUP BY 1, 2 ORDER BY 3 DESC;
 
 Authentication middleware checks account state on **every** session or token request, in the same query that resolves the credential (session hash → user row → `active` and `role`). Removing session rows alone is not sufficient, because API tokens are not sessions.
 
-| Event | Sessions | API tokens | Invites owned by the user |
-|---|---|---|---|
-| `disable` | All revoked immediately; login refused | Rejected (the middleware checks `users.active`); marked revoked | **Suspended, not revoked**: rows and codes unchanged; registration through them is refused while the owner is inactive |
-| `enable` | None restored; the user logs in again | **Not** silently restored; new tokens must be created | Usable again automatically, unless used, explicitly revoked or expired |
-| Self-service password change | Other sessions revoked, the current one rotated | **Kept by default**, with an explicit "also revoke all API tokens" option (owner-approved) | Unchanged |
-| Reset by email, admin `reset-password` / `set-password`, completion of a setup link | **All revoked** | **All revoked** (owner-approved); the reset email and page say so explicitly | Unchanged |
-| Explicit invite revocation | n/a | n/a | Permanent (`revoked_at`); `enable` never undoes it |
+| Event | Sessions | API tokens | RSS tokens | Invites owned by the user |
+|---|---|---|---|---|
+| `disable` | All revoked immediately; login refused | Rejected (active check); marked revoked | Same | **Suspended, not revoked**: rows and codes unchanged; registration through them is refused while the owner is inactive |
+| `enable` | None restored; the user logs in again | **Not** restored; new tokens must be created | **Not** restored (migrated legacy RSS URLs stay dead; create a new RSS token) | Usable again automatically, unless used, explicitly revoked or expired |
+| Self-service password change | Other sessions revoked, the current one rotated | **Kept by default**; explicit "also revoke all API tokens" option (owner-approved) | **Kept by default**; separate explicit "also revoke all RSS tokens" option | Unchanged |
+| Reset by email, admin `reset-password` / `set-password`, completion of a setup link | **All revoked** | **All revoked** (owner-approved); email and page say so | **All revoked — proposed policy, not yet an owner decision**: recovery may signal compromise and RSS URLs carry credentials | Unchanged |
+| Explicit invite revocation | n/a | n/a | n/a | Permanent (`revoked_at`); `enable` never undoes it |
+
+API tokens and RSS tokens are never conflated: separate stores, separate revocation actions, separate account sections, separate tests. If the RSS reset proposal is adopted, the reset notification warns that **both API and RSS credentials stop working and need replacement**; if rejected, RSS tokens are untouched by a reset and the notice mentions API tokens only.
 
 Design rules:
 
@@ -239,7 +242,7 @@ Design rules:
 
 ### 3.7 Rate limiting and brute force
 
-In-memory sliding windows per client IP and per normalised username (login), per IP and per email (reset requests), per IP (registration, token 401s), with bounded memory (LRU of keys) and generic error text. This assumes **one web instance**; multiple replicas would need shared state (open, §10).
+In-memory sliding windows per client IP and per normalised username (login), per IP and per email (reset requests), per IP (registration, token 401s), with bounded memory (LRU of keys) and generic error text. The initial deployment is **one web instance (owner-approved)**, so in-memory limiting is acceptable; coordinating limits across several instances is a future consideration, not a 0.8.0 blocker.
 
 ### 3.8 Proxy and HTTPS assumptions
 
@@ -250,33 +253,58 @@ In-memory sliding windows per client IP and per normalised username (login), per
 
 ### 3.9 Sensitive logging and errors
 
-No passwords, session tokens, API tokens, reset/setup/invite codes or full query strings are logged. The `api-token` / `token` query values and `/register/{code}`, `/password/*/{token}` path segments are redacted in the access log. File paths and torrent names are not logged by default (matches `postgresql-persistence-v2.md` §8). Errors shown to users are generic with a request ID; details go to the log.
+No passwords, session tokens, API tokens, RSS tokens, reset/setup/invite codes or full query strings are logged. The `api-token` / `feed_token` / `token` query values and `/register/{code}`, `/password/*/{token}` path segments are redacted in the access log. File paths and torrent names are not logged by default (matches `postgresql-persistence-v2.md` §8). Errors shown to users are generic with a request ID; details go to the log.
 
-The legacy RSS endpoint, because it accepts the token in the query string, additionally gets `Referrer-Policy: no-referrer` and `Cache-Control: private`. **Traefik access logs** record the query string by default; operators must drop or redact it (documented in the deployment notes). That is outside the application's control and must not be presented as solved.
+Both RSS endpoints, because they accept the credential in the URL, additionally get `Referrer-Policy: no-referrer` and `Cache-Control: private`. **Traefik access logs** record the query string by default; operators must drop or redact it (documented in the deployment notes). That is outside the application's control and must not be presented as solved.
 
 ### 3.10 Schema `magnetico_web` and identifier strategy (owner-approved name; strategy is a proposal)
 
-`magnetico_web` holds users, sessions, invitations, API tokens, one-time tokens (setup, reset, email verification), the public tracker list, a small `settings` table and a version table. It is created by an explicit, idempotent command, never by `web` at startup. Detailed DDL is a separate prerequisite; the logical tables are in the spec (§5).
+`magnetico_web` holds users, sessions, invitations, API tokens, RSS tokens, one-time tokens (setup, reset, email verification), the public tracker list, a small `settings` table and a version table. It is created by an explicit, idempotent command, never by `web` at startup. Detailed DDL is a separate prerequisite; the logical tables are in the spec (§5).
 
-Identifier strategy (the owner allows keeping or replacing legacy numeric user IDs, provided relationships are preserved, any mapping is verifiable, and the approved torrent/file identifiers are untouched):
+Identifier strategy (**owner-approved**: historical numeric user and invitation IDs are preserved; the approved torrent/file identifiers are untouched):
 
-- **Recommended: keep legacy `users.id` and `invites.id` verbatim** (`bigint` identity; `OVERRIDING SYSTEM VALUE` on import, sequence advanced afterwards). The old→new mapping is the identity, so verification is counts, foreign-key integrity and per-user invitation/token counts against the source, with no mapping table to carry or get wrong.
-- `api_tokens` get a new surrogate id (the legacy primary key *is* the secret). The link to the source is verifiable: `token_hash = sha256(legacy key)`.
+- **Keep legacy `users.id` and `invites.id` verbatim** (`bigint` identity; `OVERRIDING SYSTEM VALUE` on import, each sequence advanced past the maximum with `setval`, foreign-key consistency verified). The old→new mapping is the identity, so verification is counts, foreign-key integrity and per-user invitation/token counts against the source, with no mapping table to carry or get wrong.
+- `api_tokens` and `rss_tokens` get their own surrogate ids (the legacy primary key *is* the secret). For migrated legacy tokens the link to the source is verifiable: `rss_tokens.token_hash = sha256(legacy key)`.
 - Sessions and one-time tokens are keyed by their hash; trackers get a new identity.
-- **UUIDs rejected for now:** no identifier is public (only owner-checked `POST` routes carry ids), there is no multi-writer or merge case, and a type change forces a permanent mapping with no benefit. If the owner still prefers renumbering, the migrator must produce an explicit old→new mapping report and keep a verified `legacy_user_id` until cutover is closed.
+- **No UUID/ULID** without a concrete requirement: no identifier is public, there is no multi-writer case, and a type change would force a permanent mapping with no benefit.
 
 ### 3.11 Email, SMTP and password recovery (owner-approved)
 
 - Email is **optional for every account**. A supplied address is *unverified* until its holder confirms a single-use link. Only a **verified** address is used for self-service recovery.
-- **Changing an address:** the new address is verified first; the existing verified address stays in force until the replacement is confirmed (the pending address lives in the verification token, not in `users.email`). *Proposal:* require the current password for the change and notify the previous address when it completes.
+- **Changing an address:** the new address is verified first; the existing verified address stays in force until the replacement is confirmed (the pending address lives in the verification token, not in `users.email`). **Owner-approved:** the change requires the current password. *Proposal:* also notify the previous address when it completes.
 - Administrator-generated reset links remain available for users without email.
 - **SMTP:** authenticated submission over **encrypted, certificate-verified** transport only. Modes: strict STARTTLS and implicit TLS; **no plaintext fallback**, no `InsecureSkipVerify`, no `AUTH` or message content before TLS, not even to loopback. *Proposal:* standard library (`net`, `crypto/tls`, `net/smtp.NewClient` with explicit `StartTLS`); **not** `smtp.SendMail`, which falls back to plaintext. A library is justified only if a needed capability is missing, with owner approval. Forgot-password hands the message to a bounded in-process queue so latency cannot reveal whether an address exists.
-- **Reset emails state explicitly that existing API tokens will be revoked**; the reset page repeats it, and so does the CLI output of `reset-password`.
+- **Reset emails state explicitly that existing API tokens will be revoked**; the reset page repeats it, and so does the CLI output of `reset-password`. If the proposed RSS-token revocation on reset is adopted, they also warn that RSS tokens are revoked and feed URLs must be replaced, naming the two credential types separately.
 - Historical email addresses at migration remain a separate decision (they would enter as unverified unless decided otherwise).
 
 ### 3.12 Indexing policy (owner-approved)
 
 Public `GET /robots.txt` returns `User-agent: *` / `Disallow: /`. Every response also carries `X-Robots-Tag: noindex, nofollow` (defence in depth; covers public routes such as `/magnet/*`, documentation and static assets). `robots.txt` is not access control: real content is protected by authentication. The policy is one isolated middleware plus one handler, so a later release can support public read-only access or open registration without re-architecting; those modes are **not designed or implemented now**.
+
+### 3.13 Credentials: API tokens and RSS tokens (owner-approved, revision 3)
+
+**Why two stores.** RSS URLs must carry their credential (torrent clients cannot send headers), while the JSON API must stay strictly Bearer-header. One credential type cannot be both without putting a full-power token in URLs, so there are two, **logically and physically separate**, in `magnetico_web`:
+
+| | `api_tokens` | `rss_tokens` |
+|---|---|---|
+| Purpose | JSON REST API (`/api/v2/*`) | RSS feeds only |
+| Format | `mgt_` + base64url(32 random bytes) (*proposal*) | `mgf_` + base64url(32 random bytes); migrated legacy 32-hex tokens have no prefix |
+| Stored | SHA-256 only | SHA-256 only |
+| Transport | `Authorization: Bearer` only | v2 feed: `?feed_token=`; v1 feed: legacy `api-token` query/header/cookie |
+| Creation | Explicit, on the account page; **never** automatic at login or migration | Explicit, on the account page; many per user; legacy ones come from migration |
+| Metadata | label, created, last used (throttled), optional expiry, `revoked_at` | same, plus `legacy` flag |
+
+No role/scope/permission framework: two tables with their own creation, revocation, metadata and authentication code. **An RSS token never authenticates against the general API; an API token never authenticates against RSS.** Tests assert both directions.
+
+**Legacy migration** (for the later migration task). Every existing PHP API token goes **only into `rss_tokens`**: owner kept; `sha256(legacy_token)` stored (the migrator reads the plaintext from the source database during the run and keeps no plaintext in the target); `legacy = true`; original `created_at` kept; no replacement tokens generated; **no `api_tokens` created**; values never shown in the account UI (masked entries). Existing `…/api/v1/feed/rss/last?api-token=<legacy-token>` URLs keep working unchanged, and the old token must **not** authenticate against `/api/v2/*`. Legacy RSS tokens work until explicitly revoked or until a future, separately approved removal. This supersedes the earlier idea of migrating legacy tokens into a general token store.
+
+**New RSS endpoint.** `GET /api/v2/feeds/latest.rss?feed_token=<rss-token>` works in header-less clients. It is the one documented exception to header-only authentication in v2 and accepts only the separate RSS credential. The parameter name is adjustable only for a concrete compatibility or design problem; none was identified. Supporting new RSS tokens at v1 is allowed because authentication there remains RSS-only (the spec makes it so).
+
+**Account page.** Two sections: *RSS feeds* (create/revoke RSS tokens, metadata, masked legacy entries, a ready-to-copy v2 URL shown once at creation, a note that v1 RSS is deprecated and that existing URLs keep working) and *API access* (create/revoke API tokens, Bearer explanation). A user wanting API access must create a token explicitly after logging in.
+
+**Security.** RSS URLs contain credentials: redaction of `api-token`/`feed_token` and cookie in logs, `Referrer-Policy: no-referrer`, `Cache-Control: private, no-store`, reverse-proxy log-redaction guidance, constant-time digest comparison, per-token and per-IP rate limiting, independent revocation checked on the next request, token check before any feed cache.
+
+**Open sub-point (needs a nod).** The approved revoke-on-disable rule means migrated legacy RSS tokens do not come back after a disable/enable cycle; the alternative (suspend rather than revoke RSS tokens) is not proposed because it would treat the two credential types differently from the approved API-token behaviour.
 
 ## 4. Architecture
 
@@ -338,43 +366,35 @@ Proposed new direct dependencies are limited to: an argon2/bcrypt implementation
 
 | Endpoint | Historical behaviour | Auth | Data | Cost to keep | Recommendation |
 |---|---|---|---|---|---|
-| `GET /api/v1/feed/rss/last` | §1.6 | token (header/cookie/query) | `torrents` only (no blob decode) | Low: one indexed query per page; deterministic XML | **Preserve** URL, token transport, item identity and structure. Page-1 offset fix recommended as an **intentional behaviour change** (§5.2) |
+| `GET /api/v1/feed/rss/last` | §1.6 | **RSS token** (header/cookie/query) | `torrents` only (no blob decode) | Low: one indexed query per page; deterministic XML | **Preserve** URL, token transport, item identity and structure for migrated legacy and new RSS tokens. Page-1 offset fix recommended as an **intentional behaviour change** (§5.2) |
+| `GET /api/v2/feeds/latest.rss?feed_token=` (new) | n/a | RSS token (query) | `torrents` only | Low | **Add**; the recommended URL for new RSS clients (§3.13) |
 | `GET /magnet/{40hex}` | public 307, no DB | none | tracker list only (`magnetico_web.trackers`, cached); **never** the torrent index | Trivial | **Preserve** the path (owner-approved; Telegram-bot use). Linked from the details page and copy actions (§5.5) |
 | `POST /api/v1/login` | mint token from password | public | `users`, `api_tokens` | Medium (login throttling, rehash, token policy) | **Remove**. Tokens are created on the account page |
 | `POST /api/v1/logout` | delete presented token | token | `api_tokens` | Low | **Remove** (revocation lives on the account page) |
 | `GET /api/v1/torrents` | JSON, OFFSET paging, `numberOfPages` always 1 | token | `torrents` | Medium: reproducing the envelope and fake counts honestly is not possible | **Remove**; replaced by v2. Re-implementable later if a consumer appears |
 | `GET /api/v1/torrents/{id}` | JSON + `files[]` | token | `torrents` + blob decode | Medium | **Remove**; v2 pages the file list |
 
-The owner stated that RSS readers are known consumers, that the v1 JSON API may be redesigned as v2 with v1 re-implementable on demand, that `api-token` in the query is kept only for v1 RSS, and (revision 2) that `/magnet/{infohash}` must keep working at its path. Legacy UI routes are **not** redirected (owner-approved): the homepage `/` is the entry point and the new UI may rename routes freely. Retained external routes are exactly `/api/v1/feed/rss/last` and `/magnet/{infohash}`; state-changing legacy GET routes are not served or redirected at all.
+The owner stated that RSS readers are known consumers, that the v1 JSON API may be redesigned as v2 with v1 re-implementable on demand, that `api-token` in the query is kept only for v1 RSS (revision 3: RSS-only credentials, plus a new v2 feed URL with a separate RSS token), and (revision 2) that `/magnet/{infohash}` must keep working at its path. Legacy UI routes are **not** redirected (owner-approved): the homepage `/` is the entry point and the new UI may rename routes freely. Retained external routes are exactly `/api/v1/feed/rss/last` and `/magnet/{infohash}`; state-changing legacy GET routes are not served or redirected at all.
 
 **Honesty about compatibility.** The new schema cannot reproduce `numberOfResults`/`numberOfPages` (no COUNT is run, and the legacy code returned constants), and `files` for very large torrents must be paged. A v1 JSON shim would therefore be an approximation, not a drop-in; that is one reason to remove it rather than promise it. If a consumer is discovered after cutover, an adapter can be written; its cost is small (≈ a day: envelope plus field mapping) but its fidelity limits must be documented.
 
 ### 5.2 RSS v1 details
 
 - Item identity (`guid` = info hash, magnet `link`/`enclosure`) and the essential XML structure are preserved; `Content-Type: application/rss+xml`. A golden-file test compares structure (element set, guid, enclosure), not bytes. `comments` points at the new details route.
-- Authentication stays `api-token` from header, cookie or **query** for this endpoint (owner-approved), so existing torrent-client URLs continue to work. Failed authentication returns the legacy JSON envelope with HTTP 401.
+- Authentication stays `api-token` from header, cookie or **query** for this endpoint (owner-approved), so existing torrent-client URLs continue to work. It accepts **RSS tokens only** (legacy migrated and new `mgf_`); a general API token is rejected. Failed authentication returns the legacy JSON envelope with HTTP 401.
 - Added protections: token redaction in logs, `Referrer-Policy: no-referrer`, `Cache-Control: private`, per-token rate limit, no token echo.
 - The feed reads `torrents` only (`id DESC LIMIT 1000`), never blobs.
 - **Page offset — recommended intentional change** (the owner does not consider it critical): the legacy `page=1` skips the newest 1,000 items. The recommendation is to correct it so `page=1` returns the newest 1,000. This is **not** an exact-compatibility guarantee. Release-note consequence: a client's first poll after cutover may show up to 1,000 newest items it never saw (GUIDs de-duplicate the rest).
 - Cached in-process for a short TTL (legacy: 600 s), keyed on the page only; the token check runs on every request, **before** the cache (§3.5).
-- The new account UI states that **v1 RSS is deprecated and may eventually be removed**.
+- The new account UI states that **v1 RSS is deprecated and may eventually be removed**, recommends the v2 URL, and does not force users to replace existing URLs.
 
-**Open: which RSS URL does the UI recommend?** The owner would like to recommend a new URL, but many torrent clients cannot send `Authorization` headers. A v2 RSS URL must not be recommended silently if such clients cannot authenticate against it. Brief comparison:
-
-| Option | URL-only clients | Exposure if the URL leaks | Cost / notes |
-|---|---|---|---|
-| A. URL-token auth kept for **v1 only** | Works | Full-scope API token | Nothing new; leak risk persists until v1 is removed |
-| B. v2 feed also accepts `api-token` in the query | Works | Full-scope token | Breaks "v2 is Bearer-only" for one endpoint; same risk as A under a new URL |
-| C. **Dedicated feed credential** (`mgf_…`, read-only feed scope, own revocation, in the feed URL only) | Works | Feed read only; cannot call the JSON API or read account data | New scope/column, UI and tests; v1 could accept it too so existing clients can migrate to a lower-risk URL; general v2 stays Bearer-only |
-| D. HTTP Basic credentials in the URL | Inconsistent | Depends | Not recommended |
-
-*Provisional recommendation:* C, with A working in the meantime. **Until the owner decides, the account page keeps offering a working v1 RSS URL (labelled deprecated).** The general v2 JSON API stays restricted to Bearer headers regardless.
+**RSS URL decision (owner-approved, revision 3).** Torrent clients cannot send `Authorization` headers, so the options were compared (v1-only URL token, a v2 feed taking the general token in the query, a dedicated feed credential, Basic credentials in the URL). The owner chose the **dedicated feed credential**: separate `rss_tokens`, the new `GET /api/v2/feeds/latest.rss?feed_token=` endpoint recommended by the UI, v1 kept for migrated legacy tokens. The full-scope-token-in-URL risk of the other options is thereby avoided: a leaked RSS URL grants read access to the feed only. Details in §3.13.
 
 ### 5.3 API v2 (proposal)
 
-Deliberately small. Bearer tokens from the account page (the same tokens as v1), no OAuth, **Bearer header only** (owner-approved; no query-string tokens on the general v2 API).
+Deliberately small. Bearer **API tokens** created explicitly on the account page (separate from RSS tokens, §3.13), no OAuth, **Bearer header only** (owner-approved) — with the single documented exception of the RSS feed endpoint, which accepts only an RSS token via `feed_token`.
 
-- `GET /api/v2/torrents?q=&sort=&order=&limit=&cursor=` returns `{items, next_cursor}`; `GET /api/v2/torrents?info_hash=<40 hex>`; `GET /api/v2/torrents/{id}` (includes `magnet_uri`); `GET /api/v2/torrents/{id}/files?limit=&cursor=` over the flat canonical list; a feed endpoint whose authentication depends on the open RSS decision above.
+- `GET /api/v2/torrents?q=&sort=&order=&limit=&cursor=` returns `{items, next_cursor}`; `GET /api/v2/torrents?info_hash=<40 hex>`; `GET /api/v2/torrents/{id}` (includes `magnet_uri`); `GET /api/v2/torrents/{id}/files?limit=&cursor=` over the flat canonical list; `GET /api/v2/feeds/latest.rss?feed_token=` (RSS-token authentication).
 - Conventions: `snake_case` JSON, RFC 3339 timestamps, RFC 9457 `application/problem+json` errors, cursor pagination, `Cache-Control: private`.
 - **File paths (owner-approved contract).** Paths are opaque bytes (wire-format-v1 §1). Valid UTF-8 → `path` is the original string. Invalid UTF-8 → `"path": null` plus `path_base64` carrying the **exact bytes** (standard base64 with padding). Validity is per whole path; invalid bytes are never turned into U+FFFD; storage and codec are unchanged. The HTML UI shows `\xNN` escapes in a visibly marked span (lossless). Tests cover valid, invalid, mixed encodings and duplicate paths, including across cursor boundaries.
 
@@ -383,8 +403,8 @@ Deliberately small. Bearer tokens from the account page (the same tokens as v1),
 - Specs are written by hand and **embedded in the binary as static assets**, one per prefix: `/api/v1/openapi.yaml`, `/api/v2/openapi.yaml`. `/api` and the version-specific documentation pages are **public** (owner-approved; they also carry `noindex`, §3.12).
 - A **lightweight client-side renderer**, vendored and pinned, loads the relevant specification in the browser. The server has no dynamic documentation service. **No CDN, no runtime third-party requests**, no live tokens, credentials or user-specific data in the pages.
 - **OpenAPI version:** the latest version supported by the chosen renderer. A small, maintainable renderer matters more than the newest minor version, and no heavyweight dependency is added merely to reach 3.2.1. (This supersedes the earlier "target 3.2.1" wording.) The renderer evaluation — size, licence, maintenance, CSP compatibility without inline script/`eval`, supported versions, no external requests, whether "try it out" can avoid persisting credentials — is a separate prerequisite; nothing is claimed here about specific renderers.
-- The **v1 specification contains only endpoints the new application implements**: the RSS endpoint with its `api-token` header/cookie/query transport and the 401 envelope; the prefix is marked deprecated. Removed endpoints do not appear.
-- **Maintenance rule:** any API change updates the embedded document in the same change, enforced by a route-versus-spec test; an `AGENTS.md` instruction to that effect is to be added (outside this revision's file scope; §0, §10).
+- The **v1 specification contains only endpoints the new application implements**: the RSS endpoint with its `api-token` header/cookie/query transport (RSS tokens only) and the 401 envelope; the prefix is marked deprecated. Removed endpoints do not appear.
+- **Maintenance rule:** any API change updates the embedded document in the same change, enforced by a route-versus-spec test; the rule is now in `AGENTS.md` (owner-approved, revision 3): any change to a supported API endpoint, its authentication, parameters, response schema, error behaviour or other documented contract MUST update the corresponding embedded OpenAPI specification in the same change (v1 and v2, including the RSS authentication contract), and tests keep implemented routes and OpenAPI descriptions consistent where feasible.
 
 ### 5.5 Magnet short link and trackers in PostgreSQL
 
@@ -437,7 +457,7 @@ Consequence: "directory-by-directory browsing" reduces HTML size and browser cos
 
 Proposed approach, to be validated before commitment (gate in W4): on first request for a torrent build a compact index over the canonical sorted list (the list is already sorted by path bytes, so every directory is a contiguous range: directory = `[lo, hi)` plus a count and size sum; no per-node allocation needed), keep it in a size-bounded LRU keyed by torrent ID and blob identity, and serve subsequent directory views from the index.
 
-**Provisional numeric budgets (proposals for the owner to confirm; nothing has been measured).** To be benchmarked in W4 on **disposable synthetic data** generated by the tests, on a stated reference host (*proposal*: 2 vCPU, 1 GiB container), single process, idle database:
+**Numeric budgets — accepted by the owner as benchmark targets, not hard release gates (nothing has been measured).** To be benchmarked in W4 on **disposable synthetic data** generated by the tests, on a stated reference host (*proposal*: 2 vCPU, 1 GiB container), single process, idle database:
 
 | Metric | Provisional budget |
 |---|---|
@@ -449,7 +469,7 @@ Proposed approach, to be validated before commitment (gate in W4): on first requ
 | Peak process RSS in the 32-concurrent run | ≤ **640 MiB** (headroom in a 1 GiB container); decode working set ≤ **256 MiB** via the weighted semaphore; cache ≤ **128 MiB** |
 | Allocations per cached navigation | ≤ **10,000** allocations and ≤ **1 MiB** |
 
-The web service needs its own `GOMEMLIMIT` recommendation (ingest's 256 MiB is not transferable). Any schema or codec change that the results make necessary requires **separate owner approval**.
+The web service needs its own `GOMEMLIMIT` recommendation (ingest's 256 MiB is not transferable). W4 measures cold decode and index construction, cached navigation, 8/32 concurrent requests, peak memory and allocations. If a target is missed, W4 **reports the measurements and identifies the bottleneck** — it does not automatically redesign the codec or the persistence schema. The owner selects the final solution from the measurements and practical resource needs; any schema or codec change requires **separate owner approval**.
 
 If blob-only storage makes efficient browsing too expensive, the alternatives for owner review (none is applied here, the schema is not changed) are:
 
@@ -561,22 +581,26 @@ Breadcrumbs and directory rows are ordinary links (`?path=…`); with JS a direc
 │           (optional; verified address enables reset)      │
 │ Password  ••••••••                           [Change]     │
 │           [ ] also revoke all my API tokens               │
+│           [ ] also revoke all my RSS tokens               │
 │                                                            │
-│ API tokens                                  [ New token ]  │
+│ RSS feeds                                  [ New RSS token ]│
 │ ┌────────────┬───────────────┬──────────┬──────────────┐ │
 │ │ Label      │ Created       │ Last used│              │ │
-│ │ rss-reader │ 2026-11-22    │ today    │ [Revoke]     │ │
+│ │ my-client  │ 2026-11-22    │ today    │ [Revoke]     │ │
 │ │ legacy ····│ 2019-03-04    │ —        │ [Revoke]     │ │
 │ └────────────┴───────────────┴──────────┴──────────────┘ │
-│ A new token is shown once, in a banner. Legacy tokens are │
-│ masked: their value can't be shown, but existing RSS URLs │
-│ keep working.                                              │
+│ A new RSS token is shown once with a ready-to-copy URL:   │
+│  https://…/api/v2/feeds/latest.rss?feed_token=mgf_…       │
+│ Legacy tokens are masked; existing v1 URLs keep working.  │
+│ ⚠ The v1 feed (/api/v1/feed/rss/last) is deprecated and   │
+│   may be removed in a future release.                     │
 │                                                            │
-│ RSS (deprecated)                                           │
-│  v1 feed URL for clients that cannot send headers:         │
-│  https://…/api/v1/feed/rss/last?api-token=<token>          │
-│  ⚠ v1 RSS is deprecated and may be removed in a future     │
-│    release. (A replacement URL is pending an owner decision.)│
+│ API access                                  [ New API token]│
+│ Bearer-header authentication for the JSON API (/api/v2).  │
+│ Tokens are shown once; none is created automatically.     │
+│ ┌────────────┬───────────────┬──────────┬──────────────┐ │
+│ │ ci-script  │ 2026-11-22    │ today    │ [Revoke]     │ │
+│ └────────────┴───────────────┴──────────┴──────────────┘ │
 │                                                            │
 │ Invitations   3 unused                                      │
 │  https://…/register/9f3c…  [Copy] [Revoke]                 │
@@ -585,7 +609,7 @@ Breadcrumbs and directory rows are ordinary links (`?path=…`); with JS a direc
 └────────────────────────────────────────────────────────────┘
 ```
 
-The email field is optional. An unverified address shows a "send verification" action when SMTP is configured; it is never used for recovery until verified. A user without a verified address cannot self-serve a reset and needs the administrator. Invitation links are plaintext by owner decision, visible only to their owner; copy, revoke, token creation/revocation and password change are POST forms with CSRF. The password-reset page states that completing a reset revokes all API tokens.
+The email field is optional. An unverified address shows a "send verification" action when SMTP is configured; it is never used for recovery until verified. A user without a verified address cannot self-serve a reset and needs the administrator. Invitation links are plaintext by owner decision, visible only to their owner; copy, revoke, API/RSS token creation/revocation and password change are POST forms with CSRF. The password-reset page states that completing a reset revokes all API tokens (and, if the proposed policy is adopted, all RSS tokens), naming each type.
 
 ## 8. Implementation milestones
 
@@ -594,35 +618,36 @@ Each milestone ends in a reviewable change set and a stop. No milestone starts w
 | # | Milestone | Scope | Acceptance criteria | Test strategy |
 |---|---|---|---|---|
 | W1 | Foundation | `WebOptions` with the §2.3 variables and validation (durations, session ordering, search timeout), `web` dispatch, `log/slog`, server with per-request deadlines (no global `WriteTimeout`), middleware chain, trusted-proxy handling, `/healthz`/`/readyz`, `/robots.txt` and `X-Robots-Tag` middleware, embedded static assets, startup verification, graceful shutdown, import-boundary test | Starts only with a verified schema; refuses bad config (each invalid duration/ordering rejected); graceful stop within the bound; forwarded headers ignored from untrusted peers; `robots.txt` body exact and `X-Robots-Tag` on every response class; web graph excludes crawler/ingest/SQLite | Unit tests for config and client-IP logic; `httptest`; ephemeral PostgreSQL via `internal/pgtest`; a `go list -deps` test |
-| W2 | Web schema, store and CLI | `magnetico_web` DDL (approved first) incl. users (`active`, nullable `password_hash`, `role`, email verification), invites (plaintext), tokens, one-time tokens, trackers + idempotent seed; store; hashing with bounded concurrency; legacy verifiers (only those with vectors); `web user add/set-role/disable/enable/reset-password/set-password/list`, `invite add/revoke` | NULL hash cannot log in; completing a setup/reset link never writes `active` (disabled: refused, link not consumed); disable/enable never touch the hash; expired setup links re-issuable; invite suspension and the registration race hold; seed idempotent and non-clobbering; hashing concurrency bounded | Table-driven tests, **PHP-generated vector fixtures** per supported format, concurrency tests with the race detector, ephemeral PostgreSQL |
+| W2 | Web schema, store and CLI | `magnetico_web` DDL (approved first) incl. users (`active`, nullable `password_hash`, `role`, email verification), invites (plaintext), tokens, one-time tokens, trackers + idempotent seed; store; hashing with bounded concurrency; legacy verifiers (only those with vectors); `web user add/set-role/disable/enable/reset-password/set-password/list`, `invite add/revoke`, **`web tracker list/add/remove/move`** (owner-approved), `api_tokens` and `rss_tokens` stores as separate tables, tracker seed in the explicit schema-initialization command only | NULL hash cannot log in; completing a setup/reset link never writes `active` (disabled: refused, link not consumed); disable/enable never touch the hash; expired setup links re-issuable; invite suspension and the registration race hold; seed idempotent and non-clobbering; hashing concurrency bounded | Table-driven tests, **PHP-generated vector fixtures** per supported format, concurrency tests with the race detector, ephemeral PostgreSQL |
 | W3 | Authentication and sessions | Login/logout, sessions with configurable idle/remember/absolute lifetimes, CSRF, rate limits, rehash on login, revocation checks on every request | No auth state survives disable; every session row has a finite expiry; fixation covered; CSRF on all POSTs incl. unauthenticated; generic errors and equal timing for unknown/NULL-hash/inactive accounts | Handler tests, expiry tests with a fake clock, concurrency (revoke vs request), timing-shape test, header tests |
-| W4 | Search and details | Persistence read additions, keyset search with the 60 s configurable timeout and separate search concurrency, details, file index/cache, decode semaphore, **benchmark gate** against the §6.4 provisional budgets, invalid-UTF-8 path display | Budgets measured and **confirmed or revised by the owner** (or an alternative chosen); search timeout friendly and not cut by HTTP deadlines; duplicates, invalid and mixed paths round-trip; 404 vs 500 mapping; no new indexes unless proven and approved | Unit + integration; benchmarks near 250,000 files at 1, 8 and 32 concurrency with RSS and allocation measurement; slow-query timeout test; EXPLAIN review on a synthetic disposable database |
+| W4 | Search and details | Persistence read additions, keyset search with the 60 s configurable timeout and separate search concurrency, details, file index/cache, decode semaphore, **benchmark measurement** against the §6.4 targets (report, not gate), invalid-UTF-8 path display | Measurements and bottleneck analysis reported against the targets (no automatic codec/schema redesign; the owner picks the solution); search timeout friendly and not cut by HTTP deadlines; duplicates, invalid and mixed paths round-trip; 404 vs 500 mapping; no new indexes unless proven and approved | Unit + integration; benchmarks near 250,000 files at 1, 8 and 32 concurrency with RSS and allocation measurement; slow-query timeout test; EXPLAIN review on a synthetic disposable database |
 | W5 | UI and styling | Templates, CSS, light/dark, responsive layouts, small JS, icons | Works without JS; 360 px layout; keyboard and contrast checks; CSP without inline scripts | Template tests, manual accessibility checklist (WCAG 2.1 AA), screenshot review by the owner |
-| W6 | Account management and email | Password change (keep tokens by default, revoke-all option), email add/change/verify, SMTP with enforced TLS and a bounded send queue, forgot/reset (verified address only), tokens (create/list/revoke, legacy masking), plaintext invitation list/copy/revoke, registration | Reset responses identical for known/unknown/unverified/disabled; reset and admin reset revoke sessions **and** tokens and the email says so; old verified email stays until the new one is confirmed; STARTTLS/implicit-TLS enforced, no plaintext fallback; registration atomic with the owner-active check; other users' invitations never visible | Handler and store tests, **fake SMTP server** (no-STARTTLS, bad certificate, header injection), concurrency race tests |
-| W7 | API, RSS, docs, magnet | `/api/v1` RSS (query token kept, item identity, page-1 fix as documented change), `/api/v2` incl. `path`/`path_base64`, embedded OpenAPI at the latest version the chosen renderer supports, public `/api` docs with vendored renderer, `/magnet` with cached DB trackers, account RSS guidance (v1 URL + deprecation), **`AGENTS.md` OpenAPI-maintenance rule (needs separate approval)** | RSS golden test; token redaction verified; v1 spec lists only implemented endpoints; v2 validates against its spec; route-vs-spec test; no external requests from docs pages; `/magnet` issues no torrent query and survives tracker-refresh failure | Contract tests, OpenAPI validation, log-capture test, tracker-cache tests |
-| W8 | User migration | **Separate approved task**: `migrate users` (identity-preserving by default, handling of historical emails, legacy invitation and token import) | Specified separately; depends on the hash audit, DDL approval and W2 verifiers | Specified separately |
+| W6 | Account management and email | Password change (keep tokens by default, revoke-all option), email add/change/verify, SMTP with enforced TLS and a bounded send queue, forgot/reset (verified address only), **separate API-token and RSS-token management** (create/list/revoke; masked legacy RSS entries; ready-to-copy v2 RSS URL shown once; no API token auto-created), plaintext invitation list/copy/revoke, registration | Reset responses identical for known/unknown/unverified/disabled; reset and admin reset revoke sessions **and API tokens** (RSS tokens per the final decision on the proposed policy) and the email names each revoked type; email change requires the current password; old verified email stays until the new one is confirmed; STARTTLS/implicit-TLS enforced, no plaintext fallback; registration atomic with the owner-active check; other users' invitations never visible | Handler and store tests, **fake SMTP server** (no-STARTTLS, bad certificate, header injection), concurrency race tests |
+| W7 | API, RSS, docs, magnet | `/api/v1` RSS (RSS-token `api-token` query/header/cookie kept, item identity, page-1 fix as documented change), **`/api/v2/feeds/latest.rss?feed_token=`**, `/api/v2` incl. `path`/`path_base64`, embedded OpenAPI at the latest version the chosen renderer supports, public `/api` docs with vendored renderer, `/magnet` with cached DB trackers, account RSS guidance (recommends the v2 URL, explains v1 deprecation), route-vs-OpenAPI consistency tests (the `AGENTS.md` rule itself is already in place) | RSS golden test; **credential-separation tests (legacy/new RSS token accepted on feeds and rejected by `/api/v2/*`; API token rejected by feeds)**; token redaction verified; v1 spec lists only implemented endpoints; v2 validates against its spec; route-vs-spec test; no external requests from docs pages; `/magnet` issues no torrent query and survives tracker-refresh failure | Contract tests, OpenAPI validation, log-capture test, tracker-cache tests |
+| W8 | User migration | **Separate approved task**: `migrate users` (identity-preserving, case-sensitive usernames kept verbatim, handling of historical emails, legacy invitation import, **legacy tokens → `rss_tokens` only**: `sha256`, `legacy = true`, original timestamps, zero `api_tokens`) | Specified separately; depends on the hash audit, DDL approval and W2 verifiers | Specified separately |
 | W9 | Integration, security, regression | Real-binary e2e (like `internal/e2e`), security checklist, load test of search, soak of the web service with realistic data, deployment notes (Traefik log redaction, proxy timeouts above the search timeout) | No P0/P1 findings open; memory recommendation for the container | e2e with disposable PostgreSQL, scripted abuse cases (brute force, CSRF, enumeration, spoofed `X-Forwarded-For`), accessibility review |
 
 The Task 06 e2e harness (`internal/e2e`) and `internal/pgtest` are reused; they run synthetic data only, and no step in this plan sends DHT traffic.
 
 ## 9. Documents and README
 
-This task adds this document, `docs/specs/web-v1.md` (draft) and updates `docs/wip/README.md` (06A status, 07A row). Revision 2 changes only this document and the spec. `AGENTS.md` still lists only tasks 1–3 in its task order and has no OpenAPI-maintenance rule; both updates are outside the scope of this revision (§10).
+This task adds this document, `docs/specs/web-v1.md` (draft) and updates `docs/wip/README.md` (06A status, 07A row). Revision 3 changes this document, the spec and `AGENTS.md` (OpenAPI-maintenance rule).
 
 ## 10. Decisions
 
-### 10.1 Owner-approved (revision 2)
+### 10.1 Owner-approved
 
-See §0. In short: schema `magnetico_web`; no `pending_setup`; roles `user`/`admin`; plaintext invitation codes; session defaults and configurability; optional/verified email and strict-TLS SMTP; token revocation on reset; search architecture with the 60 s configurable timeout and the no-new-indexes policy; RSS v1 preserved; trackers in PostgreSQL; no legacy redirects; `robots.txt`/`X-Robots-Tag`; `slog`; public embedded API docs with a client-side renderer; the `path`/`path_base64` contract.
+*Revision 2:* see §0 (schema `magnetico_web`; no `pending_setup`; roles; plaintext invitation codes; configurable sessions; optional/verified email and strict-TLS SMTP; API-token revocation on reset; search architecture and the 60 s timeout; no new indexes without approval; RSS v1 preserved; trackers in PostgreSQL; no legacy redirects; `robots.txt`/`X-Robots-Tag`; `slog`; public embedded API docs with a client-side renderer; the `path`/`path_base64` contract).
+
+*Revision 3:* **separate RSS and API credentials** (§3.13) with legacy tokens migrated only to `rss_tokens`, the new v2 RSS endpoint and account sections; **case-sensitive usernames**; **one web instance** initially; sessions 12 h / 168 h / 2160 h; **current password required for email changes**; **tracker CLI**; **tracker seed only during explicit schema initialization**, never at service start, never overwriting later edits; **preserved legacy user and invitation IDs**; file-tree budgets as targets, not gates; the `AGENTS.md` OpenAPI rule.
 
 ### 10.2 Still open
 
-1. **RSS URL for URL-only clients** (§5.2): keep v1 only, a v2 query token, or a dedicated feed credential. Until decided the UI offers the v1 URL.
-2. **File-tree approach** after the W4 benchmark, and confirmation of the provisional numeric budgets (§6.4); any schema or codec change needs separate approval.
-3. **Username case sensitivity** and collision policy.
-4. **Single versus multiple web instances** (rate-limit state).
-5. Minor proposals needing a nod: the ordinary-session absolute lifetime default (168 h), requiring the current password for an email change, the optional tracker CLI, placing the tracker seed in schema initialization versus a separate data migration, and keeping legacy IDs (§3.10).
-6. **Breached-password lookup** (not proposed; it would send hash prefixes off the host).
+1. **RSS-token revocation on password reset** — a *proposed* security policy (revoke RSS tokens on admin/email reset; the notification then warns about both credential types). Not an owner decision yet. Related minor point to confirm: migrated legacy RSS tokens do not return after a disable/enable cycle (§3.13).
+2. **File-tree final solution**, chosen by the owner after the W4 measurements.
+3. **Breached-password lookup** (not proposed; it would send hash prefixes off the host).
+
+Minor proposals, not blockers: a notice to the previous address after an email change, the default link lifetimes, the standard-library SMTP implementation.
 
 ### 10.3 Remaining implementation prerequisites (kept separate from the design)
 
@@ -631,7 +656,6 @@ See §0. In short: schema `magnetico_web`; no `pending_setup`; roles `user`/`adm
 - Detailed `magnetico_web` DDL.
 - Selection of the API-documentation renderer and the OpenAPI version it supports.
 - User-migration implementation (including historical email handling).
-- An `AGENTS.md` rule: any API change must update the embedded OpenAPI documents.
 - CI/OCI images and release-candidate testing.
 
 No live DHT activity is permitted on the development VM at any stage.
