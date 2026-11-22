@@ -58,6 +58,14 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		if err := o.Ingest.check(); err != nil {
 			return "", err
 		}
+	case "web":
+		explicit := explicitOptions(parser.Command)
+		if err := o.applyConfig(explicit, command); err != nil {
+			return "", err
+		}
+		if err := o.Web.check(explicit["database"]); err != nil {
+			return "", err
+		}
 	case "migrate":
 		if active.Active == nil {
 			return "", errors.New("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")

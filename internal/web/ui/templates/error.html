@@ -1,0 +1,6 @@
+{{define "title"}}{{.Status}} {{.Heading}}{{end}}
+{{define "content"}}
+<h1>{{.Heading}}</h1>
+<p>{{.Message}}</p>
+{{if .RequestID}}<p class="meta">Request ID: <code>{{.RequestID}}</code></p>{{end}}
+{{end}}

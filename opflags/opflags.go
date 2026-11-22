@@ -18,7 +18,7 @@ type OpFlags struct {
 
 	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT crawler: precheck, fetch metadata, queue it durably on local disk and deliver it to the ingest service over authenticated HTTP." subcommands-optional:"true"`
 	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer)."`
-	Web     StubOptions    `command:"web" description:"Reserved for the future authenticated web UI (not implemented yet)."`
+	Web     WebOptions     `command:"web" description:"Run the authenticated web UI service (milestone W1: server foundation, health and robots routes; search, accounts and API arrive in later milestones)."`
 	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
 }
 

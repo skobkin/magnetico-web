@@ -1,0 +1,6 @@
+/* Foundation stylesheet (W1). The real design system arrives with W5. */
+:root { color-scheme: light dark; --fg: #1b1b1f; --bg: #fafafa; --muted: #5c5c66; }
+@media (prefers-color-scheme: dark) { :root { --fg: #e6e6ea; --bg: #16161a; --muted: #a0a0ab; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+main { max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
+.meta { color: var(--muted); font-size: .875rem; }

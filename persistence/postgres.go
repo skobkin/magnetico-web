@@ -105,7 +105,14 @@ func MakeDatabase(ctx context.Context, rawURL string) (Store, error) {
 // the extension, so it is the root cause of any missing-index state. It never
 // creates, alters or migrates anything.
 func (s *pgxStore) verifyStartup(ctx context.Context) error {
-	inv, err := readInventory(ctx, s.pool)
+	return VerifySchema(ctx, s.pool)
+}
+
+// VerifySchema is the read-only startup verification of verifyStartup over a
+// caller-owned pool (used by services that manage their own pool limits, such
+// as the web service). It never creates, alters or migrates anything.
+func VerifySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	inv, err := readInventory(ctx, pool)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrStorageIO, err)
 	}

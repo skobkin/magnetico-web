@@ -29,6 +29,8 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/progress"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
+	webserver "github.com/skobkin/magnetico-web/internal/web/server"
+	webdb "github.com/skobkin/magnetico-web/internal/web/webdb"
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/opflags"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -49,8 +51,7 @@ func main() {
 	case "ingest":
 		runIngest(&opFlags.Ingest)
 	case "web":
-		notImplemented("web",
-			"the authenticated web UI will be designed from the historical PHP application in a later phase")
+		runWeb(&opFlags.Web)
 	case "migrate":
 		switch opFlags.Migrate.Subcommand {
 		case "schema-init":
@@ -74,12 +75,6 @@ func main() {
 			log.Fatalln("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 	}
-}
-
-// notImplemented reports a reserved subcommand and exits non-zero.
-func notImplemented(command, detail string) {
-	fmt.Fprintf(os.Stderr, "magnetico %s: not implemented yet (%s)\n", command, detail)
-	os.Exit(1)
 }
 
 // unparsableDatabaseURL is printed instead of any database URL that cannot be
@@ -288,6 +283,54 @@ func runIngest(opFlags *opflags.IngestOptions) {
 			redactDatabaseURL(opFlags.DatabaseURL), ingestErrorDetail(err)), err))
 	}
 	log.Println("the ingest service stopped cleanly")
+}
+
+// runWeb implements `magnetico web` (milestone W1: the HTTP foundation). It
+// verifies the database read-only, serves until SIGINT/SIGTERM and then shuts
+// down within the configured grace period. Error text is reduced to
+// controlled content: database URLs and driver messages never reach the log.
+func runWeb(o *opflags.WebOptions) {
+	logger, err := webserver.NewLogger(os.Stderr, o.LogLevel, o.LogFormat)
+	if err != nil {
+		log.Fatalln(err.Error()) // unreachable: validated by opflags
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	backend, err := webdb.Open(ctx, o.DatabaseURL, o.PoolMaxConns)
+	if err != nil {
+		log.Fatalln(fmt.Sprintf("The web service could not start: database %s. %s",
+			redactDatabaseURL(o.DatabaseURL), controlledErrorDetail(err)))
+	}
+	srv, err := webserver.New(webserver.Config{
+		Listen:          o.Listen,
+		PublicURL:       o.PublicBaseURL,
+		TrustedProxies:  o.TrustedProxyPrefixes,
+		RequestTimeout:  o.RequestTimeout,
+		SearchTimeout:   o.SearchTimeout,
+		ShutdownTimeout: o.ShutdownTimeout,
+		Logger:          logger,
+	}, backend)
+	if err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+
+	err = srv.Run(ctx)
+	if errors.Is(err, webserver.ErrShutdownIncomplete) {
+		// Same convention as `crawl` and `ingest`.
+		log.Println(webserver.ErrShutdownIncomplete)
+		os.Exit(3)
+	}
+	if err != nil {
+		detail := controlledErrorDetail(err)
+		if errors.Is(err, webdb.ErrWebSchemaMissing) {
+			detail = webdb.ErrWebSchemaMissing.Error()
+		}
+		log.Fatalln(appendSchemaStateDetails(fmt.Sprintf(
+			"The web service stopped: database %s. %s", redactDatabaseURL(o.DatabaseURL), detail), err))
+	}
 }
 
 // ingestErrorDetail is controlledErrorDetail plus the ingest-specific

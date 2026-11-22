@@ -167,6 +167,11 @@ func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 		}
 	}
 
+	if configPath != "" && command == "web" {
+		// No file layer for web (spec §2.2): never ignore a supplied file.
+		return errors.New("the web command does not read a configuration file; remove --config-file-path / MAGNETICO_CONFIG_FILE_PATH and use flags or MAGNETICO_WEB_* variables")
+	}
+
 	if configPath != "" {
 		data, err := os.ReadFile(configPath)
 		if err != nil {
@@ -182,6 +187,8 @@ func (o *OpFlags) applyConfig(explicit map[string]bool, command string) error {
 		return o.applyEnvConfig(explicit)
 	case "ingest":
 		return o.applyEnvIngestConfig(explicit)
+	case "web":
+		return o.applyEnvWebConfig(explicit)
 	case "migrate":
 		if err := o.applyEnvMigrateConfig(explicit); err != nil {
 			return err

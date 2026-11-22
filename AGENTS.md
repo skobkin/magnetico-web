@@ -16,6 +16,8 @@ Work through **one approved task at a time** (all in `docs/wip/`):
 2. `02-upstream-cleanup.md` — remove irrelevant upstream functionality and unsafe old DB auto-migration, prepare Go crawler foundation.
 3. `03-storage-persistence.md` — codec v1 and fresh PostgreSQL schema/persistence plus tests; do not implement migrator or web UI yet.
 
+The numbered list above is the original three-task sequence. Later tasks (04A–04D migrator, 05, 06 crawler/ingest, 07A web design, 07B web foundation) are indexed in `docs/wip/README.md`. The Go web UI is built **one milestone per owner-approved task** (W1–W9, `docs/wip/07A-web-design-plan.md` §9; W1 is implemented, see `docs/wip/07B-web-foundation-report.md`); never start the next milestone without an explicit assignment.
+
 Normative contracts: `docs/specs/wire-format-v1.md` and `docs/specs/postgresql-persistence-v2.md`. If task text and a normative specification disagree, stop and ask for the owner's decision; do not silently change wire format, schema contract or data-compatibility promises. Working reports go in `docs/wip/`; stable user-facing documentation may go directly under `docs/` later.
 
 ## Safety and engineering
@@ -37,4 +39,4 @@ Normative contracts: `docs/specs/wire-format-v1.md` and `docs/specs/postgresql-p
 
 ## Later work, not included in the three tasks
 
-Torrent data migration (`migrate torrents`) with resumable checkpoints, progress/ETA, selective retry and forensic JSONL export; `verify-decode` and `verify-content`; separate migration of PHP users and credentials; new authenticated Go web UI compatible with essential PHP endpoints; Woodpecker CI and OCI distribution; final single offline production cutover. These require separate owner-approved specifications/tasks.
+Torrent data migration (`migrate torrents`) with resumable checkpoints, progress/ETA, selective retry and forensic JSONL export; `verify-decode` and `verify-content`; separate migration of PHP users and credentials; the remaining milestones (W2–W9) of the new authenticated Go web UI compatible with essential PHP endpoints; Woodpecker CI and OCI distribution; final single offline production cutover. These require separate owner-approved specifications/tasks.

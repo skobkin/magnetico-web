@@ -13,7 +13,7 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 
 1.1 `magnetico web` is a command of the single `magnetico` binary and an independently deployable service. It reads the 0.8.0 PostgreSQL torrent storage and keeps its own state (accounts, sessions, invitations, API tokens, tracker list, web settings) in the PostgreSQL schema **`magnetico_web`** **[APPROVED]**.
 
-1.2 The web service MUST NOT depend on the crawler, the crawler's SQLite queue, the ingest service, or the legacy PHP runtime. Its dependency graph MUST NOT contain `internal/crawler`, `internal/crawlqueue`, `internal/ingest` or `modernc.org/sqlite` (enforced by a test).
+1.2 The web service MUST NOT depend on the crawler, the crawler's SQLite queue, the ingest service, or the legacy PHP runtime. Its dependency graph MUST NOT contain `internal/crawler`, `internal/crawlqueue`, `internal/ingest` or `modernc.org/sqlite` (enforced by a test over the dependency graph of `./internal/web/...`; the unified executable's `main` package links the crawler and ingest by design and therefore cannot be the subject of this check).
 
 1.3 The web service never writes to `magneticod.*` tables.
 
