@@ -1,7 +1,5 @@
 package webschema
 
-import "fmt"
-
 // colSpec is the expected shape of one column.
 type colSpec struct {
 	name      string
@@ -10,10 +8,6 @@ type colSpec struct {
 	identity  string // attidentity: "a" (GENERATED ALWAYS) or ""
 	generated string // attgenerated: always ""
 	def       string // normalized pg_get_expr of the default, "" if none
-}
-
-func (c colSpec) describe() string {
-	return fmt.Sprintf("%s notnull=%t identity=%q default=%q", c.typ, c.notNull, c.identity, c.def)
 }
 
 type tableSpec struct {

@@ -154,7 +154,7 @@ func inspect(ctx context.Context, q querier) (state, []string, error) {
 		case !ok:
 			add("missing column magnetico_web.%s", key)
 		case got != want:
-			add("column magnetico_web.%s differs (have %s)", key, got.describe())
+			add("column magnetico_web.%s differs", key)
 		}
 	}
 	for key := range gotCols {
@@ -199,7 +199,7 @@ func inspect(ctx context.Context, q querier) (state, []string, error) {
 		case !ok:
 			add("missing constraint magnetico_web.%s", key)
 		case got != want:
-			add("constraint magnetico_web.%s differs (have %s)", key, got)
+			add("constraint magnetico_web.%s differs", key)
 		}
 	}
 	for key := range gotCons {
@@ -241,7 +241,7 @@ func inspect(ctx context.Context, q querier) (state, []string, error) {
 		case !ok:
 			add("missing index magnetico_web.%s", key)
 		case got != want:
-			add("index magnetico_web.%s differs (have %s)", key, got)
+			add("index magnetico_web.%s differs", key)
 		}
 	}
 	for key := range gotIdx {

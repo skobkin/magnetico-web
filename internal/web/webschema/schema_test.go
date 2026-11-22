@@ -478,3 +478,47 @@ func mustFreshDB(t *testing.T) string {
 	cl, _ := torrentDBCluster(t)
 	return cl.TestDatabase(t)
 }
+
+// Diagnostics name the damaged object and the mismatch category only. They
+// must never echo deparsed SQL, defaults or other catalog contents, because
+// those reach the operator and startup logs.
+func TestDiagnosticsDoNotLeakCatalogContents(t *testing.T) {
+	const secret = "s3cr3t-DEFAULT-canary-7f3a"
+	cases := []struct {
+		name string
+		sql  []string
+		want string
+	}{
+		{"column default", []string{`ALTER TABLE magnetico_web.users ALTER COLUMN role SET DEFAULT '` + secret + `'`},
+			"column magnetico_web.users.role differs"},
+		{"check constraint", []string{`ALTER TABLE magnetico_web.users DROP CONSTRAINT users_role_check`,
+			`ALTER TABLE magnetico_web.users ADD CONSTRAINT users_role_check CHECK (role IN ('user','admin','` + secret + `'))`},
+			"constraint magnetico_web.users.users_role_check differs"},
+		{"index predicate", []string{`DROP INDEX magnetico_web.users_verified_email_key`,
+			`CREATE UNIQUE INDEX users_verified_email_key ON magnetico_web.users (lower(email)) WHERE email <> '` + secret + `'`},
+			"index magnetico_web.users.users_verified_email_key differs"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dsn := webDB(t)
+			execSQL(t, dsn, c.sql...)
+			_, initErr := Init(tctx(t), dsn)
+			verifyErr := Verify(tctx(t), openPool(t, dsn), Runtime)
+			for what, err := range map[string]error{"Init": initErr, "Verify": verifyErr} {
+				if !isUnsupported(err) {
+					t.Fatalf("%s err = %v, want ErrWebSchemaUnsupported", what, err)
+				}
+				if !strings.Contains(err.Error(), c.want) {
+					t.Fatalf("%s error does not contain %q: %v", what, c.want, err)
+				}
+				var se *StateError
+				if !errors.As(err, &se) {
+					t.Fatalf("%s error is not a StateError: %v", what, err)
+				}
+				if strings.Contains(err.Error(), secret) || strings.Contains(strings.Join(se.Details, "\n"), secret) {
+					t.Fatalf("%s diagnostic leaks catalog contents: %v", what, err)
+				}
+			}
+		})
+	}
+}

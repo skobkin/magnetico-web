@@ -503,3 +503,42 @@ func TestWebBinaryStartsWithProductionWebSchema(t *testing.T) {
 		t.Fatal("something listens although startup verification failed")
 	}
 }
+
+// Structural diagnostics reach the operator and startup logs, so they must
+// name the damaged object only and never echo catalog contents such as a
+// column default.
+func TestSchemaDiagnosticsDoNotLeakCatalogContentsBinary(t *testing.T) {
+	bin := buildBinary(t)
+	dsn := webTarget(t)
+	const secret = "s3cr3t-DEFAULT-canary-7f3a"
+	if out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init"); code != 0 {
+		t.Fatalf("web-schema-init: exit %d: %s", code, out)
+	}
+	conn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(context.Background(),
+		`ALTER TABLE magnetico_web.users ALTER COLUMN role SET DEFAULT '`+secret+`'`); err != nil {
+		t.Fatal(err)
+	}
+
+	out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init")
+	if code != 1 || !strings.Contains(out, "column magnetico_web.users.role differs") {
+		t.Fatalf("init: exit %d: %s", code, out)
+	}
+	if strings.Contains(out, secret) {
+		t.Fatalf("init output leaks catalog contents: %s", out)
+	}
+
+	addr := freeLoopbackAddr(t)
+	env := webEnv("MAGNETICO_WEB_DATABASE="+dsn, "MAGNETICO_WEB_LISTEN="+addr, "MAGNETICO_WEB_PUBLIC_URL=http://"+addr)
+	out, code = runWebBinary(t, bin, env)
+	if code != 1 || !strings.Contains(out, "column magnetico_web.users.role differs") {
+		t.Fatalf("web: exit %d: %s", code, out)
+	}
+	if strings.Contains(out, secret) {
+		t.Fatalf("startup output leaks catalog contents: %s", out)
+	}
+}
