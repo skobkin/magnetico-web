@@ -17,7 +17,7 @@ func createInvitesTx(ctx context.Context, tx pgx.Tx, ownerID int64, n int, expir
 			return nil, err
 		}
 		if expiresIn != nil {
-			_, err = tx.Exec(ctx, `INSERT INTO magnetico_web.invites (owner_id, code, expires_at) VALUES ($1, $2, now() + make_interval(secs => $3))`,
+			_, err = tx.Exec(ctx, `INSERT INTO magnetico_web.invites (owner_id, code, expires_at) VALUES ($1, $2, statement_timestamp() + make_interval(secs => $3))`,
 				ownerID, code, expiresIn.Seconds())
 		} else {
 			_, err = tx.Exec(ctx, `INSERT INTO magnetico_web.invites (owner_id, code) VALUES ($1, $2)`, ownerID, code)
@@ -174,6 +174,17 @@ func (s *Store) RegisterWithInvite(ctx context.Context, p RegisterParams) (int64
 		if !usable || !ownerActive {
 			return ErrInvitationUnavailable
 		}
+		// The first query's now() is the transaction start; the owner lock may
+		// have been waited for since. Re-check expiry on the current database
+		// clock now that every lock is held.
+		var unexpired bool
+		if err := tx.QueryRow(ctx, `SELECT expires_at IS NULL OR expires_at > statement_timestamp()
+            FROM magnetico_web.invites WHERE id = $1`, inviteID).Scan(&unexpired); err != nil {
+			return err
+		}
+		if !unexpired {
+			return ErrInvitationUnavailable
+		}
 		err = tx.QueryRow(ctx, `INSERT INTO magnetico_web.users (username, email, password_hash, password_changed_at)
             VALUES ($1, $2, $3, now()) RETURNING id`, p.Username, email, p.Hash).Scan(&newID)
 		if err != nil {
@@ -186,7 +197,8 @@ func (s *Store) RegisterWithInvite(ctx context.Context, p RegisterParams) (int64
 			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE magnetico_web.invites SET used_by = $2, used_at = now()
-            WHERE id = $1 AND used_by IS NULL AND revoked_at IS NULL`, inviteID, newID)
+            WHERE id = $1 AND used_by IS NULL AND revoked_at IS NULL
+              AND (expires_at IS NULL OR expires_at > statement_timestamp())`, inviteID, newID)
 		if err != nil {
 			return err
 		}

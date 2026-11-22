@@ -1,7 +1,7 @@
 # Task 07C / W2 — web schema, user store and operator CLI: report
 
-Status: **in progress** (S1 approved with one correction; steps 5–6 pending, S2 next). This report is
-extended at each stage and completed in step 9.
+Status: **S3 final corrections applied; awaiting final W2 review.** S1 and S2 were approved with corrections (recorded below);
+steps 7–9 are delivered. W3 and later milestones are not started.
 
 ## S1 review correction (commit following `6e16f5e2`)
 
@@ -137,3 +137,31 @@ no DHT/BitTorrent traffic was produced. Nothing is pushed.
 5. W3 must call `password.Default.Prepare` before accepting logins and map `ErrBusy` to 503 with `Retry-After`.
 6. W8 must set migrated `invites.created_at` from the owner's `users.created_at` (documented approximation) and use
    `OVERRIDING SYSTEM VALUE` plus `setval` for legacy ids (proven in `webschema` tests).
+
+## S3 review corrections
+
+1. **Expiry after lock waits.** PostgreSQL `now()` is fixed at transaction start, so a transaction that waited for the user row lock could
+   accept a credential that expired meanwhile. Fixed without changing lock order or atomicity:
+   - `CompletePasswordLink`: the consuming `DELETE` compares `expires_at > statement_timestamp()`; that statement runs after the user
+     row lock is held.
+   - `RegisterWithInvite`: after the owner's `FOR SHARE` lock, a new statement re-checks the invitation's expiry against
+     `statement_timestamp()` before the user is created; the consuming `UPDATE` repeats the guard. A refusal rolls back, so the
+     invitation stays unconsumed and no user or quota invitations remain.
+   - Related paths: lifetimes of newly issued links and invitations are now computed from `statement_timestamp()` too (they are written
+     after a possible lock wait). Authentication and invitation listing are single statements without lock waits, so `now()` is correct
+     there; recorded timestamps (`revoked_at`, `used_at`, `password_changed_at`) intentionally stay transaction time.
+   - Tests (`expiry_test.go`, deterministic): a separate transaction holds the user row lock, the operation starts while its link or
+     invitation is still valid and is observed blocked in `pg_stat_activity`, the test waits on the database clock until expiry, releases
+     the lock, and asserts `ErrLinkInvalid` / `ErrInvitationUnavailable` with the link or invitation unconsumed and no other state
+     changed (credential rows byte-identical, tokens not revoked, no user created). Both tests failed on the previous code and pass now.
+2. **Withdrawn by the reviewer:** the proposed credential-revocation warning for setup links. The CLI keeps the warning for reset links
+   only; passwordless accounts normally have no issued credentials (the store technically permits tokens for them, an accepted edge case).
+
+Run: `go build ./...`, `go vet ./...`, `go test -race ./internal/web/accounts`, `go test -count=5 -race -run
+'Concurrent|Versus|ExpiringDuringLockWait' ./internal/web/accounts`, `go test -race ./internal/web/admincli`,
+`go test -race -run TestWebAdminBinary .`: all passed. Not re-run after this change: the rest of the suites listed under "Final
+validation", which this change does not touch.
+
+**Remaining limitations (honest list).** Those under "Residual risks" above still stand. In addition: the two lock-wait tests depend on
+`pg_stat_activity` showing the wait and on a ~2 s expiry window; they fail loudly ("test too slow") rather than pass vacuously if the
+machine stalls before the operation blocks.

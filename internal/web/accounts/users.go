@@ -89,7 +89,7 @@ func issueLinkTx(ctx context.Context, tx pgx.Tx, userID int64, purpose string, t
 	}
 	var expires time.Time
 	err = tx.QueryRow(ctx, `INSERT INTO magnetico_web.one_time_tokens (token_hash, user_id, purpose, expires_at)
-        VALUES ($1, $2, $3, now() + make_interval(secs => $4)) RETURNING expires_at`,
+        VALUES ($1, $2, $3, statement_timestamp() + make_interval(secs => $4)) RETURNING expires_at`,
 		hashToken(token), userID, purpose, ttl.Seconds()).Scan(&expires)
 	if err != nil {
 		if c, ok := uniqueViolation(err); ok && c == "one_time_tokens_one_per_kind" {
@@ -273,8 +273,11 @@ func (s *Store) CompletePasswordLink(ctx context.Context, token, purpose, newHas
 		}
 		// Consume by deleting. Under the user lock this re-checks the committed
 		// state, so a link replaced or completed meanwhile finds no row.
+		// Expiry uses statement_timestamp(), not now(): now() is fixed at
+		// transaction start and would accept a link that expired while this
+		// transaction waited for the user row lock.
 		tag, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens
-            WHERE token_hash = $1 AND user_id = $2 AND purpose = $3 AND expires_at > now()`, th, userID, purpose)
+            WHERE token_hash = $1 AND user_id = $2 AND purpose = $3 AND expires_at > statement_timestamp()`, th, userID, purpose)
 		if err != nil {
 			return err
 		}

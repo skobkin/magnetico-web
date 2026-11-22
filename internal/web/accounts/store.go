@@ -12,7 +12,10 @@
 //     itself, so READ COMMITTED re-evaluates it after a lock wait.
 //   - disable suspends and never revokes; revocation (revoked_at) is permanent
 //     and only ever set from NULL.
-//   - Every expiry comparison uses the database clock (now()).
+//   - Every expiry comparison uses the database clock. Inside a transaction that
+//     may wait for a lock it is statement_timestamp(), never now(): now() is
+//     fixed at transaction start and would accept a credential that expired
+//     while the transaction waited.
 //
 // Password hashing is done by the caller, outside any transaction.
 package accounts
