@@ -27,6 +27,25 @@ func nMetadataPieces(size uint) int {
 	return int((size + metadataPieceSize - 1) / metadataPieceSize)
 }
 
+// Bounds for peer-controlled input read before any metadata is verified.
+const (
+	// MaxPeerMessageSize bounds one BitTorrent wire message. The largest
+	// legitimate message other than a metadata piece is a bitfield (1 MiB covers
+	// 8M pieces); metadata itself is carried in 16 KiB pieces.
+	MaxPeerMessageSize = 1 << 20
+	// maxExHandshakeSize bounds the payload of the extension handshake (BEP 10),
+	// normally well under 1 KiB.
+	maxExHandshakeSize = 16 << 10
+	// maxUmHeaderSize bounds the bencoded header that precedes the piece data in
+	// a ut_metadata message (BEP 9: msg_type, piece, total_size).
+	maxUmHeaderSize = 1 << 10
+	// MaxExtensionNesting bounds list/dictionary nesting in the extension
+	// handshake and ut_metadata headers (legitimate depth is 2). The decoder
+	// recurses per level and a Go stack overflow is fatal, so it is checked
+	// before decoding.
+	MaxExtensionNesting = 16
+)
+
 type rootDict struct {
 	M            mDict `bencode:"m"`
 	MetadataSize int   `bencode:"metadata_size"`
@@ -120,6 +139,13 @@ func (l *Leech) doExHandshake() error {
 	// Extension Handshake has the Extension Message ID = 0x00
 	if rExMessage[1] != 0 {
 		return errors.New("first extension message is not an extension handshake")
+	}
+
+	if len(rExMessage)-2 > maxExHandshakeSize {
+		return errors.New("extension handshake too large")
+	}
+	if err = bencode.CheckDepth(rExMessage[2:], MaxExtensionNesting); err != nil {
+		return errors.New("extension handshake " + err.Error())
 	}
 
 	rRootDict := new(rootDict)
@@ -237,8 +263,8 @@ func (l *Leech) readMessage() ([]byte, error) {
 	// message, and hence causing us to run out of memory.
 	// This is a crude check that does not let it happen (i.e. boundary can probably be
 	// tightened a lot more.)
-	if rLength > MAX_METADATA_SIZE {
-		return nil, errors.New("message is longer than max allowed metadata size")
+	if rLength > MaxPeerMessageSize {
+		return nil, errors.New("message is longer than the maximum peer message size")
 	}
 
 	rMessage, err := l.readExactly(rLength)
@@ -288,6 +314,26 @@ func (l *Leech) readUmMessage() ([]byte, error) {
 	}
 }
 
+// decodeUmHeader decodes the bencoded header of a ut_metadata message
+// (payload after the two extension bytes) and returns the raw piece data that
+// follows it. Everything here is peer-controlled: size and nesting are bounded
+// before the recursive decoder runs. CheckDepth scans only the first value,
+// i.e. the header; the piece data is never interpreted as bencode.
+func decodeUmHeader(payload []byte) (*extDict, []byte, error) {
+	if len(payload) > metadataPieceSize+maxUmHeaderSize {
+		return nil, nil, errors.New("ut_metadata message too large")
+	}
+	if err := bencode.CheckDepth(payload, MaxExtensionNesting); err != nil {
+		return nil, nil, errors.New("ut_metadata header " + err.Error())
+	}
+	buf := bytes.NewBuffer(payload)
+	d := new(extDict)
+	if err := bencode.NewDecoder(buf).Decode(d); err != nil {
+		return nil, nil, errors.New("could not decode ext msg in the loop " + err.Error())
+	}
+	return d, buf.Bytes(), nil
+}
+
 func (l *Leech) Do(deadline time.Time) {
 	l.DoContext(context.Background(), deadline)
 }
@@ -333,12 +379,9 @@ func (l *Leech) DoContext(ctx context.Context, deadline time.Time) {
 			return
 		}
 
-		// Run TestDecoder() function in leech_test.go in case you have any doubts.
-		rMessageBuf := bytes.NewBuffer(rUmMessage[2:])
-		rExtDict := new(extDict)
-		err = bencode.NewDecoder(rMessageBuf).Decode(rExtDict)
+		rExtDict, pieceData, err := decodeUmHeader(rUmMessage[2:])
 		if err != nil {
-			l.OnError(errors.New("could not decode ext msg in the loop " + err.Error()))
+			l.OnError(err)
 			return
 		}
 
@@ -348,7 +391,7 @@ func (l *Leech) DoContext(ctx context.Context, deadline time.Time) {
 		}
 
 		if rExtDict.MsgType == 1 { // data
-			if err := l.applyMetadataPiece(rExtDict.Piece, rMessageBuf.Bytes()); err != nil {
+			if err := l.applyMetadataPiece(rExtDict.Piece, pieceData); err != nil {
 				l.OnError(fmt.Errorf("invalid metadata piece: %w", err))
 				return
 			}

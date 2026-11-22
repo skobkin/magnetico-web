@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -159,5 +160,41 @@ func TestTransportFull(t *testing.T) {
 				t.Errorf("Transport.Full() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A datagram with absurd list nesting is dropped before the recursive decoder
+// sees it, and a valid message sent afterwards is still delivered.
+func TestTransportDropsDeeplyNestedDatagram(t *testing.T) {
+	got := make(chan *Message, 4)
+	tr := NewTransport("127.0.0.1:0", func(m *Message, _ *net.UDPAddr) { got <- m }, 10)
+	tr.Start()
+	defer tr.Terminate()
+
+	c, err := net.DialUDP("udp", nil, tr.conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	deep := "d1:t2:aa1:y1:q1:q4:ping1:a" + strings.Repeat("l", 30000) + strings.Repeat("e", 30000) + "e"
+	if _, err := c.Write([]byte(deep)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write([]byte("d1:t2:bb1:y1:q1:q4:ping1:ad2:id20:aaaaaaaaaaaaaaaaaaaaee")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case m := <-got:
+		if string(m.T) != "bb" {
+			t.Fatalf("delivered %q, want the valid message", m.T)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("valid message not delivered")
+	}
+	select {
+	case m := <-got:
+		t.Fatalf("unexpected extra message %q (nested datagram not dropped?)", m.T)
+	case <-time.After(200 * time.Millisecond):
 	}
 }

@@ -10,6 +10,9 @@ import (
 	"github.com/skobkin/magnetico-web/stats"
 )
 
+// MaxMessageNesting bounds list/dictionary nesting of an incoming KRPC datagram.
+const MaxMessageNesting = 16
+
 var (
 	//Throttle rate that transport will have at Start time. Set <= 0 for unlimited requests
 	DefaultThrottleRate = -1
@@ -102,6 +105,12 @@ func (t *Transport) readMessages() {
 			/* Datagram sockets in various domains  (e.g., the UNIX and Internet domains) permit
 			 * zero-length datagrams. When such a datagram is received, the return value (n) is 0.
 			 */
+			continue
+		}
+
+		// KRPC messages nest at most ~4 levels; reject anything deeper before
+		// the recursive decoder sees it (a Go stack overflow is fatal).
+		if bencode.CheckDepth(t.buffer[:n], MaxMessageNesting) != nil {
 			continue
 		}
 
