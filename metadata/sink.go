@@ -132,8 +132,9 @@ func (ms *Sink) TrySink(res dht.Result) SinkStatus {
 	if ms.closed {
 		return SinkClosed
 	}
-	if ms.incomingInfoHashes.has(infoHash) {
-		ms.incomingInfoHashes.push(infoHash, peerAddrs)
+	// push only adds to an existing registration and never creates one, so a
+	// leech finishing concurrently cannot leave an ownerless entry behind.
+	if ms.incomingInfoHashes.push(infoHash, peerAddrs) {
 		return SinkJoined
 	}
 
@@ -152,20 +153,23 @@ func (ms *Sink) TrySink(res dht.Result) SinkStatus {
 	default:
 		return SinkBusy
 	}
-	ms.incomingInfoHashes.register(infoHash)
+	// TrySink is serialised by ms.mu and only owners remove entries, so the
+	// hash cannot have been registered since push reported it absent.
+	token, _ := ms.incomingInfoHashes.register(infoHash)
 	ms.incomingInfoHashes.push(infoHash, peerAddrs[first+1:])
 	ms.wg.Add(1)
-	go ms.run(infoHash, peerAddrs[first])
+	go ms.run(infoHash, token, peerAddrs[first])
 	return SinkStarted
 }
 
-// run owns one hash: it tries the first peer, then the remaining candidates
-// one at a time, until a leech succeeds, the candidates run out, or the sink
-// is terminated.
-func (ms *Sink) run(infoHash [20]byte, peer net.TCPAddr) {
+// run owns one hash and its registration token: it tries the first peer, then
+// the remaining candidates one at a time, until a leech succeeds, the
+// candidates run out, or the sink is terminated. Its deferred release is the
+// only removal of the registration.
+func (ms *Sink) run(infoHash [20]byte, token uint64, peer net.TCPAddr) {
 	defer ms.wg.Done()
 	defer func() { <-ms.sem }()
-	defer ms.incomingInfoHashes.flush(infoHash)
+	defer ms.incomingInfoHashes.release(infoHash, token)
 
 	next := &peer
 	for next != nil && ms.ctx.Err() == nil {
@@ -178,7 +182,7 @@ func (ms *Sink) run(infoHash [20]byte, peer net.TCPAddr) {
 			ms.deliver(*result)
 			return
 		}
-		next = ms.incomingInfoHashes.pop(infoHash)
+		next = ms.incomingInfoHashes.pop(infoHash, token)
 	}
 }
 
