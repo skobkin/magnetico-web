@@ -1,7 +1,7 @@
 # Task 06 — Implementation plan (Task 06A deliverable)
 
-**Status:** M0–M5 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M6–M7 in
-progress (authorized after review of `9f62f51f`).
+**Status:** M0–M7 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); results and the
+release checklist are in [`06-crawler-ingest-results.md`](06-crawler-ingest-results.md). Pending owner review.
 
 M6 notes: packages `internal/crawler` (client, precheck, enqueue writer, sender, pipeline) and the rewritten
 `metadata.Sink` (`TrySink`, active-leech semaphore, first-peer policy, context-aware leeches via
