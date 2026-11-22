@@ -1,51 +1,84 @@
 # Magnetico 0.8.0 — Web Service Specification (web-v1)
 
-> **DRAFT — FOR OWNER REVIEW. NOT APPROVED. NOT IMPLEMENTED.**
-> Nothing in this document is a contract until the owner approves it. Items marked **[OPEN]** are undecided owner questions; items marked **[PROPOSAL]** are recommendations, not decisions. Rationale and the legacy inventory are in [`docs/wip/07A-web-design-plan.md`](../wip/07A-web-design-plan.md).
+> **DRAFT — FOR OWNER REVIEW. NOT APPROVED AS A WHOLE. NOT IMPLEMENTED.**
+> Revision 2: incorporates the owner decisions given in the review of commit `17b4c2f0`. Tags used below:
+> **[APPROVED]** — decided by the owner; **[PROPOSAL]** — a recommendation, not a decision; **[OPEN]** — an undecided owner question.
+> Rationale and the legacy inventory are in [`docs/wip/07A-web-design-plan.md`](../wip/07A-web-design-plan.md). This document remains DRAFT until the owner's final review.
 
-Builds on [`postgresql-persistence-v2.md`](postgresql-persistence-v2.md) and [`wire-format-v1.md`](wire-format-v1.md). If this document and either of those disagree, they win and this document must be corrected. This document does not change the database schema, the wire format, or crawler/ingest behaviour.
+Builds on [`postgresql-persistence-v2.md`](postgresql-persistence-v2.md) and [`wire-format-v1.md`](wire-format-v1.md). If this document and either of those disagree, they win and this document must be corrected. This document does not change the torrent/file schema, the wire format, the codec, or crawler/ingest behaviour.
 
 Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 
 ## 1. Scope and non-goals
 
-1.1 `magnetico web` is a command of the single `magnetico` binary and an independently deployable service. It reads the 0.8.0 PostgreSQL storage and keeps its own account state in PostgreSQL.
+1.1 `magnetico web` is a command of the single `magnetico` binary and an independently deployable service. It reads the 0.8.0 PostgreSQL torrent storage and keeps its own state (accounts, sessions, invitations, API tokens, tracker list, web settings) in the PostgreSQL schema **`magnetico_web`** **[APPROVED]**.
 
-1.2 The web service MUST NOT depend on the crawler, the crawler's SQLite queue, the ingest service, or the legacy PHP runtime. The web command's dependency graph MUST NOT contain `internal/crawler`, `internal/crawlqueue`, `internal/ingest` or `modernc.org/sqlite` (enforced by a test).
+1.2 The web service MUST NOT depend on the crawler, the crawler's SQLite queue, the ingest service, or the legacy PHP runtime. Its dependency graph MUST NOT contain `internal/crawler`, `internal/crawlqueue`, `internal/ingest` or `modernc.org/sqlite` (enforced by a test).
 
 1.3 The web service never writes to `magneticod.*` tables.
 
-1.4 Non-goals: torrent upload or editing, public browsing, search by file path (removed in 0.8.0, `postgresql-persistence-v2.md` §1), administration UI, OAuth, multi-tenant features, user migration (a separate task), CI/OCI packaging.
+1.4 Non-goals of this version: torrent upload or editing; search by file path (removed in 0.8.0, `postgresql-persistence-v2.md` §1); **an administration UI** (a future release will offer statistics, user management, invitations and tracker management; this version provides CLI commands only); OAuth; general RBAC; multi-tenant features; public read-only access and open registration (**not designed here**, §3.6); user migration (a separate task); CI/OCI packaging.
 
 ## 2. Process model
 
-2.1 One HTTP listener, plain HTTP, TLS terminated by a reverse proxy (Traefik or equivalent). The default listen address MUST be loopback (`127.0.0.1:<port>`).
+2.1 One HTTP listener, plain HTTP, TLS terminated by a reverse proxy (Traefik or equivalent). The default listen address MUST be loopback.
 
-2.2 Configuration: command-line flags, then `MAGNETICO_WEB_*` environment variables, then defaults, in the manner of `opflags/ingest.go`. Unknown `MAGNETICO_WEB_*` variables MUST be rejected. Secrets (database URL containing a password, SMTP password) MUST be environment-only and MUST NOT be printed or logged. **[PROPOSAL]** no configuration file in the first version.
+2.2 Configuration: command-line flags, then `MAGNETICO_WEB_*` environment variables, then defaults, in the manner of `opflags/ingest.go`. Unknown `MAGNETICO_WEB_*` variables MUST be rejected. Values are never echoed in errors. Secrets (a database URL containing a password, the SMTP password) are environment-only and MUST NOT be printed or logged. **[PROPOSAL]** no configuration file in the first version.
 
-2.3 Required settings include: database URL; `--public-url` (the externally visible base URL); `--trusted-proxies` (CIDR list, default empty); listen address; optional SMTP settings; the default invite quota for new users (default `0`).
+2.3 Configuration reference **[PROPOSAL]** except where tagged **[APPROVED]**. Durations use Go syntax (`ParseDuration`: `s`, `m`, `h`; **there is no `d` unit**, so 90 days is `2160h`). Invalid values abort startup with an actionable message.
 
-2.4 Startup MUST fail fast, with an actionable message and without modifying the database, if: PostgreSQL is unreachable; `pg_trgm` is missing; the torrent schema or its `schema_version` is not the supported one; the users schema is missing or has an unsupported version; the database role lacks the needed privileges. It MUST NOT run any automatic migration (`postgresql-persistence-v2.md` §2, §6).
+| Variable | Default | Validation |
+|---|---|---|
+| `MAGNETICO_WEB_DATABASE` | as ingest | PostgreSQL URL |
+| `MAGNETICO_WEB_LISTEN` | `127.0.0.1:8081` | host:port |
+| `MAGNETICO_WEB_PUBLIC_URL` | **required** | absolute `https://` URL, or loopback `http://` (dev mode, §4.4.3) |
+| `MAGNETICO_WEB_TRUSTED_PROXIES` | empty | CIDR list |
+| `MAGNETICO_WEB_SESSION_IDLE_TIMEOUT` | `12h` **[APPROVED]** | ≥ `5m`; ≤ absolute lifetime |
+| `MAGNETICO_WEB_SESSION_ABSOLUTE_LIFETIME` | `168h` (7 d) **[PROPOSAL]** | ≥ idle timeout; ≤ remember lifetime |
+| `MAGNETICO_WEB_SESSION_REMEMBER_LIFETIME` | `2160h` (90 d) **[APPROVED]** | ≥ absolute lifetime; ≤ `8760h` |
+| `MAGNETICO_WEB_SEARCH_TIMEOUT` | `60s` **[APPROVED]** | `1s` ≤ value ≤ `15m` |
+| `MAGNETICO_WEB_SEARCH_CONCURRENCY` | `4` | 1 ≤ value ≤ pool size − 2 |
+| `MAGNETICO_WEB_REQUEST_TIMEOUT` | `30s` | `5s` ≤ value; deadline for non-search requests |
+| `MAGNETICO_WEB_POOL_MAX_CONNS` | `10` | ≥ 4 |
+| `MAGNETICO_WEB_INVITE_QUOTA` | `0` | ≥ 0; invitations given to a new user |
+| `MAGNETICO_WEB_TRACKER_CACHE_TTL` | `60s` | `5s` ≤ value ≤ `1h` |
+| `MAGNETICO_WEB_SMTP_HOST`, `_PORT`, `_SECURITY`, `_USERNAME`, `_FROM` | unset (email features disabled) | `_SECURITY` is `starttls` or `tls` only; there is **no** plaintext value |
+| `MAGNETICO_WEB_SMTP_PASSWORD` | unset | environment only |
+| `MAGNETICO_WEB_LOG_LEVEL`, `_LOG_FORMAT` | `info`, `text` | `text` or `json` |
+
+2.4 Startup MUST fail fast, with an actionable message and without modifying the database, if: PostgreSQL is unreachable; `pg_trgm` is missing; the torrent schema or its `schema_version` is not the supported one; the `magnetico_web` schema is missing or has an unsupported version; the tracker list cannot be loaded; the database role lacks the needed privileges; SMTP is partially configured or its `_SECURITY` is not `starttls`/`tls`. It MUST NOT run any automatic migration (`postgresql-persistence-v2.md` §2, §6).
 
 2.5 Graceful shutdown on `SIGINT`/`SIGTERM`: stop accepting connections, let in-flight requests finish within a bounded grace period, then close pools. A stuck handler MUST NOT prevent exit beyond the bound; the exit status distinguishes an incomplete shutdown (as `ingest` does).
 
-2.6 Health endpoints: `GET /healthz` (process alive) and `GET /readyz` (database reachable and schema verified). Both are unauthenticated and MUST NOT disclose versions, counts or configuration.
+2.6 `GET /healthz` (process alive) and `GET /readyz` (database reachable and schema verified). Both unauthenticated; MUST NOT disclose versions, counts or configuration.
 
-2.7 Database role **[PROPOSAL]**: `SELECT` on `magneticod.*`; `SELECT/INSERT/UPDATE/DELETE` on the users schema; no DDL.
+2.7 Database role **[PROPOSAL]**: `SELECT` on `magneticod.*`; `SELECT/INSERT/UPDATE/DELETE` on `magnetico_web.*`; no DDL.
 
-2.8 Pool: explicit maximum connections **[PROPOSAL: 10]**; every request has a context deadline; search has a statement timeout.
+2.8 Pools and deadlines. The pool has an explicit maximum. Every request has a context deadline. A search can run up to the search timeout (default 60 s), so **search concurrency is bounded separately** (a weighted semaphore of `SEARCH_CONCURRENCY` slots, bounded queue wait, then a `503` "busy") so that slow searches cannot starve authentication or other pages of connections.
+
+2.9 **HTTP deadlines MUST NOT defeat the configured search timeout.** Go's `http.Server` is configured with `ReadHeaderTimeout`, `ReadTimeout` and `IdleTimeout`, but **no global `WriteTimeout` and no `http.TimeoutHandler`** shorter than the search route needs. Write deadlines are set per request with `http.ResponseController`: for search routes (UI and API) `SEARCH_TIMEOUT` plus a rendering margin (**[PROPOSAL]** 10 s); for all other routes `REQUEST_TIMEOUT`. The effective values are logged at startup. Reverse-proxy and CDN deadlines (for example the proxy's response and idle timeouts) are outside the application's control: operators MUST keep them above `SEARCH_TIMEOUT` plus margin, and the deployment notes MUST say so. Whether a given Traefik version's defaults satisfy this is **not verified** here.
 
 ## 3. Request pipeline
 
-3.1 Order: request ID → panic recovery → access log (redacting) → security headers → client-IP resolution → cross-origin protection → authentication → rate limiting → handler.
+3.1 Order: request ID → panic recovery → access log (redacting) → security headers → indexing policy (§3.6) → client-IP resolution → cross-origin protection → authentication → rate limiting → handler.
 
 3.2 **Client IP and forwarded headers.** `Forwarded` and `X-Forwarded-*` headers MUST be honoured **only if the direct TCP peer address is within `--trusted-proxies`**. Otherwise they are ignored and the peer address is the client address. When the peer is trusted, the client address is the right-most address in the `X-Forwarded-For` chain that is not itself trusted. A direct client MUST NOT be able to change the address used for rate limiting.
 
-3.3 **Absolute URLs** (RSS, setup/reset/invite links, magnet short links shown to users) MUST be built from `--public-url`, never from the `Host` header.
+3.3 **Absolute URLs** (RSS, setup/reset/verification/invite links, magnet short links shown to users) MUST be built from `--public-url`, never from the `Host` header.
 
 3.4 **Response headers** for HTML: a CSP with `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`; `X-Content-Type-Options: nosniff`; `Referrer-Policy` (`same-origin` by default, `no-referrer` where specified); `Cache-Control: private, no-store` for authenticated pages; `Permissions-Policy` denying unused features. The documentation pages (§9.4) MAY use a narrower relaxation limited to those routes.
 
 3.5 **Panics** produce a generic 500 with a request ID; details only in the log.
+
+3.6 **Indexing policy [APPROVED].**
+- `GET /robots.txt` is public and returns, by default, exactly:
+  ```text
+  User-agent: *
+  Disallow: /
+  ```
+- Every HTTP response (HTML, API, documentation, static assets, redirects, errors, `/robots.txt` itself) carries `X-Robots-Tag: noindex, nofollow` as defence in depth. HTML pages MAY also carry a matching `<meta name="robots">`.
+- `robots.txt` is **not** an access-control mechanism. Private content is protected by authentication only; public routes (`/magnet/…`, documentation, RSS 401s) are discouraged from indexing by the above but are not secret.
+- This release is private by default. The policy lives in one isolated middleware and one handler, with no deployment assumption elsewhere that every instance is private. Public read-only access and open registration are **not designed or implemented now**; a later release may add them and then change this policy by configuration.
 
 ## 4. Authentication and authorization
 
@@ -53,21 +86,32 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 
 | Route class | Access |
 |---|---|
-| `/login`, `/register/{code}`, `/password/forgot`, `/password/reset/{token}`, `/password/setup/{token}` | public |
+| `/login`, `/register/{code}`, `/password/forgot`, `/password/reset/{token}`, `/password/setup/{token}`, `/email/verify/{token}` | public |
 | `/magnet/{infohash}` | public (§8.3) |
 | `/healthz`, `/readyz`, `/robots.txt`, static assets | public |
-| `/api/v1/feed/rss/last` | API token (§6.3); public documentation pages **[OPEN]** (§9.4) |
-| every other route | authenticated session (UI) or API token (`/api/v2/*`) |
+| `/api`, `/api/v1`, `/api/v2` documentation pages and the embedded OpenAPI files | **public [APPROVED]** |
+| `/api/v1/feed/rss/last` | API token (§8.2) |
+| `/api/v2/*` | bearer API token |
+| every other route | authenticated session |
 
-Unauthenticated requests to UI pages redirect to `/login`; to API routes they receive `401`.
+Unauthenticated requests to UI pages redirect to `/login`; to API routes they receive `401`. Documentation pages contain no live tokens, credentials or user-specific data (§9.4).
 
-### 4.2 Accounts
+### 4.2 Accounts and roles
 
-4.2.1 States: `pending_setup` (no password set), `active`, `disabled`. A `pending_setup` or `disabled` account MUST NOT authenticate by any means.
+4.2.1 **Account state is not an enum of lifecycle phases.** Three independent attributes **[APPROVED]**:
+- `active` (boolean): administratively enabled. `active = false` MUST NOT authenticate by any means (session, password, token).
+- `password_hash` (nullable): `NULL` until an initial password exists. `password_hash IS NULL` prevents **password** authentication (no empty or default password, no code path that compares against a missing hash).
+- Email and its verification (§4.9), relevant only when an address is provided.
 
-4.2.2 Authentication MUST check the account's `active` state on **every** request that resolves a session or token, in the same lookup that resolves the credential. Removing session rows is not sufficient on its own.
+There is no `pending_setup` state.
 
-4.2.3 Email is optional. **[OPEN]** username case sensitivity and collision policy; whether email addresses are verified; whether `roles` are kept (there is no administrative UI in this version).
+4.2.2 Authentication MUST check `active` on **every** request that resolves a session or token, in the same lookup that resolves the credential. Removing session rows alone is not sufficient.
+
+4.2.3 **Roles [APPROVED].** Exactly two: `user` and `admin`. This is a column with a check constraint, not an RBAC system. Registration through an invitation always creates a `user`. The operator assigns roles with the CLI (§4.10); there is no web UI for it. In this version `admin` grants no web capability (the Admin UI is a future release); it exists so that the operator can designate the first administrators. The role is read in the same lookup as `active`. The historical PHP `roles` data is **not** used to infer administrators: migrated accounts are ordinary `user`s.
+
+4.2.4 Email is **optional for every account** **[APPROVED]**.
+
+4.2.5 **[OPEN]** Username case sensitivity and collision policy (the migrator reports collisions rather than choosing).
 
 ### 4.3 Passwords
 
@@ -75,39 +119,44 @@ Unauthenticated requests to UI pages redirect to `/login`; to API routes they re
 
 4.3.2 New passwords: 8 to 1,024 bytes. Login accepts up to 4,096 bytes (the legacy limit). Longer input is rejected before hashing.
 
-4.3.3 Legacy hashes are verified directly (they cannot be converted offline). A legacy format is **supported only if** it has independently verified test vectors generated by PHP (§12.2). Recognising a format prefix is not support. A stored hash in an unsupported format makes the account "needs reset": it cannot log in and the administrator is told via `web user list` and on reset.
+4.3.3 Legacy hashes are verified directly (they cannot be converted offline). A legacy format is **supported only if** it has independently verified PHP-generated test vectors (§12.2). Recognising a prefix is not support. A stored hash in an unsupported format makes the account "needs reset": it cannot log in and `web user list` flags it.
 
 4.3.4 On successful login with a legacy or outdated hash, the hash MUST be replaced with a current-parameter argon2id hash in the same transaction that records the login.
 
-4.3.5 **Bounded concurrency.** All hash and verify operations pass through one process-wide limiter. **[PROPOSAL]** default `max(1, min(GOMAXPROCS, 2))` concurrent operations, a bounded queue wait (a few seconds); when the wait expires the request fails with a generic 503 and `Retry-After`, and a counter is incremented. The limit bounds memory (argon2 memory × concurrency).
+4.3.5 **Bounded concurrency.** All hash and verify operations pass through one process-wide limiter **[PROPOSAL]** default `max(1, min(GOMAXPROCS, 2))`, a bounded queue wait (a few seconds); on expiry the request fails with a generic 503 and `Retry-After`, and a counter is incremented.
 
-4.3.6 Login for an unknown username MUST perform an equivalent dummy verification (through the same limiter), and return the same generic error as a wrong password or an unavailable account.
+4.3.6 Login for an unknown username, for a `NULL` hash, or for an inactive account MUST perform an equivalent dummy verification (through the same limiter) and return the same generic error as a wrong password.
 
-4.3.7 Dependencies: argon2/bcrypt come from `golang.org/x/crypto`. The repository currently carries an old indirect pin; **a maintained version MUST be selected in a dependency review and approved by the owner before use.** **[OPEN]**
+4.3.7 argon2/bcrypt come from `golang.org/x/crypto`. The repository carries an old indirect pin; **a maintained version MUST be selected in a dependency review and approved by the owner before use.** This is a separate prerequisite (§13.3) and does **not** block W1.
 
 ### 4.4 Sessions
 
-4.4.1 The session token is 32 random bytes from `crypto/rand`; only its SHA-256 is stored server-side (PostgreSQL). A new session is created at login; the session is rotated on password change.
+4.4.1 The session token is 32 random bytes from `crypto/rand`; only its SHA-256 is stored server-side, in PostgreSQL **[APPROVED]**. A session is created at login; rotated on password change.
 
-4.4.2 Production cookie: name `__Host-magnetico_session`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`. This MUST NOT be weakened for local testing.
+4.4.2 Production cookie: `__Host-magnetico_session`, `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`. MUST NOT be weakened for local testing.
 
-4.4.3 **Development mode** exists for loopback only: it is accepted only when `--public-url` is an `http://` URL whose host is a loopback address, it uses a different cookie name without the `__Host-` prefix and without `Secure`, and the service logs a warning at startup. It MUST be rejected for any other public URL.
+4.4.3 **Development mode** exists for loopback only: accepted only when `--public-url` is an `http://` URL whose host is a loopback address; it uses a different cookie name without the `__Host-` prefix and without `Secure`; a warning is logged at startup. It MUST be rejected for any other public URL.
 
-4.4.4 Lifetimes **[OPEN]**. **[PROPOSAL]** idle timeout 12 h; "keep me signed in" 90 days absolute, refreshed no more often than daily; `last_seen` updates throttled.
+4.4.4 **Lifetimes [APPROVED defaults, configurable §2.3].**
+- *Idle timeout* 12 h (`SESSION_IDLE_TIMEOUT`) applies to ordinary sessions: a session unused for longer is invalid.
+- *Remember me* 90 days (`SESSION_REMEMBER_LIFETIME`) is an **absolute** lifetime from creation; it is not extended by activity. (The cookie carries a matching `Expires`; the server-side value is authoritative.)
+- **Every session has a finite absolute expiry.** An ordinary (non-remember) session additionally has `SESSION_ABSOLUTE_LIFETIME` **[PROPOSAL: 168 h]** so that continuous activity cannot keep it alive forever; its cookie is a browser-session cookie.
+- Validation (startup error otherwise): all durations positive; `idle ≥ 5m`; `idle ≤ absolute ≤ remember ≤ 8760h`. There is no "0 means unlimited".
+- `last_seen_at` writes are throttled **[PROPOSAL]** to at most once per `min(5m, idle/10)`. A background purge deletes expired sessions.
 
 4.4.5 Logout is a `POST`, deletes the server-side session, and clears the cookie.
 
 ### 4.5 CSRF
 
-4.5.1 Every state-changing browser action MUST be a `POST` (or other non-safe method) and MUST be protected, including actions that need no existing session: login, registration, password reset request, password reset, password setup, and every account action. No state change on `GET`.
+4.5.1 Every state-changing browser action MUST be a `POST` (or other non-safe method) and MUST be protected, including actions that need no existing session: login, registration, password reset request, password reset, password setup, email verification confirmation, and every account and invitation action. No state change on `GET`; in particular legacy state-changing GET URLs are not carried over (§6.1).
 
 4.5.2 Two layers: the standard library's cross-origin protection (Fetch-metadata/`Origin` based) and a synchronizer token in every form. For forms shown before a session exists, the token is bound to a short-lived pre-session cookie.
 
-4.5.3 API endpoints authenticated only by a bearer token are not subject to cookie CSRF, and MUST NOT accept the session cookie as authentication.
+4.5.3 Bearer-token API endpoints are not subject to cookie CSRF and MUST NOT accept the session cookie as authentication.
 
 ### 4.6 Rate limiting
 
-4.6.1 Throttling (not account lockout) with bounded in-memory state: login per client IP and per normalised username; reset requests per IP and per email; registration per IP; failed token authentications per IP; v1 RSS and v2 per token.
+4.6.1 Throttling (not account lockout) with bounded in-memory state: login per client IP and per normalised username; reset and verification requests per IP and per account/email; registration per IP; failed token authentications per IP; v1 RSS and v2 per token.
 
 4.6.2 Responses: `429` with `Retry-After`; error text generic. State is per process, which assumes a **single** web instance. **[OPEN]** multi-instance deployments.
 
@@ -117,70 +166,95 @@ Unauthenticated requests to UI pages redirect to `/login`; to API routes they re
 |---|---|---|---|
 | Disable | All revoked immediately; login refused | Rejected immediately (active check); recorded as revoked | **Suspended**: rows and codes unchanged; registration through them is refused while the owner is inactive |
 | Enable | None restored; user must log in | **Not** restored; new tokens required | Usable again automatically, unless used, explicitly revoked, or expired |
-| Self-service password change | Other sessions revoked; current rotated | Kept by default with a "revoke all tokens" option **[OPEN]** | Unchanged |
-| Admin `reset-password` / `set-password`; completed email reset | All revoked | Revoked **[OPEN]** | Unchanged |
+| Self-service password change | Other sessions revoked; current rotated | **Kept by default**; an explicit "also revoke all API tokens" option **[APPROVED]** | Unchanged |
+| Password reset by email, **or** administrator reset/set-password, **or** completion of a setup link | **All revoked** | **All revoked [APPROVED]** | Unchanged |
 | Explicit invitation revocation | n/a | n/a | Permanent (`revoked_at`); `enable` never undoes it |
 
-4.7.1 "Revoked" is stored state. Enabling an account MUST NOT make previously revoked sessions or tokens valid.
+4.7.1 "Revoked" is stored state. Enabling an account MUST NOT make previously revoked sessions or tokens valid. Disabling and re-enabling MUST NOT set, change or clear `password_hash`.
 
-4.7.2 **Invitation suspension.** Disabling a user MUST NOT modify, delete or mark as revoked any invitation they own. The same applies to migrated legacy invitations.
+4.7.2 **Invitation suspension.** Disabling a user MUST NOT modify, delete or mark as revoked any invitation they own. Applies equally to migrated legacy invitations.
 
-4.7.3 **Registration is one transaction** that (a) locks the invitation row (`FOR UPDATE`) and its owner's user row (`FOR SHARE`); (b) verifies that the invitation exists, is unused, is not revoked, is not expired, and that its owner is `active`; (c) creates the account; (d) marks the invitation used. `disable` MUST take `FOR UPDATE` on the same user row. Consequently a registration MUST NOT succeed after a disable transaction has committed, and a rejected registration MUST NOT consume or mark the invitation.
+4.7.3 **Registration is one transaction** that (a) locks the invitation row (`FOR UPDATE`) and its owner's user row (`FOR SHARE`); (b) verifies that the invitation exists, is unused, is not revoked, is not expired, and that its owner is `active`; (c) creates the account (role `user`); (d) marks the invitation used. `disable` MUST take `FOR UPDATE` on the same user row. Consequently a registration MUST NOT succeed after a disable has committed, and a rejected registration MUST NOT consume or mark the invitation.
 
 4.7.4 The registration page MUST show one generic message for every non-usable invitation (unknown, used, revoked, expired, owner disabled): *"This invitation is invalid or no longer available."* It MUST NOT reveal that the owner is disabled.
 
-4.7.5 A request authorised before a revocation commits may complete; the next request MUST observe the revocation. No authentication result is cached in the proposal; if a cache is later introduced its TTL is the documented revocation latency.
+4.7.5 A request authorised before a revocation commits may complete; the next request MUST observe the revocation. No authentication result is cached.
 
 ### 4.8 API tokens
 
 4.8.1 New token format **[PROPOSAL]**: `mgt_` + base64url of 32 random bytes. Only the SHA-256 is stored, with label, creation time, throttled last-use time, optional expiry, and `revoked_at`. The plaintext is shown **once**, at creation.
 
-4.8.2 **Legacy tokens** (32 hex characters) are stored as SHA-256 of that string, so tokens presented in existing URLs continue to verify. Their plaintext cannot be recovered: the account page MUST list them as masked entries (label such as "legacy token", creation date, revoke action) and MUST NOT imply the value can be displayed.
+4.8.2 **Legacy tokens** (32 hex characters) are stored as SHA-256 of that string, so existing URLs continue to verify. Their plaintext cannot be recovered: the account page MUST list them as masked entries (label such as "legacy token", creation date, revoke action) and MUST NOT imply the value can be displayed.
 
-4.8.3 Presentation: `/api/v2/*` accepts `Authorization: Bearer` only. `/api/v1/feed/rss/last` additionally accepts the legacy `api-token` header, cookie and query parameter (§6.3).
+4.8.3 Presentation: `/api/v2/*` accepts `Authorization: Bearer` **only** **[APPROVED]**; query-string tokens are never enabled for the general v2 API. `/api/v1/feed/rss/last` additionally accepts the legacy `api-token` header, cookie and query parameter (§8.2).
 
-4.8.4 Token creation is a `POST` with CSRF; there is no token-minting-by-password endpoint.
+4.8.4 Token creation and revocation are `POST`s with CSRF; there is no token-minting-by-password endpoint.
 
-### 4.9 Password reset and setup
+### 4.9 Invitations, password links, email and SMTP
 
-4.9.1 Self-service email reset is available **only when SMTP is configured**. `POST /password/forgot` MUST return the same response and similar timing whether or not the address exists: *"If the address you entered is registered, a password reset link has been sent."* Requests are rate limited (§4.6).
+**Invitations [APPROVED].**
 
-4.9.2 Reset and setup tokens: 32 random bytes, stored as SHA-256, single use, expiring (**[PROPOSAL]** reset 1 h, setup 72 h), bound to one account; issuing a new token for an account invalidates earlier ones. Legacy reset tokens are not migrated.
+4.9.1 Invitation codes are stored in **plaintext** so that the owner can see and copy their unused invitation links at any time; migrated legacy invitations remain available. The threat model accepts plaintext codes at rest for this purpose. Therefore: codes MUST NOT be logged (the register path segment is redacted); an invitation is visible only to its owner (and, through the CLI, to the operator) — never to other users; creation, copy-view, and revocation are authenticated `POST`/`GET` pages protected by CSRF for the state changes; one-time consumption (§4.7.3) and explicit revocation are enforced in the database (`used_by` settable once; `revoked_at`). Pages that display codes are `Cache-Control: no-store`, and `/register/{code}` uses `Referrer-Policy: no-referrer`.
 
-4.9.3 Completing a reset follows §4.7. Users without an email address cannot self-serve and need an administrator.
+4.9.2 An invitation owner who is disabled has their unused invitations suspended and restored as in §4.7. New codes: 16 random bytes or more, URL-safe; legacy 32-hex codes keep working.
 
-4.9.4 Reset/setup/invite codes MUST NOT be logged, and the pages carrying them use `Referrer-Policy: no-referrer`.
+**Password links (setup and reset).**
+
+4.9.3 `web user add <username>` creates an **enabled** account with `password_hash = NULL` and prints a single-use, expiring **password-setup link**. The administrator never learns the password. Expired links are re-issued with `web user reset-password <username>` (§4.10); each new link invalidates earlier ones for that account. Administrator-issued links work for accounts **without an email address**.
+
+4.9.4 Link tokens: 32 random bytes, stored as SHA-256, single use, expiring (**[PROPOSAL]** setup 72 h, reset 1 h, email verification 24 h), bound to one account, purpose `setup` | `reset` | `email_verify`.
+
+4.9.5 **Completing a setup or reset link** runs in one transaction that locks the user row, checks the token, sets `password_hash`, records `password_changed_at`, marks the token used, and applies the revocations of §4.7 (all sessions and all API tokens). It MUST NOT write `active`. If the account is inactive, the link is refused with the same generic message as an invalid link and **is not consumed** (it works again after `enable` unless it expired). Completing a link for an account whose `active` is false therefore can never reactivate it. Setting a password MUST NOT affect email verification, and email verification MUST NOT set a password.
+
+4.9.6 Pages and emails for a reset MUST state that **completing the reset revokes all existing API tokens**; the email says so explicitly in its body, and the web page repeats it. The CLI output of `reset-password` states it to the operator as well.
+
+**Email [APPROVED].**
+
+4.9.7 An address is **unverified** until its holder confirms a single-use link sent to it (`/email/verify/{token}`, `POST` to confirm). Only a **verified** address is used for self-service password recovery. An address supplied by the administrator or migrated is stored unverified; the owner may request verification from the account page when SMTP is configured. The handling of historical email addresses during migration is a separate decision (§13.3).
+
+4.9.8 **Changing an address**: the new address is held as *pending* (in the verification token), a link is sent to it, and only its confirmation replaces `users.email` and sets `email_verified_at`. The existing verified address stays in force until then; abandoning or letting the link expire changes nothing. **[PROPOSAL]** the change requires the current password, and a notice is sent to the previous verified address when the change completes. At most one account may hold a given verified address (partial unique index on `lower(email)` where verified).
+
+4.9.9 `POST /password/forgot` is available **only when SMTP is configured**, MUST return the same response and similar timing whether or not the address exists, is verified, or the account is active: *"If the address you entered is registered and verified, a password reset link has been sent."* Mail is handed to a bounded in-process queue so that SMTP latency cannot reveal existence; the lookup-and-enqueue path has the same shape in all cases. Requests are rate limited (§4.6). Users without a verified address cannot self-serve and need an administrator.
+
+4.9.10 **SMTP transport [APPROVED].** Standard authenticated submission; **encrypted, certificate-verified transport is mandatory before any credential, reset link or sensitive content is sent.** Supported modes: `starttls` (explicit STARTTLS on submission, e.g. port 587) and `tls` (implicit TLS, e.g. port 465). There is no plaintext mode and no opportunistic fallback: if STARTTLS is not offered, or the TLS handshake or certificate verification fails (`ServerName` = configured host, system roots, TLS ≥ 1.2, no `InsecureSkipVerify` option), the send fails and nothing sensitive is transmitted; `AUTH` is never issued before TLS is established, including to loopback hosts. **[PROPOSAL]** implement with the standard library (`net` / `crypto/tls` / `net/smtp.NewClient`, explicit `StartTLS`); `net/smtp.SendMail` MUST NOT be used because it falls back to plaintext when STARTTLS is absent. A third-party SMTP library is added only if a concrete required capability is missing, with owner approval. Headers are built from validated values (no CR/LF injection), plain-text bodies, connection and total timeouts, no secrets in logs.
 
 ### 4.10 Administrator CLI
 
-`magnetico web user …` operates directly on the users store (database URL from the environment):
+`magnetico web user …` operates directly on the web store (database URL from the environment):
 
 | Command | Behaviour |
 |---|---|
-| `add <username> [--email E] [--invites N]` | Creates a `pending_setup` account with **no usable password**, prints a single-use expiring setup link. `--invites` overrides the configured default quota (default 0). |
-| `reset-password <username>` | Issues a reset/setup link bound to that account and prints it; the administrator learns no password. Revokes sessions per §4.7 when completed. |
-| `set-password <username>` | Rare case. Reads the password from a prompt or stdin; never from argv; never echoed or logged. |
-| `disable <username>` / `enable <username>` | Per §4.7. |
+| `add <username> [--email E] [--invites N]` | Creates an **enabled** `user` with `password_hash NULL` and prints a single-use expiring setup link. `--invites` overrides the configured default quota. `--email` is stored unverified. |
+| `set-role <username> <user\|admin>` | Assigns or changes the role **[APPROVED]**. |
+| `reset-password <username>` | Issues a link (purpose `setup` if no password exists, otherwise `reset`), invalidating earlier links; prints it; works without an email address; completion revokes sessions and API tokens (§4.7). |
+| `set-password <username>` | Rare case. Password from a prompt or stdin; never argv; never echoed or logged. Revokes sessions and API tokens. |
+| `disable <username>` / `enable <username>` | Per §4.7. Neither touches `password_hash`. |
 | `invite add\|revoke …` | Create or permanently revoke invitations. |
-| `list` | Usernames, state, whether a password hash is in a supported format. No secrets. |
+| `list` | Username, role, `active`, password present/legacy-format/needs-reset, email present/verified. No secrets. |
 
-Commands MUST NOT print secrets other than the single link or token they were asked to issue.
+Commands MUST NOT print secrets other than the single link or token they were asked to issue. Optional **[PROPOSAL]**: `web tracker list|add|remove|move` as an interim operator interface until the Admin UI exists (§8.3.5).
 
-## 5. Users schema (proposal; not applied)
+## 5. Web schema (`magnetico_web`; proposal, not applied)
 
-5.1 **[OPEN]** Name and DDL. **[PROPOSAL]** a schema `magnetico_users` created by an explicit, non-destructive, idempotent command (like `migrate schema-init`), never implicitly by `web`, with its own version table.
+5.1 **[APPROVED]** schema name `magnetico_web`. It holds accounts, authentication state, sessions, invitations, API tokens, the public tracker list and future web-specific settings. It is created by an explicit, non-destructive, idempotent command (never implicitly by `web`) with its own version table. Detailed DDL is a separate prerequisite (§13.3). The torrent/file identifiers of `magneticod` are unchanged.
 
-5.2 **[PROPOSAL]** logical tables (types and indexes to be fixed in the DDL review):
+5.2 **Identifier strategy [PROPOSAL].** The owner allows legacy numeric user IDs to be kept or replaced, provided relationships are preserved and any mapping is verifiable.
+- `users.id`, `invites.id`: `bigint GENERATED ALWAYS AS IDENTITY`; **legacy values are preserved verbatim** (the migrator inserts with `OVERRIDING SYSTEM VALUE` and then advances the sequence past the maximum). The mapping is the identity, so no mapping table exists and the check is simple: row counts per table, foreign-key integrity, per-user invitation and token counts equal to the source.
+- `api_tokens.id`: a new surrogate identity (the legacy primary key is the secret itself and must not be reused as an identifier); the link to the source is the verifiable relation `token_hash = sha256(legacy key)`.
+- `sessions` and one-time tokens are keyed by their token hash; `trackers.id` is a new identity.
+- **UUIDs are not recommended**: identifiers are not exposed publicly (the only identifier-bearing routes are owner-checked `POST`s), there is no multi-writer or merge scenario, and a changed key type would force a persistent old-to-new mapping with no benefit. If the owner nevertheless prefers renumbering, the migrator MUST emit an explicit old→new mapping report and keep a verified `legacy_user_id` until cutover is closed.
 
-- `users`: id (identity; legacy IDs preserved by the migrator), username, email (nullable, unique when present), password_hash (nullable), state, created_at, password_changed_at, last_login_at, a credential epoch.
-- `sessions`: token_hash, user_id, created_at, last_seen_at, expires_at, remember flag.
-- `api_tokens`: token_hash, user_id, label, created_at, last_used_at, expires_at, revoked_at, legacy flag.
-- `invites`: id, owner user_id, code or code_hash **[OPEN]**, used_by, created_at, expires_at (nullable), revoked_at.
-- `one_time_tokens`: token_hash, user_id, purpose (`reset` | `setup`), expires_at, used_at.
+5.3 Logical tables (types and indexes fixed in the DDL review):
+- `users`: id; username; email (nullable); email_verified_at (nullable); password_hash (nullable); `active` boolean not null default true; `role` text not null default `'user'` with `CHECK (role IN ('user','admin'))`; created_at; password_changed_at; last_login_at. **No `pending_setup` state and no credential-epoch column.**
+- `sessions`: token_hash (PK), user_id, created_at, last_seen_at, expires_at (**not null**, absolute), remember.
+- `api_tokens`: id, token_hash (unique), user_id, label, created_at, last_used_at, expires_at, revoked_at, legacy.
+- `invites`: id, owner_id, code (plaintext, unique **[APPROVED]**), used_by, used_at, created_at, expires_at (nullable), revoked_at.
+- `one_time_tokens`: token_hash (PK), user_id, purpose (`setup` | `reset` | `email_verify`), email (target address, for `email_verify`), created_at, expires_at, used_at.
+- `trackers`: id, url (unique), position, created_at, updated_at (§8.3).
+- `settings`: key, value, updated_at (holds, among other future values, the tracker-seed marker).
+- `schema_version`.
 
-5.3 `roles` **[OPEN]**: dropped in the proposal.
-
-5.4 Concurrency invariants (§4.7.3) require row-level locking semantics; schema and constraints MUST make an invite single-use (`used_by` set at most once) at the database level.
+5.4 Database-level invariants: an invitation is used at most once; `role` is one of two values; at most one account per verified email; session `expires_at` not null. Registration and disable semantics (§4.7.3) rely on row locking.
 
 ## 6. UI routes
 
@@ -188,59 +262,70 @@ Commands MUST NOT print secrets other than the single link or token they were as
 
 | Method and path | Auth | Purpose |
 |---|---|---|
-| `GET /` | public | Redirect to `/torrents` (authenticated) or `/login` |
+| `GET /` | public | Homepage and entry point: redirect to `/torrents` when signed in, otherwise to `/login` |
 | `GET, POST /login`; `POST /logout` | public / session | Sign in / out |
 | `GET /torrents` | session | Search and listing |
 | `GET /torrents/{id}` | session | Details |
 | `GET /torrents/{id}/files` | session | File browser view |
 | `GET, POST /register/{code}` | public | Invite registration |
 | `GET, POST /password/forgot`, `/password/reset/{token}`, `/password/setup/{token}` | public | Reset and setup |
-| `GET /account`; `POST /account/password`, `/account/email`, `/account/tokens`, `/account/tokens/{id}/revoke`, `/account/invites` | session | Account management |
+| `GET, POST /email/verify/{token}` | public | Email verification |
+| `GET /account`; `POST /account/password`, `/account/email`, `/account/tokens`, `/account/tokens/{id}/revoke`, `/account/invites/{id}/revoke` | session | Account management |
 | `GET /magnet/{infohash}` | public | Short magnet redirect (§8.3) |
-| `GET /api`, `/api/v1`, `/api/v2` and their OpenAPI documents | see §9.4 | API documentation |
+| `GET /api`, `/api/v1`, `/api/v2`, `/api/v1/openapi.yaml`, `/api/v2/openapi.yaml` | public | API documentation |
 | `GET /healthz`, `/readyz`, `/robots.txt` | public | Operations |
 
-The UI paths are a proposal and may be adjusted; the legacy UI URLs (`/torrents`, `/torrents/{id}`, `/register/{code}`, `/auth/*`, `/account`, `/profile/api/*`) have no compatibility promise. **[OPEN]** whether to add redirects from `/auth/login` and `/auth/reset/*`.
+6.1.1 **No legacy UI redirects [APPROVED].** The legacy site was private and not indexed and has no known scraping consumers. The new UI may reorganise or rename routes freely; internal navigation starts at `/`. The only routes retained for external compatibility or functionality are **`/api/v1/feed/rss/last`** and **`/magnet/{infohash}`**. No redirects are provided for `/auth/login`, `/auth/reset/*`, `/profile/api/*`, or any other old route, and state-changing legacy `GET` routes are not served or redirected (they return 404).
 
-### 6.2 Search (draft decisions, **[OPEN]**)
+### 6.2 Search
 
-6.2.1 Query text is split on whitespace. A word shorter than 3 **Unicode code points** is ignored (legacy `mb_strlen` semantics; the Go implementation counts runes, not bytes). All remaining words must match (AND), case-insensitively, as substrings of `torrents.name`.
+6.2.1 **[APPROVED]** Query text is split on whitespace. A word shorter than 3 **Unicode code points** is ignored (legacy `mb_strlen` semantics; the Go implementation counts runes). All remaining words must match (AND), case-insensitively, as substrings of `torrents.name`.
 
-6.2.2 **Difference from legacy:** the legacy code did not escape `%` and `_`, so users' typed `%`/`_` acted as SQL wildcards. This proposal treats the input as a **literal substring** and escapes LIKE metacharacters (the existing helper `escapeLikePattern`). This is a deliberate behaviour change.
+6.2.2 **[APPROVED]** `%` and `_` typed by the user are escaped and matched **literally** (helper `escapeLikePattern`). This is a deliberate difference from the legacy code, where they acted as wildcards.
 
-6.2.3 A query that is exactly 40 hexadecimal characters is an exact info-hash lookup (addition). **[OPEN]**
+6.2.3 **[APPROVED]** A query that is exactly 40 hexadecimal characters is an exact info-hash lookup. An empty query (or one with no usable word) lists the newest torrents.
 
-6.2.4 An empty query (or one with no usable word) lists the newest torrents.
+6.2.4 Search operates on `torrents` only and MUST NOT decode blobs (`postgresql-persistence-v2.md` §3, §5).
 
-6.2.5 Search operates on `torrents` only and MUST NOT decode blobs (`postgresql-persistence-v2.md` §3, §5).
+6.2.5 **Timeout [APPROVED].** The SQL search timeout defaults to **60 s** and is configurable via `MAGNETICO_WEB_SEARCH_TIMEOUT` (§2.3). It is enforced by the request context and a server-side statement timeout, and §2.9 guarantees HTTP deadlines do not cut it short. The default is deliberately long because sorting very large result sets can be expensive. On expiry the UI and API report a friendly **search timeout** (UI page; v2 `application/problem+json`, status 503, `Retry-After`) that says the search did not finish in the configured time and may be retried. The message MUST NOT claim the query is invalid or "too broad". A cancelled request (client disconnect) is logged at debug level, not as a timeout. Saturated search slots produce a different "busy" response.
 
-6.2.6 A statement timeout bounds search; on timeout the UI shows "query too broad" (not a 500). Timeout value **[OPEN]**.
+6.2.6 **Indexes.** No new index is added to support search or listing without (a) query-plan and load measurements on a disposable realistic dataset showing a proven gain, and (b) owner approval, because indexes cost storage and the PHP version did not have them **[APPROVED policy]**. Existing indexes are used as they are.
 
 ### 6.3 Ordering and pagination
 
-6.3.1 Sorts: `discovered` (default, descending), `size`, `name` (only with a query). Every sort has `id` as a tie-breaker so cursors are stable. Unknown values fall back to the default (never an error page).
+6.3.1 Sorts: `discovered` (default, descending), `size`, `name` (only with a query). Every sort uses `id` as a tie-breaker so ordering is deterministic. Unknown values fall back to the default.
 
-6.3.2 **Keyset pagination**, opaque cursors, no `COUNT(*)`, no `OFFSET`; "newer/older" navigation; page sizes 20, 50, 100. The UI MUST NOT display a total result count.
-
-6.3.3 No change to indexes is proposed. Whether `(discovered_on, id)` and equivalents need composite indexes is a performance question to settle by measurement (plan §6.3), and any resulting schema change needs the owner's approval under the persistence contract.
+6.3.2 **Keyset pagination [APPROVED]**: opaque cursors, `LIMIT n+1` to learn whether another page exists, **no `COUNT(*)`, no `OFFSET`** — this preserves the legacy property (the PHP version used a pageless paginator precisely to avoid counting). The UI MUST NOT display a total result count; page sizes 20, 50, 100.
 
 ### 6.4 Details and file browser
 
 6.4.1 `GET /torrents/{id}` reads the `torrents` row (no blob). Unknown ID → 404.
 
-6.4.2 The file list is obtained through the persistence layer's `GetFiles` semantics (`postgresql-persistence-v2.md` §5): whole list or a typed error, never a partial list. Missing/corrupt blob → HTTP 500 page, `ERROR` log with `torrent_id`, no silent repair.
+6.4.2 The file list comes from the persistence layer's `GetFiles` semantics (`postgresql-persistence-v2.md` §5): whole list or a typed error, never partial. Missing/corrupt blob → HTTP 500 page, `ERROR` log with `torrent_id`, no silent repair.
 
-6.4.3 **Display limits and resource limits are separate requirements.**
-- *Display:* at most **[PROPOSAL]** 500 entries per page; directories shown with file count and aggregated size.
-- *Resources:* the work to decode the full list and build or look up its index is not reduced by the display limit. It MUST be bounded by: the codec limits (`codec.DefaultLimits`: 250,000 files, 64 MiB uncompressed), a process-wide weighted limit on concurrent decodes, per-request deadlines, and — if used — a size-bounded cache of decoded indexes. A directory navigation MUST NOT silently repeat an unbounded decode.
+6.4.3 **Display limits and resource limits are separate.** *Display:* at most **[PROPOSAL]** 500 entries per page; directories show file count and aggregated size. *Resources:* decoding the full list and building or looking up its index is not reduced by the display limit; it MUST be bounded by the codec limits (`codec.DefaultLimits`: 250,000 files, 64 MiB uncompressed), a process-wide weighted limit on concurrent decodes, per-request deadlines, and — if used — a size-bounded cache. A directory navigation MUST NOT silently repeat an unbounded decode.
 
-6.4.4 **Gate.** Before the approach is committed, benchmarks MUST demonstrate acceptable behaviour at the limits, against numeric criteria set and approved by the owner **[OPEN]**: a torrent near 250,000 files; concurrent detail requests; repeated directory navigation; process peak memory and per-request allocations; cold and cached latency. If blob-only storage cannot meet them, the alternatives (cache only, partial decode in the codec, a stored directory index, or limiting browsing) are presented to the owner (plan §6.4); the schema MUST NOT be changed silently.
+6.4.4 **Provisional acceptance budgets [PROPOSAL; unmeasured; for owner review].** To be measured in W4 on **disposable synthetic** data (generated by the test, no real or network data), on a stated reference host (**[PROPOSAL]** 2 vCPU, 1 GiB container), single web process, idle database:
 
-6.4.5 **Fidelity.** Duplicate `(path, size)` entries are preserved and displayed. Paths are opaque byte strings (`wire-format-v1.md` §1): splitting on `/` is for display grouping only; empty components, leading `/`, invalid UTF-8 and very long components are displayed with explicit markers, never normalised, merged or dropped. Rendering escapes all output.
+| Metric | Provisional budget |
+|---|---|
+| Cold decode + index build, one torrent of ≈ 250,000 files (≈ 64 MiB uncompressed), idle process | p95 ≤ **2 s** wall time; bytes allocated ≤ **3×** the uncompressed list size |
+| Cached directory navigation (page of ≤ 500 entries), server time | p95 ≤ **50 ms**, p99 ≤ **150 ms**; **zero** decodes |
+| 100 consecutive navigations in one large torrent | exactly **1** decode (99 cache hits) |
+| 8 concurrent requests (mixed cold/cached, large torrents) | no errors; p95 ≤ **5 s** |
+| 32 concurrent requests (mixed cold/cached, large torrents) | no OOM or crash; successful-request p95 ≤ **15 s**; excess requests receive a bounded-wait `503` "busy" (queue wait ≤ **5 s**) rather than unbounded memory growth |
+| Peak process RSS during the 32-concurrent run | ≤ **640 MiB** total (leaving headroom in a 1 GiB container); decode working set bounded by the weighted semaphore (**[PROPOSAL]** ≤ 256 MiB) and cache ≤ **[PROPOSAL]** 128 MiB |
+| Allocations per cached navigation request | ≤ **10,000** allocations and ≤ **1 MiB** |
+
+These numbers are proposals, **not measured achievements**. If they cannot be met with blob-only storage, the alternatives (bounded cache, partial decode in the codec, a stored directory index, or a browsing limit; plan §6.4) are presented to the owner. Any schema or codec change requires **separate owner approval**; none is made silently.
+
+6.4.5 **Fidelity.** Duplicate `(path, size)` entries are preserved and displayed, in canonical order. Paths are opaque byte strings (`wire-format-v1.md` §1): splitting on `/` is for display grouping only; empty components, leading `/`, invalid UTF-8 and very long components are shown with explicit markers, never normalised, merged or dropped. Rendering escapes all output. Directory links carry path bytes percent-encoded so that arbitrary bytes round-trip.
+
+6.4.6 **Invalid UTF-8 in HTML [APPROVED].** The page shows a clearly identified, lossless representation: each invalid byte as an escaped sequence (`\xNN`) in a visibly marked span, valid parts as text. It never substitutes U+FFFD.
 
 ## 7. API v2 (draft)
 
-7.1 Base `/api/v2`. Authentication: `Authorization: Bearer <token>`. Errors: RFC 9457 `application/problem+json`. Fields `snake_case`; timestamps RFC 3339 UTC; `Cache-Control: private`.
+7.1 Base `/api/v2`. Authentication: `Authorization: Bearer <token>` only **[APPROVED]**. Errors: RFC 9457 `application/problem+json`. Fields `snake_case`; timestamps RFC 3339 UTC; `Cache-Control: private`.
 
 7.2 Endpoints **[PROPOSAL]**:
 
@@ -250,15 +335,18 @@ The UI paths are a proposal and may be adjusted; the legacy UI URLs (`/torrents`
 | `GET /torrents?info_hash=<40 hex>` | zero or one torrent |
 | `GET /torrents/{id}` | torrent, including `magnet_uri` |
 | `GET /torrents/{id}/files?limit=&cursor=` | page of the canonical file list; `limit` ≤ 1,000 |
-| `GET /feeds/latest.rss` | RSS of the newest torrents |
+| `GET /feeds/latest.rss` | **[OPEN]** — depends on the RSS authentication decision (§8.2.7) |
 
 Torrent object: `id`, `info_hash` (hex), `name`, `total_size`, `file_count`, `discovered_at`.
 
-7.3 File entries carry the path and size. **[OPEN]** representation of paths that are not valid UTF-8 (for example an additional base64 field only when needed). Responses MUST NOT alter path bytes.
+7.3 **File paths [APPROVED contract].** A file entry is `{ "path": <string|null>, "path_base64": <string, present only when path is null>, "size": <integer> }`:
+- Valid UTF-8 path → `path` is the original string; `path_base64` is absent.
+- Invalid UTF-8 path → `"path": null` and `path_base64` holds the **exact original bytes** (RFC 4648 §4 standard alphabet, with padding).
+- Validity is decided per whole path (Go `utf8.Valid`); a path mixing valid and invalid segments is invalid as a whole.
+- Invalid byte sequences are **never** converted to replacement characters. Storage and the codec format are unchanged.
+- The OpenAPI schema expresses exactly-one-of `path` / `path_base64`. Duplicate paths are returned as separate entries in canonical order; cursors are positional.
 
-7.4 Tokens are not accepted in query strings on v2 (**[OPEN]** for the v2 RSS endpoint).
-
-7.5 No OAuth; no password-based token minting.
+7.4 No OAuth; no password-based token minting; no query-string tokens (§4.8.3).
 
 ## 8. Compatibility surface
 
@@ -266,49 +354,87 @@ Torrent object: `id`, `info_hash` (hex), `name`, `total_size`, `file_count`, `di
 
 | Endpoint | Decision |
 |---|---|
-| `GET /api/v1/feed/rss/last` | **Preserved** (§8.2) |
+| `GET /api/v1/feed/rss/last` | **Preserved** (§8.2), documented as **deprecated** |
 
 ### 8.2 `GET /api/v1/feed/rss/last`
 
-8.2.1 Content type `application/rss+xml`. Query `page` (integer, 1 to 10, values above 10 clamp to 10). Channel and item mapping as in the legacy implementation: item `guid` = info hash (hex), `title` = torrent name, `description` = info hash, `link` = magnet URI (with configured trackers and `dn`), `comments` = absolute URL of the torrent details page, `pubDate` = `discovered_on`, `enclosure` = magnet URI with `length` = `total_size` and `type` = `application/x-bittorrent`. Order: newest first, 1,000 items per page.
+8.2.1 Content type `application/rss+xml`. Query `page` (integer, 1 to 10; values above 10 clamp to 10). **Item identity and structure are preserved**: `guid` = info hash (hex), `title` = torrent name, `description` = info hash, `link` = magnet URI (configured trackers and `dn`), `comments` = absolute URL of the torrent's details page, `pubDate` = `discovered_on`, `enclosure` = magnet URI with `length` = `total_size` and `type` = `application/x-bittorrent`; the channel element set is kept. Order: newest first, 1,000 items per page. The `comments` URL targets the new details route.
 
-8.2.2 **Authentication** (compatibility): API token from header `api-token`, cookie `api-token`, or query parameter `api-token`. The legacy `401` JSON envelope (`{code, status, message, data}`) is retained for failures on this endpoint.
+8.2.2 **Authentication** **[APPROVED]**: API token from the header `api-token`, the cookie `api-token`, or the **query parameter** `api-token`, so existing torrent clients keep working. Failures return the legacy JSON `401` envelope (`{code, status, message, data}`).
 
-8.2.3 Because the token may appear in the URL, the endpoint MUST: redact the parameter in all logs; send `Referrer-Policy: no-referrer` and `Cache-Control: private`; rate limit per token; never echo the token. The token check MUST run before any cache lookup. Operators SHOULD configure the reverse proxy to omit or mask query strings in access logs; this is outside the application's control and is documented, not enforced.
+8.2.3 The token may appear in the URL, so the endpoint MUST: redact the parameter in all logs; send `Referrer-Policy: no-referrer` and `Cache-Control: private`; rate limit per token; never echo the token; and check the token **before** any cache lookup. Operators SHOULD configure the reverse proxy to omit or mask query strings in access logs (documented, not enforced).
 
 8.2.4 The feed reads `torrents` only (no blob decoding).
 
-8.2.5 **[OPEN]** page offset. The legacy offset is `page × 1000` with `page` defaulting to 1, so the default feed skips the newest 1,000 torrents. Options: preserve exactly, or make page 1 the newest 1,000. Not decided.
+8.2.5 **Page offset — intentional behaviour change [RECOMMENDED; owner: not critical].** The legacy offset is `page × 1000` with `page` defaulting to 1, so the default feed skips the newest 1,000 torrents. The recommendation is to correct it so `page=1` is the newest 1,000. This is **not** an exact-compatibility guarantee. Consequence to document in release notes: on its first poll after cutover a client may see up to 1,000 newest items it never saw before (GUIDs are info hashes, so already-seen items de-duplicate).
 
 8.2.6 A structural golden test (element set, guid, enclosure) guards the mapping.
 
-### 8.3 Magnet short link
+8.2.7 **Account UI and the question of a new RSS URL [OPEN].** The owner would prefer to recommend a new RSS URL, but many torrent clients cannot send an `Authorization` header. **Until this is decided, the account page MUST keep offering a working `/api/v1/feed/rss/last?api-token=…` URL for URL-only clients, labelled as deprecated** ("v1 RSS is deprecated and may be removed in a future release"); a v2 RSS URL is not recommended unless the clients can authenticate against it. Options:
 
-`GET /magnet/{infohash}` (40 hexadecimal characters, case-insensitive) is **public**, performs **no database lookup** (so it cannot reveal whether a hash is stored), and responds `307` with a `magnet:?xt=urn:btih:<hash>` URI that includes the configured tracker list (no `dn`, as legacy). The path MAY change **[OPEN]**; whatever it becomes, the details page MUST show the short link and offer to copy it. Default tracker list **[OPEN]** (the legacy list contains hosts that may be defunct).
+| Option | Works with URL-only clients | Exposure if the URL leaks | Cost / notes |
+|---|---|---|---|
+| A. Keep URL-token auth for **v1 only** (status quo) | Yes | The token is a **full-scope** API token | No new code; leak risk stays until v1 is removed; v1 deprecation notice only |
+| B. v2 feed endpoint also accepts `api-token` in the query | Yes | Full-scope token | Breaks the "v2 = Bearer only" rule for one endpoint; same risk as A with a new URL |
+| C. **Dedicated feed credential** for v2 (`mgf_…`, feed-read-only scope, own revocation, in the query or path of the feed URL only) | Yes | Read-only feed access; cannot call the JSON API or read account data | New token scope/column, UI and tests; v1 could also accept it so existing clients can move to a lower-risk URL; the general v2 API stays Bearer-only |
+| D. HTTP Basic credentials embedded in the URL | Inconsistent across clients | Full or scoped, depending on design | Not recommended: poor client support and leaks into more places |
+
+Provisional recommendation: **C**, with A kept working in the meantime; the decision, the token naming and the migration of existing RSS URLs are the owner's.
+
+### 8.3 Magnet short link and the tracker list
+
+8.3.1 `GET /magnet/{infohash}` (40 hexadecimal characters, case-insensitive) stays **public** and at this path **[APPROVED]**. It responds `307` with a `magnet:?xt=urn:btih:<hash>` URI carrying the configured trackers (no `dn`, as legacy). It MUST NOT query whether the torrent exists in the index, so it cannot reveal whether a hash is stored. (It does read the tracker settings, §8.3.3.) The details page MUST show the short link and offer to copy it.
+
+8.3.2 **Trackers live in PostgreSQL [APPROVED]**: table `magnetico_web.trackers` (§5.3), ordered by `position` then `id`, supporting future additions, edits, removals and reordering (and later an Admin UI, which is not implemented now). Tracker URLs are validated on write (allowed schemes `udp`, `http`, `https`, `ws`, `wss`; URL-encoded into `tr=` parameters).
+
+8.3.3 **Caching and refresh [PROPOSAL].** The web process keeps an immutable in-memory snapshot of the ordered list, loaded at startup (startup fails if it cannot be loaded, §2.4) and refreshed lazily when older than `TRACKER_CACHE_TTL` (default 60 s) by one background refresh at a time (single-flight). If a refresh fails, the last good snapshot keeps being served and the failure is logged and counted; the snapshot is never replaced by an empty list on error. Changes made through the CLI or a future Admin UI take effect within the TTL (immediately in the same process via an explicit invalidation). No `LISTEN/NOTIFY`, Redis or other infrastructure. Magnet URIs in the UI, RSS and v2 use the same snapshot.
+
+8.3.4 **Initial list and idempotent import [PROPOSAL].** The initial content is `master:config/public_trackers.json`, **verbatim and in order**, embedded in the binary as seed data (SHA-256 of the file recorded in the seed definition and its test):
+
+```text
+udp://tracker.opentrackr.org:1337/announce
+udp://tracker.open-internet.nl:6969/announce
+udp://tracker.piratepublic.com:1337/announce
+udp://9.rarbg.to:2710/announce
+udp://tracker.zer0day.to:1337/announce
+http://nyaa.tracker.wf:7777/announce
+http://t.nyaatracker.com:80/announce
+udp://open.stealth.si:80/announce
+udp://bt.xxx-tracker.com:2710/announce
+udp://exodus.desync.com:6969/announce
+udp://open.demonii.si:1337/announce
+udp://tracker.torrent.eu.org:451/announce
+```
+
+The import runs as a step of the explicit web-schema initialization (a separate data-migration command is an acceptable alternative **[OPEN]**), in **one transaction under an advisory lock**: it inserts the rows with positions `1..n` **only if** the table is empty **and** the settings marker `trackers.seed` is absent, then writes the marker (seed version and hash) in the same transaction. Re-running is a no-op; in particular, an operator who later removes or reorders trackers is never overridden, and a non-empty table without a marker is left untouched and reported. **No tracker is filtered, replaced or "repaired"**: some hosts in this historical list are probably defunct (this is **not verified**), and they are kept so that the owner can prune them deliberately.
+
+8.3.5 Tracker administration before the Admin UI exists is by SQL or the optional CLI commands of §4.10 **[PROPOSAL]**.
 
 ### 8.4 Removed
 
-`POST /api/v1/login`, `POST /api/v1/logout`, `GET /api/v1/torrents`, `GET /api/v1/torrents/{id}` are removed. They MUST NOT appear in any v1 OpenAPI document, neither as implemented nor as deprecated. If a consumer is found after cutover they can be reintroduced as an adapter over v2; exact legacy fidelity (`numberOfResults`, `numberOfPages`) cannot be reproduced because no count is computed and the legacy values were constants.
+`POST /api/v1/login`, `POST /api/v1/logout`, `GET /api/v1/torrents`, `GET /api/v1/torrents/{id}` are removed and MUST NOT appear in the v1 OpenAPI document, neither as implemented nor as deprecated. If a consumer is found after cutover they can be reintroduced as an adapter over v2; exact legacy fidelity (`numberOfResults`, `numberOfPages`) cannot be reproduced.
 
 ## 9. OpenAPI and documentation
 
-9.1 Each API prefix has an OpenAPI document embedded in the binary: `/api/v1/openapi.yaml`, `/api/v2/openapi.yaml`.
+9.1 Each API prefix has an OpenAPI document embedded in the binary as a static asset: `/api/v1/openapi.yaml`, `/api/v2/openapi.yaml` **[APPROVED]**. **Maintenance rule:** any change to an API's behaviour MUST update its embedded document in the same change; a corresponding instruction is to be added to `AGENTS.md` (§13.3; `AGENTS.md` is outside the scope of the Task 07A revision), and a test validates that every implemented route is described and every described route exists.
 
-9.2 **Target version: OpenAPI 3.2.1** (the latest published version). Compatibility of a lightweight, vendorable, client-side renderer MUST be evaluated separately at implementation; only if none supports 3.2.1 may the document be downgraded to the latest minor version a renderer supports, and the evaluation recorded. This draft makes no claim about specific renderers.
+9.2 **Rendering [APPROVED approach].** A lightweight client-side renderer, vendored and pinned, loads the relevant embedded specification in the browser and renders interactive documentation. The server provides no dynamic documentation service. **No CDN and no runtime third-party requests.** Documentation never embeds live tokens, credentials or user-specific data.
 
-9.3 The v1 document describes **only** the retained RSS endpoint, including the query/header/cookie token transport and the 401 envelope, and marks the v1 prefix deprecated. It states that the other legacy endpoints do not exist.
+9.3 **Version selection.** The choice of a small, maintainable renderer matters more than the newest OpenAPI minor version. The specification MUST use **the latest OpenAPI version supported by the chosen renderer**; heavyweight dependencies MUST NOT be added merely to support OpenAPI 3.2.1. The renderer evaluation (candidates, size, licence, maintenance, CSP compatibility without inline scripts or `eval`, supported OpenAPI versions, no external requests) is a separate prerequisite (§13.3) and is recorded when done. This draft claims nothing about specific renderers.
 
-9.4 `GET /api` is a landing page linking to `/api/v1` and `/api/v2`, each of which serves interactive documentation and a link to download its specification. The renderer is vendored and pinned (no CDN, no runtime fetch from third parties). Whether these pages require authentication **[OPEN]**.
+9.4 `GET /api` is a public landing page linking to `/api/v1` and `/api/v2`, each of which serves the interactive documentation and a link to download its specification. All of them are public **[APPROVED]**, are covered by §3.6 (`noindex`), and may use a CSP relaxation limited to these routes only if the renderer requires one. A "try it out" feature MUST NOT persist or log credentials; whether to enable it is part of the renderer evaluation.
+
+9.5 The v1 document describes **only** endpoints the new application implements: the RSS endpoint, its query/header/cookie token transport, the `401` envelope, and the deprecation of the prefix.
 
 ## 10. Logging, errors, privacy
 
-10.1 Structured logs with request ID, method, route pattern, status, duration, user ID (not name) when authenticated. **[OPEN]** `log/slog` versus the existing `log` package.
+10.1 The web application uses **`log/slog`** **[APPROVED]** (text or JSON, level configurable). Fields: request ID, method, route pattern, status, duration, user ID (not name) when authenticated.
 
-10.2 MUST NOT be logged: passwords, session tokens, API tokens, reset/setup/invite codes, full query strings, torrent names or file paths (by default; `postgresql-persistence-v2.md` §8). Path segments carrying codes and the `api-token`/`token` parameters are redacted.
+10.2 MUST NOT be logged: passwords, session tokens, API tokens, reset/setup/verification/invite codes, full query strings, torrent names or file paths (by default; `postgresql-persistence-v2.md` §8), SMTP credentials. Path segments carrying codes and the `api-token`/`token` parameters are redacted.
 
-10.3 User-visible errors are generic with a request ID. Failure cases that would reveal account or invitation existence (§4.3.6, §4.7.4, §4.9.1) return identical content.
+10.3 User-visible errors are generic with a request ID. Cases that would reveal account, email or invitation existence (§4.3.6, §4.7.4, §4.9.9) return identical content.
 
-10.4 Typed storage errors map as: `ErrTorrentNotFound` → 404; `ErrIntegrityMissingBlob` and `ErrCorruptBlob` → 500 with an `ERROR` log carrying `torrent_id`; I/O errors → 503 or 500; none is reported as an empty file list.
+10.4 Typed storage errors map as: `ErrTorrentNotFound` → 404; `ErrIntegrityMissingBlob` and `ErrCorruptBlob` → 500 with an `ERROR` log carrying `torrent_id`; I/O errors → 503 or 500; none is reported as an empty file list. A search timeout is §6.2.5.
 
 ## 11. UI requirements
 
@@ -318,18 +444,51 @@ Torrent object: `id`, `info_hash` (hex), `name`, `total_size`, `file_count`, `di
 
 11.3 No third-party requests from the browser (fonts, icons, scripts, analytics).
 
+11.4 The account page explains that **v1 RSS is deprecated and may eventually be removed**, shows the v1 RSS URL while §8.2.7 is open, lists API tokens (legacy ones masked), the user's unused invitation links with copy buttons, the email address with its verification state, and the password-change form with the explicit "also revoke all API tokens" option.
+
 ## 12. Acceptance and tests (by milestone)
 
 12.1 Milestones W1–W9 and their acceptance criteria are in the plan (§8); this specification is satisfied when those pass and the owner has resolved the open items.
 
-12.2 **Password compatibility tests.** For each supported legacy hash format: PHP-generated vectors (valid password, wrong password, edge lengths), produced by a script and PHP version recorded alongside the fixtures, **independently verified** (generated outside the Go code under test); mixed-format databases; transparent rehash on login; unsupported format handled as "needs reset"; bounded concurrency under load.
+12.2 **Password compatibility tests.** For each supported legacy hash format: PHP-generated vectors (valid password, wrong password, edge lengths) produced by a script with the PHP version recorded alongside, **independently verified** (generated outside the Go code under test); mixed-format databases; transparent rehash on login; unsupported format handled as "needs reset"; bounded concurrency under load.
 
-12.3 **Revocation tests.** Disable refuses registration through the owner's invitations; enable restores them; concurrent disable versus registration (both orders, repeated, with the race detector) never commits a registration after the disable commit and never consumes the invitation on refusal; tokens stay dead after disable → enable; concurrent revoke versus authenticated request; migrated legacy invitations behave identically.
+12.3 **Account-state and revocation tests.** `password_hash IS NULL` cannot log in; completing a setup/reset link never changes `active` (disabled account: refused, link not consumed, works after `enable` unless expired); disable → enable does not touch `password_hash` or restore sessions/tokens; expired setup links are re-issuable; email verification is independent of setup; `set-role` changes the role and invitation registration always yields `user`; disable refuses registration through the owner's invitations and enable restores them; concurrent disable versus registration (both orders, repeated, race detector) never commits a registration after the disable commit and never consumes the invitation on refusal; concurrent revoke versus authenticated request; migrated legacy invitations behave identically.
 
-12.4 **Security tests.** Spoofed forwarded headers from an untrusted peer do not change rate-limit identity; CSRF is enforced on every POST including unauthenticated ones; equal responses for known and unknown usernames, emails and invitations; log capture shows no secrets; headers present; dev-mode cookie rules rejected for non-loopback URLs.
+12.4 **Credential-revocation tests.** Email reset, admin reset and set-password revoke all sessions and tokens; self-service password change keeps tokens by default and revokes them with the option; the reset email and page contain the token-revocation notice.
 
-12.5 **Operational constraints for all testing:** disposable databases only (`internal/pgtest`); synthetic data; no production access; **no DHT or other public BitTorrent traffic from the development VM.**
+12.5 **Session tests.** Idle expiry; remember-me absolute expiry; the ordinary-session absolute cap; every session row has a non-null `expires_at`; configuration validation rejects each invalid combination of §4.4.4; durations without a `d` unit.
 
-## 13. Open decisions summary
+12.6 **Email tests** with a fake SMTP server: STARTTLS enforced; server without STARTTLS → no `AUTH`, no message; invalid/untrusted certificate → failure; implicit TLS mode; no plaintext to loopback either; header-injection attempts rejected; unverified address never receives a reset; changing an address leaves the old verified address in force until confirmation; forgot-password responses and timing shape identical for known, unknown, unverified and disabled.
 
-Users schema name/DDL and legacy ID preservation; `golang.org/x/crypto` version and other dependencies; legacy hash audit results; username case policy; invitation code storage; session lifetimes; `roles`; RSS v1 page offset; token-in-query for v2 RSS; email verification and change policy; API-token policy on password change and admin reset; search semantics and timeout; file-tree approach and its numeric acceptance criteria; logging library; documentation pages' access; single versus multiple instances; default tracker list; non-UTF-8 paths in v2 JSON; UI paths and legacy-redirect policy. See the plan, §10, for context.
+12.7 **Search tests.** Three-code-point minimum with multi-byte text; AND semantics; literal `%` and `_`; 40-hex lookup; empty query; deterministic ordering and keyset pagination without `COUNT`/`OFFSET` (assert on the generated SQL); the default timeout is 60 s and is configurable and validated; a deliberately slow query hits the timeout with a friendly response, **not** claiming the query is invalid; the HTTP request/write deadlines do not fire before the search timeout (run with a short general timeout and a longer search timeout); search slot saturation does not block login.
+
+12.8 **Tracker and magnet tests.** The seed inserts the 12 historical URLs in order, is idempotent, and never resurrects removed trackers or overrides reordering; a non-empty unmarked table is untouched; the redirect works without any `torrents` lookup (assert no query is issued) and survives a tracker-refresh failure using the last good snapshot; changes are visible within the TTL.
+
+12.9 **Policy and compatibility tests.** `/robots.txt` body is exactly the default; `X-Robots-Tag: noindex, nofollow` on all response classes; documentation and OpenAPI routes are public and contain no credentials; no external requests from documentation pages; old UI routes return 404 and old state-changing GETs change nothing; v1 RSS accepts query, header and cookie tokens, keeps item identity, and `page=1` returns the newest 1,000 (documented change); v1 OpenAPI lists only implemented endpoints; v2 rejects query-string tokens.
+
+12.10 **API path tests.** Valid UTF-8, invalid UTF-8 (`path: null`, `path_base64` round-trips to the exact bytes), mixed segments, duplicate paths, mixed encodings within one page and across cursor boundaries; the HTML shows lossless escapes and no U+FFFD.
+
+12.11 **Security tests.** Spoofed forwarded headers from an untrusted peer do not change rate-limit identity; CSRF enforced on every POST including unauthenticated ones; equal responses for known/unknown usernames, emails and invitations; log capture shows no secrets or invitation codes; headers present; dev-mode cookie rules rejected for non-loopback URLs; invitations of other users are never visible.
+
+12.12 **File-tree benchmarks (W4)** per §6.4.4, on synthetic disposable data.
+
+12.13 **Operational constraints for all testing:** disposable databases only (`internal/pgtest`); synthetic data; no production access; **no DHT or other public BitTorrent traffic from the development VM, under any circumstances.**
+
+## 13. Decisions summary
+
+### 13.1 Owner-approved (review of `17b4c2f0`)
+
+Schema `magnetico_web`; legacy user IDs need not be preserved (identifier strategy §5.2 is a proposal); `pending_setup` removed in favour of `active` / nullable `password_hash` / independent email verification; roles `user` and `admin` with `set-role`; plaintext invitation codes with the suspension and transaction rules; session defaults (12 h idle, 90 d remember) configurable through `MAGNETICO_WEB_*` with finite absolute expiry; optional email with verification, verified-address-only recovery, strict TLS SMTP, token revocation on reset with explicit email notice, optional revoke-all on password change; search architecture and the 60 s configurable timeout; v1 RSS preserved with query-string `api-token`; the v2 JSON API Bearer-only; trackers in PostgreSQL with a safe idempotent import and a public `/magnet` that reads cached tracker settings but never checks whether the torrent exists; no legacy UI redirects; `robots.txt` and `X-Robots-Tag`; public API documentation with embedded OpenAPI and a vendored client-side renderer; `log/slog`; the non-UTF-8 path contract; provisional file-tree budgets (as proposals to measure).
+
+### 13.2 Still open
+
+1. **v1/v2 RSS authentication** for URL-only clients (§8.2.7), including whether feed-scoped credentials are introduced.
+2. **File-tree approach** after the W4 measurement, and confirmation of the numeric budgets (§6.4.4).
+3. Username case sensitivity and collision policy (§4.2.5).
+4. Single versus multiple web instances (rate-limit state, §4.6.2).
+5. Data-migration placement of the tracker seed (§8.3.4), the optional tracker CLI, and the `SESSION_ABSOLUTE_LIFETIME` default (§4.4.4).
+6. Breached-password lookup (not proposed).
+
+### 13.3 Remaining implementation prerequisites (separate from this design)
+
+Legacy password-hash distribution audit (**does not block W1**); selection of a maintained `golang.org/x/crypto` version; detailed schema DDL; selection of the API-documentation renderer (and the OpenAPI version it supports); the user-migration implementation, including the handling of historical email addresses; an `AGENTS.md` rule that API changes must update the embedded OpenAPI documents; CI/OCI images and release-candidate testing.
