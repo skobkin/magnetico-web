@@ -68,7 +68,7 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		}
 	case "migrate":
 		if active.Active == nil {
-			return "", errors.New("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
+			return "", errors.New("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, web-schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 		sub := active.Active
 		switch {

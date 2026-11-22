@@ -146,7 +146,7 @@ func (o *OpFlags) applyEnvWebConfig(explicit map[string]bool) error {
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		if strings.HasPrefix(name, webEnvPrefix) && !known[name] {
-			return fmt.Errorf("unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH (refused for web), %s",
+			return fmt.Errorf("unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s",
 				name, strings.Join(names, ", "))
 		}
 	}

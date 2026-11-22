@@ -1,6 +1,6 @@
 package main
 
-// Real-binary tests of `magnetico web` (milestone W1). They use only
+// Real-binary tests of `magnetico web` and `magnetico migrate web-schema-init`. They use only
 // disposable PostgreSQL databases from the shared harness and bind loopback
 // ports; no BitTorrent or DHT code runs in the `web` command.
 
@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/skobkin/magnetico-web/internal/pgtest"
+	"github.com/skobkin/magnetico-web/internal/web/webschema"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -97,8 +98,7 @@ func TestWebBinaryRejectsBadConfiguration(t *testing.T) {
 }
 
 // The web service fails closed when the dedicated magnetico_web schema is
-// absent — which is the state of every real database until W2 delivers the
-// approved schema and its initialization command.
+// absent (it is created only by `migrate web-schema-init`, never by `web`).
 func TestWebBinaryFailsClosedWithoutWebSchema(t *testing.T) {
 	bin := buildBinary(t)
 	dsn := webTarget(t)
@@ -120,21 +120,12 @@ func TestWebBinaryFailsClosedWithoutWebSchema(t *testing.T) {
 	}
 }
 
-// The success path needs a web schema. The stand-in below exists only inside
-// the disposable test database to exercise the process lifecycle; it is not
-// the production DDL (milestone W2).
+// The success path runs against the production magnetico_web schema, created
+// by the same explicit initialization the operator uses.
 func TestWebBinaryServesAndStopsOnSIGTERM(t *testing.T) {
 	bin := buildBinary(t)
 	dsn := webTarget(t)
-	conn, err := pgx.Connect(context.Background(), dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(context.Background(),
-		`CREATE SCHEMA magnetico_web; CREATE TABLE magnetico_web.schema_version (version int)`); err != nil {
-		t.Fatal(err)
-	}
-	conn.Close(context.Background())
+	initWebSchema(t, dsn)
 
 	addr := freeLoopbackAddr(t)
 	cmd := exec.Command(bin, "web")
@@ -207,15 +198,7 @@ func TestWebBinaryServesAndStopsOnSIGTERM(t *testing.T) {
 func TestWebBinaryExitsWithStatus3WhenGraceExpires(t *testing.T) {
 	bin := buildBinary(t)
 	dsn := webTarget(t)
-	conn, err := pgx.Connect(context.Background(), dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(context.Background(),
-		`CREATE SCHEMA magnetico_web; CREATE TABLE magnetico_web.schema_version (version int)`); err != nil {
-		t.Fatal(err)
-	}
-	conn.Close(context.Background())
+	initWebSchema(t, dsn)
 
 	addr := freeLoopbackAddr(t)
 	cmd := exec.Command(bin, "web")
@@ -272,8 +255,251 @@ func TestWebBinaryExitsWithStatus3WhenGraceExpires(t *testing.T) {
 	}
 }
 
-// TestWebBinaryStartsWithProductionWebSchema is the real-binary startup test
-// against the approved production magnetico_web schema.
+func initWebSchema(t *testing.T, dsn string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if _, err := webschema.Init(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runWebSchemaInit runs `magnetico migrate <args…>` with the target database
+// in MAGNETICO_MIGRATE_DATABASE (the existing migrate convention).
+func runWebSchemaInit(t *testing.T, bin, dsn string, args ...string) (output string, code int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, append([]string{"migrate"}, args...)...)
+	cmd.Env = webEnv("MAGNETICO_MIGRATE_DATABASE=" + dsn)
+	var buf bytes.Buffer
+	cmd.Stderr, cmd.Stdout = &buf, &buf
+	err := cmd.Run()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return buf.String(), 0
+	case errors.As(err, &ee):
+		return buf.String(), ee.ExitCode()
+	}
+	t.Fatalf("run: %v", err)
+	return
+}
+
+func withPassword(t *testing.T, dsn, password string) string {
+	t.Helper()
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(u.User.Username(), password)
+	return u.String()
+}
+
+func TestMigrateWebSchemaInitBinary(t *testing.T) {
+	bin := buildBinary(t)
+
+	t.Run("fresh, repeat and refusal", func(t *testing.T) {
+		dsn := webTarget(t)
+		secret := "s3cretpw-for-test"
+		dsn = withPassword(t, dsn, secret)
+
+		out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init")
+		if code != 0 || !strings.Contains(out, "created now") || !strings.Contains(out, "seeded 12") {
+			t.Fatalf("first run: exit %d: %s", code, out)
+		}
+		out, code = runWebSchemaInit(t, bin, dsn, "web-schema-init")
+		if code != 0 || !strings.Contains(out, "already up to date") || !strings.Contains(out, "already seeded") {
+			t.Fatalf("second run: exit %d: %s", code, out)
+		}
+
+		conn, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(context.Background())
+		if _, err := conn.Exec(context.Background(), `ALTER TABLE magnetico_web.users DROP CONSTRAINT users_role_check`); err != nil {
+			t.Fatal(err)
+		}
+		out, code = runWebSchemaInit(t, bin, dsn, "web-schema-init")
+		if code != 1 || !strings.Contains(out, "not the supported version") || !strings.Contains(out, "users_role_check") {
+			t.Fatalf("damaged schema: exit %d: %s", code, out)
+		}
+		// Refused means untouched: the constraint was not recreated.
+		var n int
+		if err := conn.QueryRow(context.Background(),
+			`SELECT count(*) FROM pg_constraint WHERE conname = 'users_role_check'`).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("the refused init repaired the schema (n=%d, err=%v)", n, err)
+		}
+		if strings.Contains(out, secret) {
+			t.Fatalf("password leaked: %s", out)
+		}
+	})
+
+	t.Run("requires the torrent schema", func(t *testing.T) {
+		dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
+		out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init")
+		if code != 1 {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+		conn, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close(context.Background())
+		var exists bool
+		if err := conn.QueryRow(context.Background(), `SELECT to_regnamespace('magnetico_web') IS NOT NULL`).Scan(&exists); err != nil || exists {
+			t.Fatalf("magnetico_web was created without the torrent schema (exists=%v, err=%v)", exists, err)
+		}
+	})
+}
+
+// docsGrants returns the documented minimum GRANT block, so the test runs
+// exactly what operators are told to run.
+func docsGrants(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("docs/web-deployment.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	a, b := strings.Index(s, "<!-- grants:begin -->"), strings.Index(s, "<!-- grants:end -->")
+	if a < 0 || b < a {
+		t.Fatal("grants block missing")
+	}
+	block := s[a:b]
+	i, j := strings.Index(block, "```sql"), strings.LastIndex(block, "```")
+	if i < 0 || j <= i {
+		t.Fatal("sql fence missing")
+	}
+	return block[i+len("```sql") : j]
+}
+
+// TestWebBinaryStartsWithProductionWebSchema starts the real service, as a
+// role holding exactly the documented minimum privileges, against the
+// production magnetico_web schema (created by the real init command), and
+// then proves that removing the SELECT on magneticod.schema_version makes
+// startup fail in a controlled way.
 func TestWebBinaryStartsWithProductionWebSchema(t *testing.T) {
-	t.Skip("blocked on milestone W2: the approved magnetico_web DDL and its explicit initialization command do not exist yet")
+	bin := buildBinary(t)
+	cl := pgtest.IntegrationCluster(t)
+	dsn := webTarget(t)
+	if out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init"); code != 0 {
+		t.Fatalf("web-schema-init: exit %d: %s", code, out)
+	}
+
+	suffix := pgtest.RandomSuffix()
+	rt, op := "wrt_"+suffix, "wop_"+suffix
+	admin, err := pgx.Connect(context.Background(), cl.AdminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+	for _, r := range []string{rt, op} {
+		if _, err := admin.Exec(context.Background(), "CREATE ROLE "+pgtest.QuoteIdent(r)+" LOGIN"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u, _ := url.Parse(dsn)
+	dbName := strings.TrimPrefix(u.Path, "/")
+	t.Cleanup(func() {
+		c, err := pgx.Connect(context.Background(), cl.AdminDSN)
+		if err != nil {
+			return
+		}
+		defer c.Close(context.Background())
+		_, _ = c.Exec(context.Background(), "DROP DATABASE IF EXISTS "+pgtest.QuoteIdent(dbName)+" WITH (FORCE)")
+		for _, r := range []string{op, rt} {
+			_, _ = c.Exec(context.Background(), "DROP ROLE IF EXISTS "+pgtest.QuoteIdent(r))
+		}
+	})
+	dbConn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbConn.Close(context.Background())
+	grants := strings.NewReplacer("magnetico_web_rt", pgtest.QuoteIdent(rt), "magnetico_web_op", pgtest.QuoteIdent(op)).Replace(docsGrants(t))
+	if _, err := dbConn.Exec(context.Background(), grants); err != nil {
+		t.Fatalf("documented grants: %v", err)
+	}
+	ru := *u
+	ru.User = url.UserPassword(rt, "rt-secret-pw")
+	roleDSN := ru.String()
+
+	start := func(extraEnv ...string) (*exec.Cmd, chan error, *bytes.Buffer, string) {
+		addr := freeLoopbackAddr(t)
+		cmd := exec.Command(bin, "web")
+		cmd.Env = webEnv(append([]string{"MAGNETICO_WEB_DATABASE=" + roleDSN, "MAGNETICO_WEB_LISTEN=" + addr,
+			"MAGNETICO_WEB_PUBLIC_URL=http://" + addr}, extraEnv...)...)
+		var out bytes.Buffer
+		cmd.Stderr, cmd.Stdout = &out, &out
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		exited := make(chan error, 1)
+		go func() { exited <- cmd.Wait() }()
+		t.Cleanup(func() { _ = cmd.Process.Kill() })
+		return cmd, exited, &out, addr
+	}
+
+	// 1. With the documented minimum privileges the service starts and stops.
+	cmd, exited, out, addr := start()
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		if resp, err := http.Get("http://" + addr + "/readyz"); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				break
+			}
+		}
+		select {
+		case err := <-exited:
+			t.Fatalf("web exited early as the restricted role: %v\n%s", err, out.String())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not ready:\n%s", out.String())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("exit after SIGTERM: %v\n%s", err, out.String())
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no exit after SIGTERM:\n%s", out.String())
+	}
+
+	// 2. Without SELECT on magneticod.schema_version startup fails in a
+	// controlled way: exit 1, the missing privilege is named, no listener,
+	// no secrets.
+	if _, err := dbConn.Exec(context.Background(),
+		"REVOKE SELECT ON magneticod.schema_version FROM "+pgtest.QuoteIdent(rt)); err != nil {
+		t.Fatal(err)
+	}
+	_, exited, out, addr = start()
+	select {
+	case err := <-exited:
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			t.Fatalf("exit = %v, want status 1\n%s", err, out.String())
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatalf("the service did not fail startup:\n%s", out.String())
+	}
+	msg := out.String()
+	if !strings.Contains(msg, "lacks privileges") || !strings.Contains(msg, "magneticod.schema_version: SELECT") {
+		t.Fatalf("startup failure is not controlled/actionable:\n%s", msg)
+	}
+	if strings.Contains(msg, "rt-secret-pw") || strings.Contains(msg, "SQLSTATE") {
+		t.Fatalf("secret or raw driver error in output:\n%s", msg)
+	}
+	if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+		c.Close()
+		t.Fatal("something listens although startup verification failed")
+	}
 }

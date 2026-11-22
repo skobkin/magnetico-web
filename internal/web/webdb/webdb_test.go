@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/skobkin/magnetico-web/internal/pgtest"
+	"github.com/skobkin/magnetico-web/internal/web/webschema"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -91,19 +92,50 @@ func TestVerifyFailsClosed(t *testing.T) {
 		}
 	})
 
-	// A test-local stand-in for the W2 schema, created only inside a
-	// disposable database, proves the success path of the verifier. It is
-	// not the production DDL and is never created by production code.
-	t.Run("both schemas present", func(t *testing.T) {
+	t.Run("both schemas present (production DDL)", func(t *testing.T) {
 		dsn := cl.TestDatabase(t)
 		if err := persistence.InitSchema(ctx(t), dsn); err != nil {
 			t.Fatal(err)
 		}
-		exec(t, dsn, `CREATE SCHEMA magnetico_web; CREATE TABLE magnetico_web.schema_version (version int)`)
+		if _, err := webschema.Init(ctx(t), dsn); err != nil {
+			t.Fatal(err)
+		}
 		b, _ := Open(ctx(t), dsn, 4)
 		defer b.Close()
 		if err := b.Verify(ctx(t)); err != nil {
 			t.Fatalf("verify: %v", err)
+		}
+	})
+
+	t.Run("exact web version is required", func(t *testing.T) {
+		dsn := cl.TestDatabase(t)
+		if err := persistence.InitSchema(ctx(t), dsn); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := webschema.Init(ctx(t), dsn); err != nil {
+			t.Fatal(err)
+		}
+		exec(t, dsn, `UPDATE magnetico_web.web_version SET version = 2`)
+		b, _ := Open(ctx(t), dsn, 4)
+		defer b.Close()
+		if err := b.Verify(ctx(t)); !errors.Is(err, ErrWebSchemaUnsupported) {
+			t.Fatalf("err = %v, want ErrWebSchemaUnsupported", err)
+		}
+	})
+
+	t.Run("structurally damaged web schema is refused", func(t *testing.T) {
+		dsn := cl.TestDatabase(t)
+		if err := persistence.InitSchema(ctx(t), dsn); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := webschema.Init(ctx(t), dsn); err != nil {
+			t.Fatal(err)
+		}
+		exec(t, dsn, `ALTER TABLE magnetico_web.users DROP CONSTRAINT users_role_check`)
+		b, _ := Open(ctx(t), dsn, 4)
+		defer b.Close()
+		if err := b.Verify(ctx(t)); !errors.Is(err, ErrWebSchemaUnsupported) {
+			t.Fatalf("err = %v, want ErrWebSchemaUnsupported", err)
 		}
 	})
 
@@ -112,8 +144,10 @@ func TestVerifyFailsClosed(t *testing.T) {
 		if err := persistence.InitSchema(ctx(t), dsn); err != nil {
 			t.Fatal(err)
 		}
-		exec(t, dsn, `CREATE SCHEMA magnetico_web; CREATE TABLE magnetico_web.schema_version (version int);
-			UPDATE magneticod.schema_version SET version = version + 100`)
+		if _, err := webschema.Init(ctx(t), dsn); err != nil {
+			t.Fatal(err)
+		}
+		exec(t, dsn, `UPDATE magneticod.schema_version SET version = version + 100`)
 		b, _ := Open(ctx(t), dsn, 4)
 		defer b.Close()
 		err := b.Verify(ctx(t))

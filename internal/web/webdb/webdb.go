@@ -5,19 +5,26 @@ package webdb
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/skobkin/magnetico-web/internal/web/webschema"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
-// ErrWebSchemaMissing is returned while the dedicated magnetico_web schema
-// (created by the explicit initialization command of milestone W2) is absent
-// or lacks its version table. The web service fails closed on it.
-var ErrWebSchemaMissing = errors.New(
-	"the magnetico_web schema is missing or incomplete: initialize it with the explicit schema command before starting the web service")
+// Re-exported so callers need only this package: the failure classes of the
+// startup verification.
+var (
+	// ErrWebSchemaMissing: the magnetico_web schema (created by
+	// `magnetico migrate web-schema-init`) or its version table is absent.
+	ErrWebSchemaMissing = webschema.ErrWebSchemaMissing
+	// ErrWebSchemaUnsupported: the schema is not exactly the supported
+	// version-1 structure.
+	ErrWebSchemaUnsupported = webschema.ErrWebSchemaUnsupported
+	// ErrWebPrivileges: the database role lacks a required privilege.
+	ErrWebPrivileges = webschema.ErrWebPrivileges
+)
 
 // Backend is a pgx pool plus the verification logic.
 type Backend struct {
@@ -43,27 +50,26 @@ func Open(ctx context.Context, rawURL string, maxConns int) (*Backend, error) {
 	return &Backend{pool: pool}, nil
 }
 
-// Verify checks the torrent schema (the shared read-only verification: exact
-// schema objects and version, pg_trgm, no legacy shape) and then that the
-// magnetico_web schema and its schema_version table exist.
+// Verify is the read-only startup verification. In order:
 //
-// W1 limitation: the web schema's version row and DDL are defined by W2, so
-// only presence is verified here; W2 extends this with the exact version
-// check. Until W2 provides the schema, the real binary cannot start.
+//  1. the role can read the torrent schema (ErrWebPrivileges names what is
+//     missing, so a missing grant is a controlled failure, not a raw driver
+//     error);
+//  2. the torrent schema is exactly the supported one (the shared
+//     persistence.VerifySchema: schema objects and version, pg_trgm, no
+//     legacy shape);
+//  3. the magnetico_web schema is exactly the supported version-1 structure
+//     and the role holds the runtime privileges (webschema.Verify).
+//
+// It never creates, alters or migrates anything.
 func (b *Backend) Verify(ctx context.Context) error {
+	if err := webschema.VerifyTorrentPrivileges(ctx, b.pool); err != nil {
+		return err
+	}
 	if err := persistence.VerifySchema(ctx, b.pool); err != nil {
 		return err
 	}
-	var schemaOK, versionOK bool
-	if err := b.pool.QueryRow(ctx,
-		`SELECT to_regnamespace('magnetico_web') IS NOT NULL, to_regclass('magnetico_web.schema_version') IS NOT NULL`,
-	).Scan(&schemaOK, &versionOK); err != nil {
-		return fmt.Errorf("%w: %w", persistence.ErrStorageIO, err)
-	}
-	if !schemaOK || !versionOK {
-		return ErrWebSchemaMissing
-	}
-	return nil
+	return webschema.Verify(ctx, b.pool, webschema.Runtime)
 }
 
 // Ping implements the readiness check.

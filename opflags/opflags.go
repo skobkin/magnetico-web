@@ -18,13 +18,14 @@ type OpFlags struct {
 
 	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT crawler: precheck, fetch metadata, queue it durably on local disk and deliver it to the ingest service over authenticated HTTP." subcommands-optional:"true"`
 	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer)."`
-	Web     WebOptions     `command:"web" description:"Run the authenticated web UI service (milestone W1: server foundation, health and robots routes; search, accounts and API arrive in later milestones)."`
+	Web     WebOptions     `command:"web" description:"Run the authenticated web UI service (health and robots routes so far; search, accounts and API arrive in later milestones)."`
 	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
 }
 
 // MigrateOptions carries the subcommands of `migrate`.
 type MigrateOptions struct {
 	SchemaInit       SchemaInitOptions `command:"schema-init" description:"Create the 0.8.0 PostgreSQL schema on a fresh database. Strictly non-destructive: existing and legacy databases are refused, never modified."`
+	WebSchemaInit    SchemaInitOptions `command:"web-schema-init" description:"Create the magnetico_web schema (accounts, sessions, invitations, API and RSS tokens, one-time links, trackers, settings) and seed the approved tracker list once (requires a verified 0.8.0 schema; run before starting the web service). Non-destructive and idempotent; an existing schema that is not exactly the supported version is refused and left untouched."`
 	IngestSchemaInit SchemaInitOptions `command:"ingest-schema-init" description:"Create the magnetico_ingest queue schema (requires a verified 0.8.0 schema; run after the import and before starting ingest). Non-destructive and idempotent."`
 	Torrents         TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)." subcommands-optional:"true"`
 	VerifyDecode     VerifyOptions     `command:"verify-decode" description:"Full target-only decode scan of an imported database: every stored torrent is fetched and decoded, metadata revalidated, orphan blobs reported. The source database is never contacted."`

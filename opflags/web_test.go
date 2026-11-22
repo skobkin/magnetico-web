@@ -381,3 +381,63 @@ func TestWebSMTPValidation(t *testing.T) {
 		t.Fatal("--smtp-password must not exist")
 	}
 }
+
+// The unknown-variable error must not claim that a configuration file is
+// refused for web (the YAML file has been supported since the W1 review).
+func TestWebUnknownEnvErrorMentionsConfigFileWithoutRefusal(t *testing.T) {
+	webEnvClean(t)
+	t.Setenv("MAGNETICO_WEB_NOPE", "1")
+	_, err := parseWeb(t, "--public-url", webPublic)
+	if err == nil || !strings.Contains(err.Error(), "MAGNETICO_WEB_NOPE") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "refused") {
+		t.Fatalf("stale wording: %v", err)
+	}
+	if !strings.Contains(err.Error(), "MAGNETICO_CONFIG_FILE_PATH, ") {
+		t.Fatalf("known variables list lost the config file variable: %v", err)
+	}
+}
+
+// `migrate web-schema-init` uses the existing migrate database conventions
+// and introduces no variable of its own.
+func TestMigrateWebSchemaInitUsesMigrateDatabaseConventions(t *testing.T) {
+	for _, kv := range os.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		if strings.HasPrefix(name, "MAGNETICO_MIGRAT") || name == "MAGNETICO_CONFIG_FILE_PATH" {
+			t.Setenv(name, "")
+			os.Unsetenv(name)
+		}
+	}
+	parse := func(args ...string) *OpFlags {
+		t.Helper()
+		o := &OpFlags{}
+		cmd, err := o.parseArgs(append([]string{"migrate", "web-schema-init"}, args...))
+		if err != nil || cmd != "migrate" || o.Migrate.Subcommand != "web-schema-init" {
+			t.Fatalf("cmd=%q sub=%q err=%v", cmd, o.Migrate.Subcommand, err)
+		}
+		return o
+	}
+
+	if got := parse().Migrate.WebSchemaInit.DatabaseURL; got != migrateDefaults().DatabaseURL {
+		t.Fatalf("default = %s", got)
+	}
+	t.Setenv("MAGNETICO_MIGRATE_DATABASE", "postgres://env@localhost/db")
+	if got := parse().Migrate.WebSchemaInit.DatabaseURL; got != "postgres://env@localhost/db" {
+		t.Fatalf("env = %s", got)
+	}
+	if got := parse("--database", "postgres://cli@localhost/db").Migrate.WebSchemaInit.DatabaseURL; got != "postgres://cli@localhost/db" {
+		t.Fatalf("flag must beat env: %s", got)
+	}
+
+	t.Setenv("MAGNETICO_MIGRATE_DATABASE", "")
+	os.Unsetenv("MAGNETICO_MIGRATE_DATABASE")
+	file := filepath.Join(t.TempDir(), "c.yml")
+	if err := os.WriteFile(file, []byte("migrateDatabaseURL: postgres://file@localhost/db\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MAGNETICO_CONFIG_FILE_PATH", file)
+	if got := parse().Migrate.WebSchemaInit.DatabaseURL; got != "postgres://file@localhost/db" {
+		t.Fatalf("file = %s", got)
+	}
+}

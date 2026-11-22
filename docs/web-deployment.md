@@ -1,4 +1,4 @@
-# `magnetico web` — configuration and reverse-proxy notes (W1)
+# `magnetico web` — configuration, database and reverse-proxy notes (W1, W2)
 
 Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Nothing here has been integration-tested against a real proxy yet (that belongs to a later milestone).
 
@@ -53,3 +53,36 @@ The option names below are taken from the upstream projects' documentation as I 
 - **Caddy.** In `reverse_proxy`, `transport http { response_header_timeout 90s }` (and a read timeout if you set one); trusted proxies for Caddy's own client-IP handling are configured with `trusted_proxies` in the server options.
 
 The service logs the effective deadlines and this requirement at startup. Full deployment integration testing is out of scope for W1.
+
+## 4. Database schema and roles (W2)
+
+Order of operations on a fresh database (all explicit; the web service never creates or migrates anything):
+
+1. `magnetico migrate schema-init` — the torrent schema (`magneticod`).
+2. `magnetico migrate web-schema-init` — the `magnetico_web` schema: accounts, sessions, invitations, API and RSS tokens, one-time links, trackers, settings, and the `web_version` table. It also seeds the approved historical tracker list **once** (never again, so later operator edits are kept). It is non-destructive and idempotent: an already initialized, structurally identical schema is accepted; **anything else (a different version, a missing constraint or index, an extra column or trigger, …) is refused without any change** — there is no automatic repair. The target database comes from `--database`, `MAGNETICO_MIGRATE_DATABASE` or the `migrateDatabaseURL` file key (the same as the other `migrate` commands) and needs a role that may create schemas.
+3. Grant the minimum privileges below, then start `magnetico web` with `MAGNETICO_WEB_DATABASE` set to the runtime role.
+
+At every start the service verifies the torrent schema, the exact `magnetico_web` structure and these privileges, and refuses to start (exit status 1, with the missing privilege named) if anything is off. The version table is deliberately named `web_version`: the torrent-schema verification treats a table called `schema_version` in *any* schema as one of its own markers.
+
+### Minimum grants
+
+The runtime role reads the torrent schema (including `magneticod.schema_version`, which the startup verification reads) and has DML — but no DDL — on `magnetico_web`. The operator role (used by the administrator commands) adds tracker writes. Replace the role names as needed.
+
+<!-- grants:begin -->
+```sql
+-- runtime role (the web service)
+GRANT USAGE ON SCHEMA magneticod TO magnetico_web_rt;
+GRANT SELECT ON magneticod.torrents, magneticod.torrent_file_blobs, magneticod.schema_version TO magnetico_web_rt;
+GRANT USAGE ON SCHEMA magnetico_web TO magnetico_web_rt;
+GRANT SELECT ON magnetico_web.web_version, magnetico_web.settings, magnetico_web.trackers TO magnetico_web_rt;
+GRANT SELECT, INSERT, UPDATE ON magnetico_web.users, magnetico_web.api_tokens,
+      magnetico_web.rss_tokens, magnetico_web.invites TO magnetico_web_rt;
+GRANT SELECT, INSERT, UPDATE, DELETE ON magnetico_web.sessions, magnetico_web.one_time_tokens TO magnetico_web_rt;
+
+-- operator role (administrator commands): everything above plus tracker writes
+GRANT magnetico_web_rt TO magnetico_web_op;
+GRANT INSERT, UPDATE, DELETE ON magnetico_web.trackers TO magnetico_web_op;
+```
+<!-- grants:end -->
+
+These statements are executed verbatim by the integration tests, which start the real service as the restricted role and check that revoking any of them (for example `SELECT` on `magneticod.schema_version`) makes startup fail with a controlled message.
