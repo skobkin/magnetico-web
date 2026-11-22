@@ -46,10 +46,14 @@ PostgreSQL must run with `fsync=on` (ingest refuses to start otherwise). The pro
 bodies of at least 17 MiB on `/api/ingest/v1/torrents`.
 
 **Memory:** set `GOMEMLIMIT=256MiB` on `magnetico ingest` (measured on synthetic load at 40 records/s over two
-hours plus bursts: mean RSS 459 → 304 MiB, peak 621 → 354 MiB, no throughput or CPU cost; see
-`docs/wip/06-crawler-ingest-results.md`). This is a Go runtime memory *target*, not a hard RSS or
-container limit: the process can exceed it, and the container limit should stay at least twice as high
-(≥ 512 MiB). The crawler needs no setting (RSS ≈ 30 MiB).
+hours plus bursts: mean RSS 459 → 304 MiB, peak 621 → 354 MiB; ingest CPU rose slightly, from about 5.0 % to
+5.2 % of one core, with no measurable throughput or backlog regression and GC CPU still small; see
+`docs/wip/06-crawler-ingest-results.md`). This is a Go runtime memory *target*, not a hard RSS or container
+limit: the process can exceed it. For initial staging give the container a **1 GiB** memory limit: with
+`GOMEMLIMIT=256MiB` it survived every tested case, including records near the 16 MiB limit and eight
+simultaneous near-limit submissions (peak 518 MiB). A 512 MiB limit is not recommended (the default runtime was
+OOM-killed there in that worst case; with `GOMEMLIMIT` it ran at the limit). 1 GiB has been tested on synthetic
+data only and is not claimed to suffice for every workload. The crawler needs no setting (RSS ≈ 30 MiB).
 
 **Deployment order** (new databases or after the migration):
 

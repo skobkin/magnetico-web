@@ -187,8 +187,9 @@ Command per row: `MAGNETICO_E2E_PROFILE_SECONDS=720 MAGNETICO_E2E_PROFILE_ENV="<
 | Autovacuum runs (analyze) | 12 (12) | 12 (12) | 12 (12) | 12 (12) |
 | Final | 31,800 of 31,800 stored; 0 quarantined; usage drift 0 | same | same | same |
 
-Reading: the ingest process uses ≈ 5 % of one core in every configuration. The limit changes memory, not CPU:
-at 256 MiB GC takes 0.6 % of that 5 % (≈ 4× the cycles, 8 ms total pause). 384 and 512 MiB barely bind
+Reading: the ingest process uses ≈ 5 % of one core in every configuration. The limit mainly changes memory:
+at 256 MiB GC takes 0.6 % of that 5 % (≈ 4× the cycles, 8 ms total pause); the differences in total CPU between
+the four runs (4.9–5.3 %) are within run-to-run noise of a single run each. 384 and 512 MiB barely bind
 (the default GC goal is already 340–410 MiB), so they save little or nothing. The ingest-side time was
 dominated by system time (≈ 45 %), i.e. HTTP and PostgreSQL I/O, not GC.
 
@@ -230,7 +231,7 @@ counted the same) in both soaks; the queue relation stayed ≤ 1.8 MiB (heap ≤
 
 ### Deviations and limits
 
-- Disk-root deviation and the forensics container leak: above.
+- Disk-root deviation and the forensics container leak: above (the leak was fixed afterwards, see below).
 - The first 60-second smoke run exposed two harness errors (steady rate diluted by a sample taken after the
   producer exited; negative crawler CPU), fixed before the reported runs. No reported number comes from it.
 - The profiling wrapper's heap figures are measured in the test-only `ingestd` (production `server.Run`); the
@@ -244,11 +245,13 @@ counted the same) in both soaks; the queue relation stayed ≤ 1.8 MiB (heap ≤
 ### Recommendation: `GOMEMLIMIT=256MiB` for `magnetico ingest`
 
 Evidence: over two hours it lowered mean RSS from 459 to 304 MiB and peak RSS from 621 to 354 MiB, with no
-measurable throughput, backlog, drain-time, correctness or CPU difference (≈ 5 % of a core either way; GC
-0.5 %). It must be read as a **Go runtime memory target**, not a hard limit: it cannot lower live data, and
+measurable throughput, backlog, drain-time or correctness difference. Ingest CPU rose slightly, from ≈ 5.0 % to
+≈ 5.2 % of one core over the two hours (358 s → 374 s; GC CPU 0.3 % → 0.5 %), i.e. a small but real cost, not
+zero. It must be read as a **Go runtime memory target**, not a hard limit: it cannot lower live data, and
 the process may exceed it (here the live heap was ≤ 205 MiB, close to it; a workload with a larger live
-set, e.g. larger records, makes the GC run more often rather than keeping RSS below the figure). Leave the
-container memory limit at least 2× higher (≥ 512 MiB; the default-runtime peak was 634 MiB HWM). Watch the GC
+set, e.g. larger records, makes the GC run more often rather than keeping RSS below the figure). The
+container limit is a separate, hard setting: see "Final corrections and edge-case qualification" below, which
+supersedes the earlier "≥ 512 MiB" suggestion with 1 GiB for initial staging. Watch the GC
 share if records grow: `ingest` CPU must stay in the single digits percent. 384/512 MiB are not worth
 setting (no benefit measured). Added to `UPGRADE.md`.
 
@@ -265,7 +268,169 @@ determinism rules (`codec/compress.go`) and needs its own task and owner approva
 
 Race suite **pass**; short comparison **pass** (no anomalies); soak A **pass**; soak B **pass**; no early stop,
 no correctness defect, no lost, duplicated or quarantined records, usage accounting exact, all queues drained.
-Remaining blockers from this qualification: **none**. Open items unrelated to the verdicts: the
-`forensics` TestMain container leak; real-DHT acceptance check (separate, not run); behaviour with large
-records and several concurrent crawlers (not covered). The implementation is, on this evidence, ready for the
+Remaining blockers from this qualification: **none**. Open items unrelated to the verdicts: real-DHT
+acceptance check (separate, not run). The earlier gaps (forensics container leak, large records, several
+concurrent crawlers) are closed by the next section. The implementation is, on this evidence, ready for the
 next staging-review decision.
+
+## Final corrections and edge-case qualification (2026-11-22)
+
+Scope: housekeeping corrections, large-record and multi-crawler qualification, the Brotli follow-up issue.
+Same VM as above (8 vCPU, 31 GiB, 7 GiB swap unused, Go 1.27.0, Docker, `postgres:17` local image, synthetic
+data only, no DHT, no production connection). Raw logs, time series and profiles are outside Git in
+`/home/herdr/qual/task06-edge/`.
+
+### Corrections
+
+- **forensics container leak — fixed** (`44a7b721`): `internal/migration/forensics/pgmain_test.go` adds the
+  repository-convention `TestMain` calling `pgtest.RunTests`. Verified: without it one `postgres:17` container
+  survives a run (control); with it none remains after a passing run and after a deliberately failing test
+  (temporary failing test, removed). The global pgtest lifecycle was not touched.
+- **CPU wording** corrected above and in `UPGRADE.md` (≈ 5.0 % → ≈ 5.2 % of a core; no measurable throughput or
+  backlog regression).
+- **Container limit** guidance revised (below): 1 GiB for initial staging, not claimed universal.
+- **Brotli follow-up filed:** Forgejo issue #47
+  (https://git.skobk.in/skobkin/magnetico-web/issues/47), performance optimisation, not a release blocker; no
+  codec change made. No earlier open issue covered it (#43 is the closed determinism fix).
+
+### Storage layout used
+
+Docker's data root is on `/` (14 GiB, ≈ 9.3 GiB free). All PostgreSQL data for these runs lived in a dedicated
+disposable container (`magnetico-task06-pg`) with a **bind mount** from `/home/herdr/qual/task06-edge/pgdata`
+(no anonymous volume), reached through `MAGNETICO_TEST_POSTGRES_DSN`; `TMPDIR`, queues, profiles and logs
+were under `/home/herdr/`. Free space stayed at `/` 9.3 GiB and `/home` 110 GiB before and after (checked
+before each stage by the harness, minimum 12 GiB). The postgres image's own layers and the per-run ingest
+containers still used root-filesystem space (negligible). No `docker system prune`, no Docker or mount
+reconfiguration; only containers created by this task were removed.
+
+### Harness (test-only, commit `77c868cc`)
+
+- `crawlerd`: `-phases rate:count,…`, `-big bytes:count,…` (valid records whose serialized JSON is exactly the
+  requested size, built from many files), `-big-from`, `-poison-large N` (over-limit payloads appended straight
+  to the queue), extra counters on the `DONE` line. Unit tests check the exact sizes.
+- `edge_test.go` (`MAGNETICO_E2E_EDGE_DIR`): stages with per-stage timeouts (300 s) and per-stage ingest
+  memory/CPU from the 1 s `MEM` lines; optional hard container limit (`MAGNETICO_E2E_EDGE_DOCKER_MEM`) running
+  the static `ingestd` in a `postgres:17` container on the host network with `--memory = --memory-swap`; the
+  container's cgroup `memory.peak` and Docker's `OOMKilled` are read; an OOM kill fails the test.
+- `multi_test.go` (`MAGNETICO_E2E_MULTI_DIR`): three crawlers, fault-injecting proxy, early stops (wall clock
+  15 min, free space, run-directory 2 GiB, ingest anonymous RSS 1 GiB, 120 s without progress, > 200
+  goroutines, any quarantine row, usage drift).
+- Both run with `go test -race` clean on the harness packages; `forensics` race-tested.
+
+### Limits used (from the code, not assumed)
+
+`record.MaxRecordBytes` = 16 MiB of serialized JSON (no fixed relation to the bencoded size; the metadata
+itself is bounded at 10 MiB), `server.MaxSubmitBodyBytes` = 17 MiB, ≤ 256 records per request, ≤ 8 concurrent
+submit handlers, `codec.DefaultLimits` MaxFiles 250,000, sender batches ≤ 8 MiB (a single larger record is
+sent alone). Large test records have ~60-byte paths: 16 MiB ≈ 200,000 files, below the file limit.
+
+### Large-record qualification
+
+One run per configuration, each on a fresh database: `mixed` = 300 ordinary records at 40/s with 20 × 1 MiB,
+6 × 8 MiB and 3 × 16 MiB−1 KiB records interleaved (329 records, 116 MiB JSON); `lost-ack` = 4 large records
+whose first three 202s are dropped after the commit; `boundaries` = raw HTTP limits; `oversize` = crawler-side
+and server-side over-limit quarantine; `3 crawlers` = three simultaneous senders of 2 × 16 MiB + 2 × 8 MiB
+each; `8 × 16 MiB` = eight simultaneous ~16 MiB submissions (the spec's maximum of submit slots; it needs
+eight clients each posting a near-limit record at the same moment, which one crawler never does, and the
+metadata size is capped at 10 MiB).
+
+**Correctness (all five configurations, all stages):** every record stored exactly once, PostgreSQL queue
+drained, 0 rows in the PostgreSQL quarantine, `used_bytes` 0 and usage drift 0 after each stage, 0 duplicate
+torrents. Every one of the 29 large torrents of the `mixed` stage was read back: the stored blob decodes to
+exactly the generated file list (count, paths, sizes, total). Boundaries behaved as specified:
+
+| Case | Result |
+|---|---|
+| single record exactly 16 MiB | 202, stored |
+| single record 16 MiB + 1 | 413 `record_too_large` |
+| batch with one oversized record | 413 `payload_too_large` |
+| oversized record with `v` = 2 | 400 `unsupported_version` (precedence) |
+| two 8 MiB records in one request | 202, both stored |
+| 256 records / 257 records | 202 / 400 `invalid_request` |
+| body exactly 17 MiB / 17 MiB + 1 | 202 / 413 `payload_too_large` |
+| unsupported version; missing field; invalid UTF-8; batch with one invalid | 400 `unsupported_version`, `invalid_record`, `invalid_record`, `invalid_batch` |
+| 250,000 files / 250,001 files | 202, stored / 400 `invalid_record` |
+
+Nothing from a rejected request was queued. The crawler quarantined two over-limit records locally without
+sending them (`record_too_large`, intact) and, for two over-limit payloads appended straight to its queue, the
+server answered 413 and the sender quarantined each (`quarantined=2`); the 50 ordinary records still arrived.
+Lost acknowledgements of 8 and 15 MiB bodies were resent and produced no duplicates.
+
+**Memory and CPU (per stage, ingest process; hard-limit runs also report the container's cgroup peak):**
+
+| Stage | host, 256 MiB | 1 GiB + 256 MiB | 512 MiB + 256 MiB | 1 GiB, default | 512 MiB, default |
+|---|---|---|---|---|---|
+| `mixed`: RSS max (MiB) | 260 | 267 | 255 | 320 | 292 |
+| `mixed`: live heap max (MiB) | 159 | 168 | 121 | 144 | 119 |
+| `mixed`: ingest CPU / GC CPU (s, for 15.5 s) | 12.1 / 0.6 | 11.8 / 0.6 | 11.9 / 0.6 | 12.0 / 0.5 | 12.4 / 0.6 |
+| `3 crawlers`: RSS max / HWM (MiB) | 270 / 336 | 267 / 277 | 269 / 272 | 415 / 543 | 473 / 473 |
+| `3 crawlers`: container peak (MiB) | – | (≤ 313) | (≤ 304) | 571 | 501 |
+| `8 × 16 MiB`: RSS max / HWM (MiB) | 443 / 624 | 424 / 498 | 268 / 519 | 757 / 831 | **OOM-killed** |
+| `8 × 16 MiB`: live heap max (MiB) | 416 | 381 | 216 | 431 | – |
+| `8 × 16 MiB`: container peak (MiB) | – | 518 | 512 (= limit) | 867 | killed (exit 137) |
+| Survived all stages | yes | yes | yes, at the limit | yes, thin margin | **no** |
+
+Ingest CPU during the `mixed` stage was ≈ 0.8 core for 15 s (116 MiB of JSON in 15 s, dominated by Brotli
+and trie work for the large lists), against ≈ 5 % at ordinary load: a burst of large records is CPU-heavy but
+short. GC CPU was 4–14 % of ingest CPU across the large-record stages (highest in the default-runtime runs). Container peaks include page cache
+that the kernel can reclaim, so they overstate the anonymous footprint. The summary file's end-of-run
+container values read 0 because the cgroup is gone after the graceful stop; the per-stage values above are
+the evidence. Crawler RSS during the large-record stages was not measured (it was 29–32 MiB with ordinary
+records in the multi-crawler test).
+
+The 512 MiB + default-runtime run was OOM-killed by the kernel (`OOMKilled=true`, exit 137) when eight
+~16 MiB bodies arrived at once; the clients saw `connection reset`. The 512 MiB container with
+`GOMEMLIMIT=256MiB` survived the same stage but touched exactly the limit, which is no margin. Whether the
+eight records acknowledged or not before the kill was not examined; acknowledged records are committed
+before the 202, so recovery relies on the already-tested idempotent redelivery.
+
+### Hard container limits: verdict
+
+- **1 GiB with `GOMEMLIMIT=256MiB`: viable for every tested case** (peak 518 MiB in the worst case, 2×
+  headroom). Use this for initial staging.
+- 1 GiB with the default runtime also survived, but peaked at 867 MiB (85 %) in the eight-submission case: do not
+  rely on it without `GOMEMLIMIT`.
+- 512 MiB with `GOMEMLIMIT=256MiB` survived but with no margin in the worst case; 512 MiB with the default
+  runtime was OOM-killed. **512 MiB is not recommended** until the large-submission memory is reduced.
+- Not established: that 1 GiB suffices for every possible load (e.g. different file/path shapes at the same JSON
+  size, other concurrent activity in the process, PostgreSQL on the same container). It is a tested starting
+  point, not a guarantee.
+
+A possible follow-up, not filed or done: the worst-case memory comes from holding up to eight 17 MiB request
+bodies plus their decoded forms; lowering the number of submit slots or streaming the decode would reduce it.
+This touches the spec's server limits and needs the owner's decision.
+
+### Multi-crawler stress
+
+Three `crawlerd` processes with separate durable SQLite queues, ids overlapping (crawlers 0/1 and 1/2 by a
+third, 0/2 disjoint), union 11,900 distinct torrents; steady 3 × 15 = 45 records/s for 240 s, then a burst of
+3 × 1,500 records at 3 × 150 = 450/s; ingest `GOMEMLIMIT=256MiB`; 253 s wall. Events: ingest stopped
+gracefully at t = 75 s and restarted at t = 96 s (21 s outage); crawler 1 stopped with SIGTERM during the
+outage while holding 75 pending records and restarted on the same queue directory (it resumed from the
+number of records it had appended); the proxy dropped 8 acknowledgements after the upstream commit.
+
+| Result | Value |
+|---|---|
+| Stored | 11,900 = exactly the union; 0 duplicates; none missing |
+| PostgreSQL queue / quarantine / usage drift / `used_bytes` | 0 / 0 / 0 / 0 (drift checked every 5 s) |
+| Crawler queues and local quarantine at the end | 0 / 0 for all three |
+| Crawler 1 after the restart | appended 3,900 + 1,200 before = 5,100; acked 3,975 + 1,125 = 5,100 |
+| Crawler queues after the ingest restart | back to ≤ 30 records 55 s after ingest was ready (sender backoff up to 60 s); peak queue sum 1,228 records |
+| Burst drain | PostgreSQL queue peak 3 rows; fully persisted at the moment the last crawler emptied its queue |
+| Ingest RSS / anonymous / live heap peak | 266 / 252 / 170 MiB (HWM 285 MiB) |
+| Ingest CPU | 14.9 s over 251 s = 5.9 % of a core (7.3 % after the restart; GC 161 ms) |
+| Crawler RSS | ≤ 32 MiB each |
+
+The shorter smoke run (3 × 900 records) gave the same exact results. Not covered: more than three crawlers,
+a PostgreSQL outage during the burst, crawler SIGKILL in this combined scenario (covered separately by the
+existing fault tests), and real DHT traffic.
+
+### Failures, deviations and remaining risks
+
+- Harness bugs found and fixed before the reported runs: a `/` in a stage name used as a file name; an id range
+  shared between two stages. Neither is a product defect; the first complete runs after the fixes are the
+  ones reported.
+- No correctness or data-loss defect found; no production code changed.
+- Remaining: worst-case memory with many simultaneous ~16 MiB submissions (above); real-DHT acceptance;
+  records near the limit were tested for bounded volumes only (not as a stream); PostgreSQL on the same
+  host as ingest was not memory-limited.
