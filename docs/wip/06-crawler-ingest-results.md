@@ -334,7 +334,13 @@ each; `8 × 16 MiB` = eight simultaneous ~16 MiB submissions (the spec's maximum
 eight clients each posting a near-limit record at the same moment, which one crawler never does, and the
 metadata size is capped at 10 MiB).
 
-**Correctness (all five configurations, all stages):** every record stored exactly once, PostgreSQL queue
+**Completion:** four configurations (host with 256 MiB, 1 GiB + 256 MiB, 512 MiB + 256 MiB, 1 GiB with the
+default runtime) completed the full suite. The fifth, 512 MiB with the default runtime, completed the first
+five stages and was OOM-killed during `8 × 16 MiB`, so that scenario did not finish and has no correctness
+check (stored count, queue drain, accounting) behind it; the kill is a failed run, not a pass.
+
+**Correctness (the four completed configurations, all stages; the fifth for the five stages it finished):**
+every record stored exactly once, PostgreSQL queue
 drained, 0 rows in the PostgreSQL quarantine, `used_bytes` 0 and usage drift 0 after each stage, 0 duplicate
 torrents. Every one of the 29 large torrents of the `mixed` stage was read back: the stored blob decodes to
 exactly the generated file list (count, paths, sizes, total). Boundaries behaved as specified:
@@ -373,9 +379,10 @@ Lost acknowledgements of 8 and 15 MiB bodies were resent and produced no duplica
 Ingest CPU during the `mixed` stage was ≈ 0.8 core for 15 s (116 MiB of JSON in 15 s, dominated by Brotli
 and trie work for the large lists), against ≈ 5 % at ordinary load: a burst of large records is CPU-heavy but
 short. GC CPU was 4–14 % of ingest CPU across the large-record stages (highest in the default-runtime runs). Container peaks include page cache
-that the kernel can reclaim, so they overstate the anonymous footprint. The summary file's end-of-run
-container values read 0 because the cgroup is gone after the graceful stop; the per-stage values above are
-the evidence. Crawler RSS during the large-record stages was not measured (it was 29–32 MiB with ordinary
+that the kernel can reclaim, so they overstate the anonymous footprint. In the reported runs the
+summary file's end-of-run container values read 0 because the cgroup is gone after the graceful stop and the
+harness silently defaulted unreadable cgroup values to 0; the per-stage values above, read while the
+container ran, are the evidence. The harness was hardened afterwards (below). Crawler RSS during the large-record stages was not measured (it was 29–32 MiB with ordinary
 records in the multi-crawler test).
 
 The 512 MiB + default-runtime run was OOM-killed by the kernel (`OOMKilled=true`, exit 137) when eight
@@ -383,6 +390,18 @@ The 512 MiB + default-runtime run was OOM-killed by the kernel (`OOMKilled=true`
 `GOMEMLIMIT=256MiB` survived the same stage but touched exactly the limit, which is no margin. Whether the
 eight records acknowledged or not before the kill was not examined; acknowledged records are committed
 before the 202, so recovery relies on the already-tested idempotent redelivery.
+
+### Harness hardening after review
+
+When a hard container limit is requested, `edge_test.go` no longer reports 0 for unreadable cgroup data. The
+container's cgroup v2 directory is resolved from the container's own `/proc/<pid>/cgroup` (correct for the
+systemd and cgroupfs Docker drivers), with the two known layouts as a fallback; `memory.peak`, the
+`oom_kill` counter in `memory.events` and a numeric `memory.max` (proof that the limit is really set) must all
+be readable, otherwise the test fails at start-up or at the stage that cannot measure. The values are read
+before the graceful stop and kept for the summary, and Docker's `OOMKilled` is checked as well. Unit tests
+(`edge_cgroup_test.go`) cover the parsing, both layouts and every failure mode; a live 512 MiB run of the
+`boundaries` stage confirmed the real path (container peak 282 MiB kept in the summary). The reported
+measurements above come from the earlier runs and were not repeated.
 
 ### Hard container limits: verdict
 

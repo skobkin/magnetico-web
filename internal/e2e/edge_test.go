@@ -130,6 +130,7 @@ type edgeIngest struct {
 	p         *proc
 	container string // "" for a host process
 	cgroup    string
+	peak, oom int // last successful cgroup readings (container runs only)
 	started   time.Time
 	pprof     string
 }
@@ -195,11 +196,21 @@ func (w *world) startEdgeIngest(addr, goMemLimit, dockerMem string) *edgeIngest 
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
 				if e.container != "" {
-					id, err := exec.Command("docker", "inspect", "-f", "{{.Id}}", e.container).Output()
+					out, err := exec.Command("docker", "inspect", "-f", "{{.Id}} {{.State.Pid}}", e.container).Output()
 					if err != nil {
 						t.Fatalf("docker inspect: %v", err)
 					}
-					e.cgroup = "/sys/fs/cgroup/system.slice/docker-" + strings.TrimSpace(string(id)) + ".scope"
+					var id string
+					var pid int
+					if _, err := fmt.Sscan(string(out), &id, &pid); err != nil {
+						t.Fatalf("docker inspect output %q: %v", out, err)
+					}
+					if e.cgroup, err = resolveCgroupDir(cgroupRoot, "/proc", pid, id); err != nil {
+						t.Fatalf("a hard container memory limit was requested but the cgroup cannot be measured: %v", err)
+					}
+					if err := e.measure(); err != nil {
+						t.Fatalf("a hard container memory limit was requested but %v", err)
+					}
 				}
 				return e
 			}
@@ -219,33 +230,18 @@ func (e *edgeIngest) alive() bool {
 	}
 }
 
-// cgroupInt reads one integer from the container's cgroup (0 when unavailable).
-func (e *edgeIngest) cgroupInt(name string) int {
-	if e.cgroup == "" {
-		return 0
+// measure refreshes the container's cgroup peak and OOM counter. It is an
+// error, never a zero, when they cannot be read; host processes have none.
+func (e *edgeIngest) measure() error {
+	if e.container == "" {
+		return nil
 	}
-	b, err := os.ReadFile(filepath.Join(e.cgroup, name))
+	peak, oom, err := readCgroup(e.cgroup)
 	if err != nil {
-		return 0
+		return fmt.Errorf("container memory measurement unavailable (%s): %w", e.cgroup, err)
 	}
-	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
-	return n
-}
-
-func (e *edgeIngest) oomKills() int {
-	if e.cgroup == "" {
-		return 0
-	}
-	b, err := os.ReadFile(filepath.Join(e.cgroup, "memory.events"))
-	if err != nil {
-		return 0
-	}
-	m := regexp.MustCompile(`(?m)^oom_kill (\d+)`).FindSubmatch(b)
-	if m == nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(string(m[1]))
-	return n
+	e.peak, e.oom = peak, oom
+	return nil
 }
 
 func (e *edgeIngest) containerState() string {
@@ -357,7 +353,7 @@ func TestE2ELargeRecordQualification(t *testing.T) {
 	writeSummary := func() {
 		var b strings.Builder
 		fmt.Fprintf(&b, "GOMEMLIMIT=%q container_limit=%q state=%s oom_kills=%d container_memory_peak=%dMiB\n",
-			goMemLimit, dockerMem, ing.containerState(), ing.oomKills(), ing.cgroupInt("memory.peak")>>20)
+			goMemLimit, dockerMem, ing.containerState(), ing.oom, ing.peak>>20)
 		if failed != "" {
 			fmt.Fprintf(&b, "FAILED: %s\n", failed)
 		}
@@ -388,7 +384,8 @@ func TestE2ELargeRecordQualification(t *testing.T) {
 			fetchTo2("/debug/pprof/heap", "fail-heap.pb.gz")
 			fetchTo2("/debug/pprof/goroutine?debug=2", "fail-goroutines.txt")
 		}
-		t.Fatalf("%s\ncontainer: %s oom_kills=%d\ningest tail:\n%s", failed, ing.containerState(), ing.oomKills(), tail(ing.p.output()))
+		_ = ing.measure() // best effort here; the failure is already being reported
+		t.Fatalf("%s\ncontainer: %s oom_kills=%d\ningest tail:\n%s", failed, ing.containerState(), ing.oom, tail(ing.p.output()))
 	}
 
 	// runStage times a stage, checks the process is still alive and records
@@ -405,9 +402,12 @@ func TestE2ELargeRecordQualification(t *testing.T) {
 			fail("stage %s: ingest exited during the stage (%s)", name, ing.containerState())
 		}
 		time.Sleep(2500 * time.Millisecond) // let one more MEM sample land
+		if err := ing.measure(); err != nil {
+			fail("stage %s: %v", name, err)
+		}
 		stages = append(stages, edgeStage{name: name, records: records, jsonMiB: float64(jsonBytes) / (1 << 20),
 			dur: time.Since(st), mem: memBetween(ing.p.output(), int(t0.Seconds()), int((time.Since(ing.started)).Seconds())),
-			cgroupHi: ing.cgroupInt("memory.peak"), note: note})
+			cgroupHi: ing.peak, note: note})
 		fetchTo(t, "http://"+ing.pprof+"/debug/pprof/heap", filepath.Join(dir, "heap-after-"+regexp.MustCompile(`[^A-Za-z0-9+-]+`).ReplaceAllString(name, "_")+".pb.gz"))
 		t.Logf("stage %s done: %s", name, stages[len(stages)-1].mem)
 	}
@@ -654,11 +654,17 @@ func TestE2ELargeRecordQualification(t *testing.T) {
 		})
 	}
 
+	if err := ing.measure(); err != nil { // before stop: the cgroup disappears with the container
+		fail("final measurement: %v", err)
+	}
 	if code := ing.stop(t); code != 0 {
 		fail("ingest exit code %d on graceful stop (%s)", code, ing.containerState())
 	}
-	if ing.oomKills() != 0 {
-		fail("container recorded %d OOM kills", ing.oomKills())
+	if ing.oom != 0 {
+		fail("container recorded %d OOM kills", ing.oom)
+	}
+	if ing.container != "" && strings.Contains(ing.containerState(), "oom_killed=true") {
+		fail("Docker reports the container as OOM-killed (%s)", ing.containerState())
 	}
 }
 
