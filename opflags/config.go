@@ -1,6 +1,7 @@
 package opflags
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 
 const (
 	envPrefix        = "MAGNETICO_CRAWL_"
+	crawlTokenEnv    = envPrefix + "INGEST_TOKEN"
 	migrateEnvPrefix = "MAGNETICO_MIGRATE_"
 
 	// migrationEnvPrefix configures the migration source DSN outside the
@@ -61,9 +63,31 @@ func setStringList(value string) ([]string, error) {
 
 var crawlSettings = []crawlSetting{
 	{
-		longName: "database", yamlKey: "databaseURL", envName: "MAGNETICO_CRAWL_DATABASE",
-		copyFrom:      func(dst, src *CrawlOptions) { dst.DatabaseURL = src.DatabaseURL },
-		setFromString: func(o *CrawlOptions, v string) error { o.DatabaseURL = v; return nil },
+		longName: "ingest-url", yamlKey: "ingestURL", envName: "MAGNETICO_CRAWL_INGEST_URL",
+		copyFrom:      func(dst, src *CrawlOptions) { dst.IngestURL = src.IngestURL },
+		setFromString: func(o *CrawlOptions, v string) error { o.IngestURL = v; return nil },
+	},
+	{
+		longName: "queue-dir", yamlKey: "queueDir", envName: "MAGNETICO_CRAWL_QUEUE_DIR",
+		copyFrom:      func(dst, src *CrawlOptions) { dst.QueueDir = src.QueueDir },
+		setFromString: func(o *CrawlOptions, v string) error { o.QueueDir = v; return nil },
+	},
+	{
+		longName: "queue-max-bytes", yamlKey: "queueMaxBytes", envName: "MAGNETICO_CRAWL_QUEUE_MAX_BYTES",
+		copyFrom: func(dst, src *CrawlOptions) { dst.QueueMaxBytes = src.QueueMaxBytes },
+		setFromString: func(o *CrawlOptions, v string) (err error) {
+			o.QueueMaxBytes, err = strconv.ParseInt(v, 10, 64)
+			return
+		},
+	},
+	{
+		longName: "leech-max-active", yamlKey: "leechMaxActive", envName: "MAGNETICO_CRAWL_LEECH_MAX_ACTIVE",
+		copyFrom: func(dst, src *CrawlOptions) { dst.LeechMaxActive = src.LeechMaxActive },
+		setFromString: func(o *CrawlOptions, v string) error {
+			n, err := parseUint(v, strconv.IntSize)
+			o.LeechMaxActive = n
+			return err
+		},
 	},
 	{
 		longName: "pyroscope", yamlKey: "pyroscopeURL", envName: "MAGNETICO_CRAWL_PYROSCOPE",
@@ -180,6 +204,11 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		return fmt.Errorf("config file: %s", redactSecrets(err.Error()))
 	}
 
+	if _, stale := present["databaseURL"]; stale {
+		return errors.New("config file: the crawl key databaseURL was removed: the crawler no longer connects to PostgreSQL " +
+			"(configure ingestURL and the MAGNETICO_CRAWL_INGEST_TOKEN environment variable instead; see UPGRADE.md)")
+	}
+
 	var file struct {
 		CrawlOptions             `yaml:",inline"`
 		MigrateDatabaseURL       string `yaml:"migrateDatabaseURL"`
@@ -230,6 +259,11 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 // Empty values are treated as unset so that template-based deployments can
 // safely expand unset placeholders.
 func (o *OpFlags) applyEnvConfig(explicit map[string]bool) error {
+	if _, stale := os.LookupEnv("MAGNETICO_CRAWL_DATABASE"); stale {
+		return errors.New("MAGNETICO_CRAWL_DATABASE was removed: the crawler no longer connects to PostgreSQL " +
+			"(set MAGNETICO_CRAWL_INGEST_URL and MAGNETICO_CRAWL_INGEST_TOKEN instead; see UPGRADE.md)")
+	}
+	o.Crawl.IngestToken = os.Getenv(crawlTokenEnv)
 	for _, s := range crawlSettings {
 		if explicit[s.longName] {
 			continue
@@ -243,6 +277,7 @@ func (o *OpFlags) applyEnvConfig(explicit map[string]bool) error {
 
 	known := make(map[string]bool, len(crawlSettings)+1)
 	known[envPrefix] = true
+	known[crawlTokenEnv] = true
 	for _, s := range crawlSettings {
 		known[s.envName] = true
 	}

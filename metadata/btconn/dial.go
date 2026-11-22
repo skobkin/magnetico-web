@@ -21,12 +21,29 @@ func Dial(
 	ih [20]byte,
 	ourID [20]byte) (
 	conn net.Conn, cipher CryptoMethod, peerExtensions [8]byte, peerID [20]byte, err error) {
+	return DialContext(context.Background(), addr, deadline, ourExtensions, ih, ourID)
+}
+
+// DialContext is Dial that also aborts when ctx ends: the dial is
+// context-aware and the connection is closed if ctx is cancelled during the
+// handshake, so a blocked read returns promptly. After a successful return
+// the caller owns the connection and must watch ctx itself.
+func DialContext(
+	ctx context.Context,
+	addr net.Addr,
+	deadline time.Time,
+	ourExtensions [8]byte,
+	ih [20]byte,
+	ourID [20]byte) (
+	conn net.Conn, cipher CryptoMethod, peerExtensions [8]byte, peerID [20]byte, err error) {
 	// First connection - Connecting to peer
 	dialer := net.Dialer{Deadline: deadline}
-	conn, err = dialer.DialContext(context.Background(), addr.Network(), addr.String())
+	conn, err = dialer.DialContext(ctx, addr.Network(), addr.String())
 	if err != nil {
 		return
 	}
+	stopWatch := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopWatch()
 	defer func(conn net.Conn) {
 		if err != nil {
 			conn.Close()

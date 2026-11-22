@@ -16,15 +16,15 @@ func migrateDefaults() SchemaInitOptions {
 func TestApplyYamlConfig_MigrateKeyApplied(t *testing.T) {
 	t.Parallel()
 
-	data := []byte("databaseURL: postgres://file-only@localhost/db\nmigrateDatabaseURL: postgres://migrate-file@localhost/db\n")
+	data := []byte("queueDir: /q/file-only\nmigrateDatabaseURL: postgres://migrate-file@localhost/db\n")
 
 	o := &OpFlags{Crawl: defaults(), Migrate: MigrateOptions{SchemaInit: migrateDefaults()}}
 	if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
 		t.Fatalf("applyYamlConfig() error = %v", err)
 	}
 
-	if o.Crawl.DatabaseURL != "postgres://file-only@localhost/db" {
-		t.Errorf("Crawl.DatabaseURL = %s, want the file value", o.Crawl.DatabaseURL)
+	if o.Crawl.QueueDir != "/q/file-only" {
+		t.Errorf("Crawl.QueueDir = %s, want the file value", o.Crawl.QueueDir)
 	}
 	if o.Migrate.SchemaInit.DatabaseURL != "postgres://migrate-file@localhost/db" {
 		t.Errorf("Migrate.SchemaInit.DatabaseURL = %s, want the file value", o.Migrate.SchemaInit.DatabaseURL)
@@ -119,7 +119,7 @@ func TestApplyEnvMigrateConfig_Precedence(t *testing.T) {
 func TestApplyConfig_MigrateCommandUsesItsOwnEnvNamespace(t *testing.T) {
 	// A crawl-run variable must not leak into migrate and vice versa.
 	t.Setenv("MAGNETICO_MIGRATE_DATABASE", "postgres://migrate-env@localhost/db")
-	t.Setenv("MAGNETICO_CRAWL_DATABASE", "postgres://crawl-env@localhost/db")
+	t.Setenv("MAGNETICO_CRAWL_QUEUE_DIR", "/q/crawl-env")
 
 	o := &OpFlags{Crawl: defaults(), Migrate: MigrateOptions{SchemaInit: migrateDefaults()}}
 	if err := o.applyConfig(map[string]bool{}, "migrate"); err != nil {
@@ -128,16 +128,16 @@ func TestApplyConfig_MigrateCommandUsesItsOwnEnvNamespace(t *testing.T) {
 	if o.Migrate.SchemaInit.DatabaseURL != "postgres://migrate-env@localhost/db" {
 		t.Errorf("migrate DatabaseURL = %s, want the migrate env value", o.Migrate.SchemaInit.DatabaseURL)
 	}
-	if o.Crawl.DatabaseURL != defaults().DatabaseURL {
-		t.Errorf("crawl DatabaseURL = %s, want the default (crawl env is not applied in migrate runs)", o.Crawl.DatabaseURL)
+	if o.Crawl.QueueDir != defaults().QueueDir {
+		t.Errorf("crawl QueueDir = %s, want the default (crawl env is not applied in migrate runs)", o.Crawl.QueueDir)
 	}
 
 	o = &OpFlags{Crawl: defaults(), Migrate: MigrateOptions{SchemaInit: migrateDefaults()}}
 	if err := o.applyConfig(map[string]bool{}, "crawl"); err != nil {
 		t.Fatalf("applyConfig(crawl) error = %v", err)
 	}
-	if o.Crawl.DatabaseURL != "postgres://crawl-env@localhost/db" {
-		t.Errorf("crawl DatabaseURL = %s, want the crawl env value", o.Crawl.DatabaseURL)
+	if o.Crawl.QueueDir != "/q/crawl-env" {
+		t.Errorf("crawl QueueDir = %s, want the crawl env value", o.Crawl.QueueDir)
 	}
 	if o.Migrate.SchemaInit.DatabaseURL != migrateDefaults().DatabaseURL {
 		t.Errorf("migrate DatabaseURL = %s, want the default (migrate env is not applied in crawl runs)", o.Migrate.SchemaInit.DatabaseURL)
@@ -654,8 +654,8 @@ func TestApplyYamlConfig_FansOutToAllMigrateCommands(t *testing.T) {
 			o.Migrate.Torrents.SourceDatabaseURL, o.Migrate.VerifyContent.SourceDatabaseURL,
 			o.Migrate.Torrents.RetryErrors.SourceDatabaseURL, o.Migrate.Errors.Export.SourceDatabaseURL)
 	}
-	if o.Crawl.DatabaseURL != defaults().DatabaseURL {
-		t.Errorf("Crawl.DatabaseURL = %s, want the default (crawl key is separate)", o.Crawl.DatabaseURL)
+	if o.Crawl.QueueDir != defaults().QueueDir {
+		t.Errorf("Crawl.QueueDir = %s, want the default (crawl key is separate)", o.Crawl.QueueDir)
 	}
 }
 

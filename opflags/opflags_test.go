@@ -107,7 +107,7 @@ func TestCheck(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.crawl.check()
+			err := tt.crawl.checkDHT()
 			if (err != nil) != tt.expectError {
 				t.Errorf("check() error = %v, expectError %v", err, tt.expectError)
 			}

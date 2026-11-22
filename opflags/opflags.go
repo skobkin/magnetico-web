@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"reflect"
+	"strings"
 )
 
 // OpFlags is the root of the command line structure of the single `magnetico`
@@ -14,7 +16,7 @@ type OpFlags struct {
 	// `magnetico --config-file-path config.yml crawl`.
 	ConfigFilePath string `long:"config-file-path" description:"Configuration YAML file path. If not filled in, it will default to disabled." default:""`
 
-	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT indexer (storage is not implemented yet, it fails closed)."`
+	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT crawler: precheck, fetch metadata, queue it durably on local disk and deliver it to the ingest service over authenticated HTTP." subcommands-optional:"true"`
 	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer)."`
 	Web     StubOptions    `command:"web" description:"Reserved for the future authenticated web UI (not implemented yet)."`
 	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
@@ -174,7 +176,15 @@ type StubOptions struct{}
 // defaults and YAML keys are inherited verbatim from upstream so existing
 // crawler configuration files keep working.
 type CrawlOptions struct {
-	DatabaseURL  string `long:"database" description:"URL of the database." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"databaseURL"`
+	// IngestURL is the base URL of the ingest service (https://, or http://
+	// to a loopback host for local runs). IngestToken is ENV-only
+	// (MAGNETICO_CRAWL_INGEST_TOKEN): no flag, no YAML key, never logged.
+	IngestURL      string `long:"ingest-url" description:"Base URL of the ingest service (https://; plain http:// only for a loopback host)." default:"" yaml:"ingestURL"`
+	QueueDir       string `long:"queue-dir" description:"Directory of the durable local queue (SQLite WAL; must be on a local filesystem that honours fsync)." default:"magnetico-crawl-queue" yaml:"queueDir"`
+	QueueMaxBytes  int64  `long:"queue-max-bytes" description:"Limit of queue + quarantine payload bytes on local disk." default:"1073741824" yaml:"queueMaxBytes"`
+	LeechMaxActive uint   `long:"leech-max-active" description:"Maximum number of simultaneously active leeches." default:"32" yaml:"leechMaxActive"`
+	IngestToken    string `yaml:"-"`
+
 	PyroscopeURL string `long:"pyroscope" description:"URL of the Pyroscope server." default:"" yaml:"pyroscopeURL"`
 
 	IndexerAddrs        []string `long:"indexer-addr" description:"Address(es) to be used by indexing DHT nodes." default:"0.0.0.0:0" yaml:"indexerAddrs"`
@@ -190,11 +200,52 @@ type CrawlOptions struct {
 	// configurable; yaml:"-" keeps strict decoding from silently accepting a
 	// filterNodesIpNets key that would then be ignored.
 	FilterNodesIpNets []net.IPNet `yaml:"-"`
+
+	// CheckQueue is the diagnostic `crawl check-queue`; Subcommand records
+	// which subcommand (if any) was selected.
+	CheckQueue CheckQueueOptions `command:"check-queue" description:"Run SQLite integrity diagnostics on the local queue directory and print its counts (read-only; run it while the crawler is stopped)." yaml:"-"`
+	Subcommand string            `yaml:"-"`
+}
+
+// CheckQueueOptions carries the options of `crawl check-queue`.
+type CheckQueueOptions struct {
+	QueueDir string `long:"queue-dir" description:"Directory of the durable local queue." default:"magnetico-crawl-queue"`
+	Full     bool   `long:"full" description:"Run the full integrity_check instead of quick_check."`
 }
 
 // check validates the crawl options and derives FilterNodesIpNets. It is the
 // former `RunDaemon` branch of the upstream check(), unchanged.
 func (o *CrawlOptions) check() error {
+	if err := o.checkDHT(); err != nil {
+		return err
+	}
+	return o.checkDelivery()
+}
+
+// checkDelivery validates the ingest delivery options.
+func (o *CrawlOptions) checkDelivery() error {
+	if _, err := validateIngestURL(o.IngestURL); err != nil {
+		return err
+	}
+	if len(o.IngestToken) < MinIngestTokenBytes {
+		return fmt.Errorf("MAGNETICO_CRAWL_INGEST_TOKEN is required and must be at least %d bytes long (it is read from the environment only)",
+			MinIngestTokenBytes)
+	}
+	if strings.TrimSpace(o.QueueDir) == "" {
+		return errors.New("the queue directory cannot be empty")
+	}
+	if o.QueueMaxBytes <= 0 {
+		return errors.New("queue-max-bytes must be positive")
+	}
+	if o.LeechMaxActive == 0 || o.LeechMaxActive > 4096 {
+		return errors.New("leech-max-active must be between 1 and 4096")
+	}
+
+	return nil
+}
+
+// checkDHT validates the DHT options and derives FilterNodesIpNets.
+func (o *CrawlOptions) checkDHT() error {
 	if err := o.checkAddrs(); err != nil {
 		return err
 	}
@@ -238,4 +289,27 @@ func (o *CrawlOptions) checkAddrs() error {
 		}
 	}
 	return nil
+}
+
+// validateIngestURL mirrors the crawler client's rule without importing it:
+// https, or plain http to a loopback host.
+func validateIngestURL(raw string) (*url.URL, error) {
+	bad := errors.New("the ingest URL (--ingest-url / MAGNETICO_CRAWL_INGEST_URL) must be an https:// URL (plain http:// is allowed only for a loopback host)")
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || u.User != nil {
+		return nil, bad
+	}
+	switch u.Scheme {
+	case "https":
+		return u, nil
+	case "http":
+		host := u.Hostname()
+		if host == "localhost" {
+			return u, nil
+		}
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			return u, nil
+		}
+	}
+	return nil, bad
 }

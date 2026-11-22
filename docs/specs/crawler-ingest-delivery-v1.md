@@ -401,6 +401,17 @@ One bounded, process-local LRU (array-backed list + `map[[20]byte]int32`) behind
 - **Crawler SIGTERM:** stop DHT → stop batcher → cancel leeches → writer commits what is left within its
   5 s grace (rest dropped and counted) → sender finishes the current request (30 s grace) → checkpoint and
   close SQLite.
+- **Bounded queue close (M6).** `crawlqueue.Close()` waits unconditionally for the writer goroutine, whose
+  database operations are not interruptible by SQLite's busy timeout (that timeout bounds lock waits, not file
+  I/O or `fsync`). The process therefore uses `CloseWithin(grace)`: (1) stop accepting work and wait `grace`
+  (10 s) for the operation in flight; (2) cancel the writer's database context (interrupting running statements;
+  an interrupted transaction rolls back, committed rows are untouched) and wait `grace/2`; (3) if the writer
+  still has not returned — for example it is blocked in the kernel — return `ErrCloseTimeout`, set
+  `Abandoned()`, and **neither close the database handles nor release the directory lock** (an abandoned writer
+  could still use them). The crawler then exits with status 3; process exit releases the lock and the next start
+  runs SQLite WAL recovery. Wrapping `Close()` in a goroutine is deliberately not used. Tested with a writer held
+  in a non-cancellable stall, a cancellable stall, and a full queue (`internal/crawlqueue/closewithin_test.go`,
+  `internal/crawler/pipeline_test.go`).
 - **SIGKILL/power loss:** committed rows survive; sent-but-unacknowledged rows are resent.
 - **Ingest SIGTERM:** `http.Server.Shutdown` → in-flight commits finish → consumer finishes its current
   record and releases the lock → pools close.

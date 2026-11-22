@@ -12,7 +12,7 @@ func TestExplicitOptions(t *testing.T) {
 	o := OpFlags{}
 	parser := flags.NewParser(&o, flags.None)
 	if _, err := parser.ParseArgs([]string{
-		"crawl", "--max-rps", "42", "--database", "postgres://cli@localhost/db",
+		"crawl", "--max-rps", "42", "--queue-dir", "/q/cli",
 	}); err != nil {
 		t.Fatalf("ParseArgs() error = %v", err)
 	}
@@ -21,8 +21,8 @@ func TestExplicitOptions(t *testing.T) {
 	if !set["max-rps"] {
 		t.Errorf("--max-rps not detected as explicit: %v", set)
 	}
-	if !set["database"] {
-		t.Errorf("--database not detected as explicit: %v", set)
+	if !set["queue-dir"] {
+		t.Errorf("--queue-dir not detected as explicit: %v", set)
 	}
 	if set["config-file-path"] {
 		t.Errorf("--config-file-path wrongly detected as explicit: %v", set)

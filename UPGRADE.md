@@ -4,6 +4,65 @@ User-facing and breaking changes that require action when deploying a new versio
 Entries are grouped by release date. Read the section covering your current version
 before upgrading.
 
+## Unreleased 0.8.0 (development branch)
+
+### The crawler no longer connects to PostgreSQL (distributed crawler/ingest)
+
+`magnetico crawl` now delivers metadata to a separate **`magnetico ingest`** service over
+authenticated HTTP. The crawler keeps a durable local queue (SQLite, WAL) so records survive
+ingest or network outages; the ingest service queues them durably in PostgreSQL and a single
+consumer stores them. Design: `docs/specs/crawler-ingest-delivery-v1.md`.
+
+**Removed from `crawl`** (stale values fail loudly at startup, with a pointer to this file):
+
+| Removed | Replacement |
+|---|---|
+| `--database`, `MAGNETICO_CRAWL_DATABASE`, yaml `databaseURL` | none — the crawler has no database |
+
+**New crawler settings**
+
+| Flag | Environment | YAML | Default |
+|---|---|---|---|
+| `--ingest-url` | `MAGNETICO_CRAWL_INGEST_URL` | `ingestURL` | — (required; `https://`, or `http://` to a loopback host only) |
+| *(none)* | `MAGNETICO_CRAWL_INGEST_TOKEN` | *(none)* | — (required, ≥ 32 bytes; **environment only**) |
+| `--queue-dir` | `MAGNETICO_CRAWL_QUEUE_DIR` | `queueDir` | `magnetico-crawl-queue` |
+| `--queue-max-bytes` | `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` | `queueMaxBytes` | `1073741824` |
+| `--leech-max-active` | `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE` | `leechMaxActive` | `32` |
+
+Put the queue directory on a **local** filesystem that honours `fsync` (ext4/xfs; not NFS/SMB) and
+mount it as a persistent volume in Docker. The directory is locked: one crawler per queue. `magnetico
+crawl check-queue [--queue-dir DIR] [--full]` runs SQLite integrity diagnostics (run it while the
+crawler is stopped). Queued records are never discarded on shutdown; on `SIGTERM` the crawler stops
+the DHT, cancels leeches, commits what is buffered (5 s), lets the sender finish its request (30 s)
+and closes the queue with a bounded wait. If the SQLite writer is stuck in the operating system the
+process exits with status 3 and SQLite recovers the queue at the next start.
+
+**New `ingest` service** (`magnetico ingest`; environment `MAGNETICO_INGEST_*`, see
+`magnetico ingest --help`): `LISTEN` (default `127.0.0.1:8080`, plain HTTP — terminate TLS in a
+reverse proxy such as Traefik), `TOKEN` (required, ≥ 32 bytes, environment only, must equal the
+crawler's), `DATABASE`, optional `QUEUE_DATABASE`, `QUEUE_MAX_BYTES` (default 2 GiB),
+`CACHE_MAX_BYTES` (default 8 MiB), `CACHE_DISABLED`, `ALLOW_NON_DURABLE_DB` (development only).
+PostgreSQL must run with `fsync=on` (ingest refuses to start otherwise). The proxy must allow request
+bodies of at least 17 MiB on `/api/ingest/v1/torrents`.
+
+**Deployment order** (new databases or after the migration):
+
+1. `magnetico migrate schema-init`
+2. `magnetico migrate torrents` (legacy import), verification, optional `cleanup`
+3. `magnetico migrate ingest-schema-init` (creates the `magnetico_ingest` schema; idempotent)
+4. start `magnetico ingest`, then the crawlers
+
+`ingest` refuses to start while an import is running or incomplete. Records ingested after the
+import make earlier migration-verification verdicts stale.
+
+**Quarantine.** Both sides keep records that are permanently invalid in a quarantine table
+(`quarantine` in the crawler's SQLite file, `magnetico_ingest.quarantine` in PostgreSQL). Nothing is
+deleted automatically and quarantined bytes count toward the quota. Inspect with SQL, for example
+`SELECT reason_code, count(*) FROM magnetico_ingest.quarantine GROUP BY 1;`; to retry after fixing
+the cause, `INSERT INTO magnetico_ingest.queue (info_hash, format, payload, payload_bytes) SELECT
+info_hash, format, payload, payload_bytes FROM magnetico_ingest.quarantine WHERE …;` followed by the
+matching `DELETE` in the same transaction (the usage counter is maintained by triggers).
+
 ## 2026-10-21 0.7.0
 
 ### PHP 8.5 required

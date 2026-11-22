@@ -20,11 +20,19 @@ authenticated web UI to be implemented later.
 
 A single binary `magnetico` with the following subcommands:
 
-- `crawl` — the DHT crawler, persisting into the new PostgreSQL storage. On
-  startup it verifies the database schema **read-only**: a missing `pg_trgm`
-  extension, a legacy schema or an unsupported schema state is refused — it
-  never creates or migrates anything. Known limitation: shutdown is prompt but
-  not fully graceful (in-flight leech goroutines are not drained).
+- `crawl` — the DHT crawler. It has **no database**: discovered metadata goes
+  into a durable local queue (SQLite WAL, `synchronous=FULL`) and is delivered
+  to `ingest` over authenticated HTTP (bearer token from the environment only).
+  It prechecks hashes against ingest, bounds active leeches, keeps records
+  through outages and quarantines only permanently invalid ones. Shutdown is
+  bounded; committed records survive any exit. `crawl check-queue` runs queue
+  diagnostics. See `UPGRADE.md` for settings.
+- `ingest` — the HTTP service in front of PostgreSQL: existence lookup
+  (`POST /api/ingest/v1/torrents/exists`) and all-or-nothing durable admission
+  (`POST /api/ingest/v1/torrents`, `202` only after a PostgreSQL commit) into a
+  `magnetico_ingest` queue with a byte quota, drained by a single consumer
+  holding an advisory lock. It verifies the 0.8.0 schema and the queue schema
+  (`magnetico migrate ingest-schema-init`) read-only at startup.
 - `migrate` — the offline migration toolchain for original magnetico v0.12.0
   databases. Checkpointed and resumable (crash-safe, all-or-nothing batches,
   advisory-lock exclusion, durable operational state in a dedicated
@@ -92,12 +100,15 @@ when none is available; they never touch any other server.
 
 ## Examples
 
-    magnetico --config-file-path config.yaml crawl --indexer-addr 0.0.0.0:6881
+    MAGNETICO_INGEST_TOKEN=… magnetico ingest --listen 127.0.0.1:8080
+    MAGNETICO_CRAWL_INGEST_TOKEN=… magnetico --config-file-path config.yaml crawl \
+      --ingest-url http://127.0.0.1:8080 --indexer-addr 0.0.0.0:6881
 
-Optional `config.yaml` keys (all crawl settings, same names as upstream):
-`databaseURL`, `pyroscopeURL`, `indexerAddrs`, `indexerMaxNeighbors`,
-`leechDeadline`, `leechMaxN`, `maxRPS`, `bootstrappingNodes`,
-`filterNodesCIDRs`.
+Optional `config.yaml` keys (crawl settings): `ingestURL`, `queueDir`,
+`queueMaxBytes`, `leechMaxActive`, `pyroscopeURL`, `indexerAddrs`,
+`indexerMaxNeighbors`, `leechDeadline`, `leechMaxN`, `maxRPS`,
+`bootstrappingNodes`, `filterNodesCIDRs`. Tokens are never read from the
+config file or flags. The former `databaseURL` key was removed.
 
 Initialize a fresh application database and import a legacy v0.12.0 database
 into it (resumable — re-run the same command after any interruption):

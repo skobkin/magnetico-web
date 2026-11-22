@@ -13,7 +13,11 @@ import (
 // defaults returns CrawlOptions equivalent to the built-in flag defaults.
 func defaults() CrawlOptions {
 	return CrawlOptions{
-		DatabaseURL:         "postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable",
+		IngestURL:           "https://ingest.example.org",
+		IngestToken:         "0123456789abcdef0123456789abcdef",
+		QueueDir:            "magnetico-crawl-queue",
+		QueueMaxBytes:       1 << 30,
+		LeechMaxActive:      32,
 		PyroscopeURL:        "",
 		IndexerAddrs:        []string{"0.0.0.0:0"},
 		IndexerMaxNeighbors: 5000,
@@ -31,7 +35,7 @@ func defaults() CrawlOptions {
 func TestApplyYamlConfig_SparseFileKeepsDefaults(t *testing.T) {
 	t.Parallel()
 
-	data := []byte("databaseURL: postgres://file-only@localhost/db\n")
+	data := []byte("queueDir: /q/file-only\n")
 
 	o := &OpFlags{Crawl: defaults()}
 	if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
@@ -39,10 +43,10 @@ func TestApplyYamlConfig_SparseFileKeepsDefaults(t *testing.T) {
 	}
 
 	expected := defaults()
-	expected.DatabaseURL = "postgres://file-only@localhost/db"
+	expected.QueueDir = "/q/file-only"
 
 	if !reflect.DeepEqual(o.Crawl, expected) {
-		t.Errorf("sparse file changed fields other than databaseURL:\n got %+v\nwant %+v", o.Crawl, expected)
+		t.Errorf("sparse file changed fields other than queueDir:\n got %+v\nwant %+v", o.Crawl, expected)
 	}
 }
 
@@ -87,16 +91,16 @@ func TestApplyYamlConfig_ZeroishValuesApply(t *testing.T) {
 func TestApplyYamlConfig_CLIBeatsFile(t *testing.T) {
 	t.Parallel()
 
-	data := []byte("databaseURL: postgres://file@localhost/db\nmaxRPS: 123\n")
+	data := []byte("queueDir: /q/file\nmaxRPS: 123\n")
 
 	o := &OpFlags{Crawl: defaults()}
-	explicit := map[string]bool{"database": true}
+	explicit := map[string]bool{"queue-dir": true}
 	if err := o.applyYamlConfig(data, explicit); err != nil {
 		t.Fatalf("applyYamlConfig() error = %v", err)
 	}
 
-	if o.Crawl.DatabaseURL != defaults().DatabaseURL {
-		t.Errorf("explicit CLI flag was overwritten by the file: %s", o.Crawl.DatabaseURL)
+	if o.Crawl.QueueDir != defaults().QueueDir {
+		t.Errorf("explicit CLI flag was overwritten by the file: %s", o.Crawl.QueueDir)
 	}
 	if o.Crawl.MaxRPS != 123 {
 		t.Errorf("MaxRPS = %d, want 123 (file value for a non-explicit flag)", o.Crawl.MaxRPS)
@@ -106,7 +110,7 @@ func TestApplyYamlConfig_CLIBeatsFile(t *testing.T) {
 func TestApplyYamlConfig_UnknownKeyRejected(t *testing.T) {
 	t.Parallel()
 
-	data := []byte("databaseURL: postgres://x@localhost/db\nrunWeb: true\n")
+	data := []byte("queueDir: /q/x\nrunWeb: true\n")
 
 	o := &OpFlags{Crawl: defaults()}
 	err := o.applyYamlConfig(data, map[string]bool{})
@@ -131,17 +135,17 @@ func TestApplyYamlConfig_DerivedFieldRejected(t *testing.T) {
 	}{
 		{
 			name: "lowercase render name with empty list",
-			data: "databaseURL: postgres://x@localhost/db\nfilternodesipnets: []\n",
+			data: "queueDir: /q/x\nfilternodesipnets: []\n",
 			key:  "filternodesipnets",
 		},
 		{
 			name: "lowercase render name with null",
-			data: "databaseURL: postgres://x@localhost/db\nfilternodesipnets: null\n",
+			data: "queueDir: /q/x\nfilternodesipnets: null\n",
 			key:  "filternodesipnets",
 		},
 		{
 			name: "camelCase",
-			data: "databaseURL: postgres://x@localhost/db\nfilterNodesIpNets:\n  - ip: [10, 0, 0, 0]\n    mask: [255, 255, 0, 0]\n",
+			data: "queueDir: /q/x\nfilterNodesIpNets:\n  - ip: [10, 0, 0, 0]\n    mask: [255, 255, 0, 0]\n",
 			key:  "filterNodesIpNets",
 		},
 	}
@@ -190,10 +194,10 @@ func TestApplyYamlConfig_CidrsApplyAndIpNetsStayDerived(t *testing.T) {
 
 func TestApplyEnvConfig_Precedence(t *testing.T) {
 	// t.Setenv forbids parallel execution.
-	data := []byte("databaseURL: postgres://file@localhost/db\nmaxRPS: 123\n")
+	data := []byte("queueDir: /q/file\nmaxRPS: 123\n")
 
 	t.Run("EnvBeatsFile", func(t *testing.T) {
-		t.Setenv("MAGNETICO_CRAWL_DATABASE", "postgres://env@localhost/db")
+		t.Setenv("MAGNETICO_CRAWL_QUEUE_DIR", "/q/env")
 
 		o := &OpFlags{Crawl: defaults()}
 		if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
@@ -203,8 +207,8 @@ func TestApplyEnvConfig_Precedence(t *testing.T) {
 			t.Fatalf("applyEnvConfig() error = %v", err)
 		}
 
-		if o.Crawl.DatabaseURL != "postgres://env@localhost/db" {
-			t.Errorf("DatabaseURL = %s, want the env value", o.Crawl.DatabaseURL)
+		if o.Crawl.QueueDir != "/q/env" {
+			t.Errorf("DatabaseURL = %s, want the env value", o.Crawl.QueueDir)
 		}
 		if o.Crawl.MaxRPS != 123 {
 			t.Errorf("MaxRPS = %d, want the file value", o.Crawl.MaxRPS)
@@ -212,16 +216,16 @@ func TestApplyEnvConfig_Precedence(t *testing.T) {
 	})
 
 	t.Run("EnvIgnoredWhenFlagExplicit", func(t *testing.T) {
-		t.Setenv("MAGNETICO_CRAWL_DATABASE", "postgres://env@localhost/db")
+		t.Setenv("MAGNETICO_CRAWL_QUEUE_DIR", "/q/env")
 
 		o := &OpFlags{Crawl: defaults()}
-		explicit := map[string]bool{"database": true}
+		explicit := map[string]bool{"queue-dir": true}
 		if err := o.applyEnvConfig(explicit); err != nil {
 			t.Fatalf("applyEnvConfig() error = %v", err)
 		}
 
-		if o.Crawl.DatabaseURL != defaults().DatabaseURL {
-			t.Errorf("DatabaseURL = %s, want the CLI/default value", o.Crawl.DatabaseURL)
+		if o.Crawl.QueueDir != defaults().QueueDir {
+			t.Errorf("DatabaseURL = %s, want the CLI/default value", o.Crawl.QueueDir)
 		}
 	})
 
@@ -239,15 +243,15 @@ func TestApplyEnvConfig_Precedence(t *testing.T) {
 	})
 
 	t.Run("EmptyEnvTreatedAsUnset", func(t *testing.T) {
-		t.Setenv("MAGNETICO_CRAWL_DATABASE", "")
+		t.Setenv("MAGNETICO_CRAWL_QUEUE_DIR", "")
 
 		o := &OpFlags{Crawl: defaults()}
 		if err := o.applyEnvConfig(map[string]bool{}); err != nil {
 			t.Fatalf("applyEnvConfig() error = %v", err)
 		}
 
-		if o.Crawl.DatabaseURL != defaults().DatabaseURL {
-			t.Errorf("DatabaseURL = %s, want the default (empty env is unset)", o.Crawl.DatabaseURL)
+		if o.Crawl.QueueDir != defaults().QueueDir {
+			t.Errorf("DatabaseURL = %s, want the default (empty env is unset)", o.Crawl.QueueDir)
 		}
 	})
 
@@ -285,7 +289,7 @@ func TestApplyEnvConfig_Precedence(t *testing.T) {
 func TestApplyConfig_ConfigFilePathFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-	content := "databaseURL: postgres://envfile@localhost/db\n"
+	content := "queueDir: /q/envfile\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("failed to write config file: %v", err)
 	}
@@ -296,8 +300,8 @@ func TestApplyConfig_ConfigFilePathFromEnv(t *testing.T) {
 		t.Fatalf("applyConfig() error = %v", err)
 	}
 
-	if o.Crawl.DatabaseURL != "postgres://envfile@localhost/db" {
-		t.Errorf("DatabaseURL = %s, want the file value via MAGNETICO_CONFIG_FILE_PATH", o.Crawl.DatabaseURL)
+	if o.Crawl.QueueDir != "/q/envfile" {
+		t.Errorf("DatabaseURL = %s, want the file value via MAGNETICO_CONFIG_FILE_PATH", o.Crawl.QueueDir)
 	}
 }
 

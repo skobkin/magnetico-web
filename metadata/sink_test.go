@@ -2,7 +2,6 @@ package metadata
 
 import (
 	"net"
-	"reflect"
 	"testing"
 	"time"
 )
@@ -16,7 +15,8 @@ func TestSink_NewSink(t *testing.T) {
 		sink.deadline != time.Second ||
 		sink.drain == nil ||
 		sink.incomingInfoHashes == nil ||
-		sink.termination == nil {
+		cap(sink.sem) != DefaultMaxActiveLeeches ||
+		sink.ctx == nil {
 		t.Error("One or more fields of Sink were not initialized correctly")
 	}
 }
@@ -54,55 +54,49 @@ func TestSink_Terminate(t *testing.T) {
 	sink := NewSink(time.Minute, 1, []net.IPNet{})
 	sink.Terminate()
 
-	if !sink.terminated {
-		t.Error("terminated field of Sink has not been set to true")
+	if !sink.closed {
+		t.Error("closed field of Sink has not been set to true")
+	}
+	sink.Terminate() // idempotent
+	if _, open := <-sink.Drain(); open {
+		t.Error("Drain must be closed after Terminate")
 	}
 }
 
-func TestSink_Drain(t *testing.T) {
+func TestSink_DrainAfterTerminateIsClosedNotPanic(t *testing.T) {
 	t.Parallel()
-
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("No panic while Draining an already closed Sink!")
-		}
-	}()
 
 	sink := NewSink(time.Minute, 1, []net.IPNet{})
 	sink.Terminate()
-	sink.Drain()
+	if _, open := <-sink.Drain(); open {
+		t.Error("Drain channel must be closed")
+	}
+	if st := sink.TrySink(&TestResult{infoHash: [20]byte{1}, peerAddrs: []net.TCPAddr{{IP: net.ParseIP("1.0.0.1"), Port: 4000}}}); st != SinkClosed {
+		t.Errorf("TrySink after Terminate = %v, want SinkClosed", st)
+	}
 }
 
-func TestFlush(t *testing.T) {
+func TestSink_DeliverDropsWhenTerminatingWithFullDrain(t *testing.T) {
 	t.Parallel()
 
 	sink := NewSink(time.Minute, 1, []net.IPNet{})
-	testMetadata := Metadata{
-		InfoHash: []byte{1, 2, 3, 4, 5, 6},
+	for i := 0; i < drainCapacity; i++ {
+		sink.drain <- Metadata{}
 	}
-
-	go func() {
-		select {
-		case result := <-sink.drain:
-			if !reflect.DeepEqual(result.InfoHash, testMetadata.InfoHash) {
-				t.Errorf("Expected flushed InfoHash to be %v, but got %v", testMetadata.InfoHash, result.InfoHash)
-			}
-
-		case <-time.After(1 * time.Second):
-			t.Error("Timeout waiting for flush result")
-		}
-	}()
-
-	sink.flush(testMetadata)
-
-	time.Sleep(500 * time.Millisecond)
-
-	var infoHash [20]byte
-	copy(infoHash[:], testMetadata.InfoHash)
-	sink.incomingInfoHashes.Lock()
-	_, exists := sink.incomingInfoHashes.infoHashes[infoHash]
-	sink.incomingInfoHashes.Unlock()
-	if exists {
-		t.Error("InfoHash was not deleted after flush")
+	done := make(chan struct{})
+	go func() { sink.deliver(Metadata{}); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("deliver must block while the drain is full and the sink is live")
+	case <-time.After(50 * time.Millisecond):
+	}
+	sink.cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("deliver did not return after cancellation")
+	}
+	if sink.DroppedOnShutdown() != 1 {
+		t.Fatalf("dropped = %d, want 1", sink.DroppedOnShutdown())
 	}
 }

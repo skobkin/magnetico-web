@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -93,7 +94,8 @@ func (l *Leech) closeConn() {
 		return
 	}
 
-	if err := l.conn.Close(); err != nil {
+	// A cancellation watcher may have closed the connection already.
+	if err := l.conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		panic("couldn't close leech connection! " + err.Error())
 	}
 
@@ -287,7 +289,14 @@ func (l *Leech) readUmMessage() ([]byte, error) {
 }
 
 func (l *Leech) Do(deadline time.Time) {
-	conn, _, peerExtensions, _, err := btconn.Dial(
+	l.DoContext(context.Background(), deadline)
+}
+
+// DoContext runs the leech until the deadline or until ctx ends; on
+// cancellation the connection is closed, which unblocks every pending read.
+func (l *Leech) DoContext(ctx context.Context, deadline time.Time) {
+	conn, _, peerExtensions, _, err := btconn.DialContext(
+		ctx,
 		l.peerAddr,
 		deadline,
 		[8]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01},
@@ -301,6 +310,8 @@ func (l *Leech) Do(deadline time.Time) {
 
 	l.conn = conn
 	defer l.closeConn()
+	stopWatch := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopWatch()
 	go stats.GetInstance().IncLeech(peerExtensions)
 
 	err = l.doExHandshake()

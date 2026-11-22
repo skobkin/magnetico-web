@@ -34,6 +34,17 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 
 	switch command {
 	case "crawl":
+		if active.Active != nil && active.Active.Name == "check-queue" {
+			// Diagnostic subcommand: only the queue directory matters (flag,
+			// then MAGNETICO_CRAWL_QUEUE_DIR). No DHT, ingest or token options.
+			o.Crawl.Subcommand = "check-queue"
+			if !explicitOptions(parser.Command)["queue-dir"] {
+				if v := os.Getenv("MAGNETICO_CRAWL_QUEUE_DIR"); v != "" {
+					o.Crawl.CheckQueue.QueueDir = v
+				}
+			}
+			return command, nil
+		}
 		if err := o.applyConfig(explicitOptions(parser.Command), command); err != nil {
 			return "", err
 		}

@@ -208,9 +208,20 @@ type Queue struct {
 	maintainReq chan chan struct{}
 	stop        chan struct{}
 	done        chan struct{}
-	stopOnce    sync.Once
-	closeMu     sync.Mutex
-	closeErr    error
+	// dbCtx bounds every writer database operation. It is cancelled only by
+	// CloseWithin, after the graceful window, to interrupt in-flight
+	// statements (an interrupted transaction rolls back; committed rows are
+	// unaffected).
+	dbCtx    context.Context
+	dbCancel context.CancelFunc
+	// abandoned is set when CloseWithin gave up on a writer that did not
+	// terminate: the database handles and the directory lock are then
+	// deliberately left open for the process exit to release.
+	abandoned atomic.Bool
+	stopOnce  sync.Once
+	closeMu   sync.Mutex
+	closeErr  error
+	closed    bool // handles closed and lock released; guarded by closeMu
 
 	failedCh   chan struct{}
 	failedOnce sync.Once
@@ -263,7 +274,10 @@ func Open(opts Options) (*Queue, error) {
 		return nil, err
 	}
 
+	dbCtx, dbCancel := context.WithCancel(context.Background())
 	q := &Queue{
+		dbCtx:       dbCtx,
+		dbCancel:    dbCancel,
 		opts:        opts,
 		dir:         opts.Dir,
 		lock:        lock,
@@ -275,6 +289,7 @@ func Open(opts Options) (*Queue, error) {
 		lastWarn:    map[string]time.Time{},
 	}
 	if err := q.open(); err != nil {
+		dbCancel()
 		q.closeDBs()
 		unlockDir(lock)
 		return nil, err
@@ -670,25 +685,94 @@ func (q *Queue) Stats() Stats {
 	}
 }
 
+// ErrCloseTimeout reports that CloseWithin could not stop the writer: it is
+// blocked in a database or file-system operation that did not return even
+// after the statements were interrupted. The database handles and the
+// directory lock are intentionally NOT released (an abandoned writer could
+// still touch them); every committed record is safe on disk and SQLite WAL
+// recovery runs at the next open. The caller must terminate the process.
+var ErrCloseTimeout = errors.New("crawlqueue: the writer did not stop within the shutdown grace period")
+
+// Abandoned reports whether CloseWithin gave up on the writer.
+func (q *Queue) Abandoned() bool { return q.abandoned.Load() }
+
+// CloseWithin is the bounded variant of Close for process shutdown. It
+// stops accepting new work and waits up to grace for the writer to finish
+// the operation it is executing; then it cancels the in-flight statements
+// and waits up to grace/2 more (minimum 100 ms). If the writer is stuck
+// beyond that — for example in an uninterruptible fsync — it returns
+// ErrCloseTimeout WITHOUT closing the database handles or releasing the
+// directory lock, because the abandoned writer may still use them. Records
+// committed earlier are never affected. SQLite's busy timeout is not a bound
+// on file-system I/O and is not relied upon here.
+func (q *Queue) CloseWithin(grace time.Duration) error {
+	if grace <= 0 {
+		grace = time.Second
+	}
+	if !q.closeMu.TryLock() {
+		// Another Close is in progress (and may be waiting unboundedly):
+		// do not join it, just bound our own wait.
+		select {
+		case <-q.done:
+			return nil
+		case <-time.After(grace):
+			return ErrCloseTimeout
+		}
+	}
+	defer q.closeMu.Unlock()
+	if q.closed {
+		return q.closeErr
+	}
+	q.stopOnce.Do(func() { close(q.stop) })
+
+	wait := func(d time.Duration) bool {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		select {
+		case <-q.done:
+			return true
+		case <-t.C:
+			return false
+		}
+	}
+	if !wait(grace) {
+		q.dbCancel() // interrupt the statement the writer is stuck in
+		second := grace / 2
+		if second < 100*time.Millisecond {
+			second = 100 * time.Millisecond
+		}
+		if !wait(second) {
+			q.abandoned.Store(true)
+			return ErrCloseTimeout
+		}
+	}
+	return q.finishClose()
+}
+
 // Close stops the writer (committed work is never affected), attempts a final
 // WAL checkpoint and releases the directory lock. It is idempotent.
 func (q *Queue) Close() error {
 	q.closeMu.Lock()
 	defer q.closeMu.Unlock()
-	select {
-	case <-q.done:
+	if q.closed {
 		return q.closeErr
-	default:
 	}
 	q.stopOnce.Do(func() { close(q.stop) })
 	<-q.done
+	return q.finishClose()
+}
 
-	if q.Err() == nil {
+// finishClose runs after the writer has terminated (q.done is closed): final
+// checkpoint, handle close, lock release. Callers hold closeMu.
+func (q *Queue) finishClose() error {
+	if q.Err() == nil && q.dbCtx.Err() == nil {
 		// Best-effort: leave a small WAL behind.
 		_, _ = q.wdb.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	}
+	q.dbCancel()
 	q.closeErr = q.closeDBs()
 	unlockDir(q.lock)
+	q.closed = true
 	return q.closeErr
 }
 

@@ -100,3 +100,20 @@ func (ih *infoHashes) flush(infoHash [20]byte) {
 	defer ih.Unlock()
 	delete(ih.infoHashes, infoHash)
 }
+
+// has reports whether a leech for infoHash is registered (in flight).
+func (ih *infoHashes) has(infoHash [20]byte) bool {
+	ih.RLock()
+	defer ih.RUnlock()
+	_, ok := ih.infoHashes[infoHash]
+	return ok
+}
+
+// register creates the (possibly empty) peer list of an in-flight leech.
+func (ih *infoHashes) register(infoHash [20]byte) {
+	ih.Lock()
+	defer ih.Unlock()
+	if _, ok := ih.infoHashes[infoHash]; !ok {
+		ih.infoHashes[infoHash] = nil
+	}
+}

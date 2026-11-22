@@ -3,6 +3,12 @@
 **Status:** M0–M5 implemented on branch `refactor/0.8.0-unify-and-new-storage` (see git log); M6–M7 in
 progress (authorized after review of `9f62f51f`).
 
+M6 notes: packages `internal/crawler` (client, precheck, enqueue writer, sender, pipeline) and the rewritten
+`metadata.Sink` (`TrySink`, active-leech semaphore, first-peer policy, context-aware leeches via
+`btconn.DialContext`/`Leech.DoContext`, drain closed after all leeches return). A hash already being leeched
+only gains peers (one leech per hash). The admission gate is `queue+quarantine bytes + min(max/10, 32 MiB) ≤
+max`. `crawl check-queue` is a nested subcommand. Bounded shutdown: `crawlqueue.CloseWithin` (spec §8).
+
 M5 notes: packages `internal/ingest/server` (handlers, `Run` lifecycle) and `opflags/ingest.go`. The `ingest`
 command has CLI flags and `MAGNETICO_INGEST_*` variables but **no config-file layer** (deviation: YAML keys for
 ingest are not supported; the token is ENV-only by design). `/exists` answers 503 `storage_unavailable` when

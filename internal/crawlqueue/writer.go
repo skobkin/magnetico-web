@@ -114,7 +114,7 @@ gather:
 }
 
 func (q *Queue) commitAppends(batch []*op) {
-	ctx := context.Background()
+	ctx := q.dbCtx
 	res := make([]result, len(batch))
 	failAll := func(err error) {
 		for i := range batch {
@@ -197,7 +197,7 @@ func (q *Queue) writeErr(what string, err error) error {
 }
 
 func (q *Queue) doAppendQuarantined(o *op) {
-	ctx := context.Background()
+	ctx := q.dbCtx
 	size := int64(len(o.payload))
 	if q.queueBytes.Load()+q.quarBytes.Load()+size > q.opts.MaxBytes {
 		q.fullRejects.Add(1)
@@ -227,7 +227,7 @@ func (q *Queue) doAppendQuarantined(o *op) {
 }
 
 func (q *Queue) doAck(o *op) {
-	ctx := context.Background()
+	ctx := q.dbCtx
 	tx, err := q.wdb.BeginTx(ctx, nil)
 	if err != nil {
 		o.resp <- result{err: q.writeErr("begin", err)}
@@ -259,7 +259,7 @@ func (q *Queue) doAck(o *op) {
 }
 
 func (q *Queue) doQuarantine(o *op) {
-	ctx := context.Background()
+	ctx := q.dbCtx
 	tx, err := q.wdb.BeginTx(ctx, nil)
 	if err != nil {
 		o.resp <- result{err: q.writeErr("begin", err)}
@@ -330,7 +330,7 @@ func (q *Queue) maintain() {
 	if q.Err() != nil {
 		return
 	}
-	ctx := context.Background()
+	ctx := q.dbCtx
 	q.cpRuns.Add(1)
 
 	var cpErr error

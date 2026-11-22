@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"math"
 	"net/url"
 	"os"
 	"os/signal"
@@ -17,8 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/dht/mainline"
+	"github.com/skobkin/magnetico-web/internal/crawler"
+	"github.com/skobkin/magnetico-web/internal/crawlqueue"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	ingestserver "github.com/skobkin/magnetico-web/internal/ingest/server"
 	"github.com/skobkin/magnetico-web/internal/migration"
@@ -928,25 +930,6 @@ func appendSentinelDetail(msg string, err error, sentinel error) string {
 	return msg
 }
 
-// torrentFromMetadata converts a drained metadata record into a persistence
-// Torrent. The uint64→int64 boundary check happens HERE — in the crawler
-// wiring, before any conversion or Torrent construction — so an oversized
-// total size can never wrap into a negative value and reach persistence.
-// AddTorrent independently validates its int64 input.
-func torrentFromMetadata(md *metadata.Metadata) (persistence.Torrent, error) {
-	if md.TotalSize > math.MaxInt64 {
-		return persistence.Torrent{}, fmt.Errorf(
-			"%w: total size %d exceeds the maximum supported value",
-			persistence.ErrInvalidMetadata, md.TotalSize)
-	}
-	return persistence.Torrent{
-		InfoHash:     md.InfoHash,
-		Name:         md.Name,
-		TotalSize:    int64(md.TotalSize),
-		DiscoveredOn: md.DiscoveredOn,
-	}, nil
-}
-
 // invalidMetadataWarnInterval spaces out the dropped-record warnings: a
 // hostile swarm can produce invalid records far faster than they are worth
 // logging.
@@ -985,42 +968,70 @@ func dropInvalidRecord(err error) {
 	}
 }
 
+// runCrawl runs the crawler and exits non-zero when the shutdown could not
+// complete safely (see crawler.ErrShutdownIncomplete) or the local queue
+// failed. Deferred cleanup runs inside crawl, before the exit.
 func runCrawl(opFlags *opflags.CrawlOptions) {
-	// Handle Ctrl-C and SIGTERM (the timeout-based smoke harness sends
-	// SIGTERM) through a context: on cancellation the event loop stops and
-	// the DHT manager is terminated. Known phase-2 limitation, kept honest:
-	// in-flight leech goroutines are not drained and the metadata sink's
-	// Terminate is not called, so shutdown is prompt but not graceful for
-	// buffered work; this task documents that limitation instead of claiming
-	// a graceful shutdown.
+	if opFlags.Subcommand == "check-queue" {
+		os.Exit(runCrawlCheckQueue(&opFlags.CheckQueue))
+	}
+	if code := crawl(opFlags); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// runCrawlCheckQueue implements `magnetico crawl check-queue`.
+func runCrawlCheckQueue(o *opflags.CheckQueueOptions) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-
-	// Open the store with read-only startup verification: it fails fast on
-	// missing pg_trgm, unsupported or legacy schema states. It never creates
-	// or migrates anything.
-	store, err := persistence.MakeDatabase(ctx, opFlags.DatabaseURL)
+	rep, err := crawlqueue.Check(ctx, o.QueueDir, o.Full)
 	if err != nil {
-		// The raw URL and the error text may both carry credentials; log the
-		// redacted URL and a controlled error detail instead.
-		log.Fatalln(databaseOpenFailureMessage(opFlags.DatabaseURL, err))
+		log.Printf("check-queue: %v", err)
+		return 2
 	}
-	defer func() {
-		if err := store.Close(); err != nil {
-			log.Printf("Could not close database! %s\n", controlledErrorDetail(err))
-		}
-	}()
+	fmt.Printf("%+v\n", rep)
+	if !rep.OK() {
+		log.Printf("check-queue: the queue database did not pass the integrity check; committed data is never repaired automatically")
+		return 1
+	}
+	return 0
+}
+
+// crawl is the delivery pipeline: DHT → precheck → bounded metadata
+// retrieval → durable SQLite queue → authenticated HTTP sender → ingest. It
+// has no PostgreSQL dependency. SIGINT/SIGTERM stops the DHT, then shuts the
+// pipeline down in its documented order, each stage bounded by a grace period.
+func crawl(opFlags *opflags.CrawlOptions) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	if opFlags.PyroscopeURL != "" {
 		profiler, err := stats.InitPyroscope(opFlags.PyroscopeURL)
 		if err != nil {
-			log.Fatalf("could not start pyroscope %s\n", err.Error())
+			log.Printf("could not start pyroscope %s\n", err.Error())
+			return 1
 		}
 		defer func() {
 			if err := profiler.Stop(); err != nil {
 				log.Printf("Could not stop pyroscope! %s\n", err.Error())
 			}
 		}()
+	}
+
+	queue, err := crawlqueue.Open(crawlqueue.Options{
+		Dir:      opFlags.QueueDir,
+		MaxBytes: opFlags.QueueMaxBytes,
+		Logf:     log.Printf,
+	})
+	if err != nil {
+		log.Printf("could not open the local queue in %s: %v", opFlags.QueueDir, err)
+		return 1
+	}
+	client, err := crawler.NewClient(opFlags.IngestURL, opFlags.IngestToken, nil)
+	if err != nil {
+		_ = queue.CloseWithin(crawler.QueueCloseGrace)
+		log.Printf("%v", err)
+		return 1
 	}
 
 	mainline.DefaultThrottleRate = int(opFlags.MaxRPS)
@@ -1030,52 +1041,52 @@ func runCrawl(opFlags *opflags.CrawlOptions) {
 		opFlags.BootstrappingNodes,
 		opFlags.FilterNodesIpNets,
 	)
-	metadataSink := metadata.NewSink(
-		time.Duration(opFlags.LeechDeadline)*time.Second,
-		int(opFlags.LeechMaxN),
-		opFlags.FilterNodesIpNets,
-	)
+	sink := metadata.NewSinkWithOptions(metadata.SinkOptions{
+		Deadline:        time.Duration(opFlags.LeechDeadline) * time.Second,
+		MaxPeersPerHash: int(opFlags.LeechMaxN),
+		MaxActive:       int(opFlags.LeechMaxActive),
+		FilterNodes:     opFlags.FilterNodesIpNets,
+	})
+	pipeline := crawler.New(crawler.Config{
+		Queue: queue, Client: client, Sink: sink, Limits: codec.DefaultLimits(),
+		Logf: log.Printf, OnInvalid: dropInvalidRecord,
+	})
+	pipeline.Start()
+	log.Printf("crawler started: delivering to %s, local queue %s (limit %d bytes), %d active leeches at most",
+		redactDatabaseURL(opFlags.IngestURL), opFlags.QueueDir, opFlags.QueueMaxBytes, opFlags.LeechMaxActive)
 
-	// The Event Loop
+	summary := time.NewTicker(crawler.SummaryInterval)
+	defer summary.Stop()
+
+	exitCode := 0
+	// The Event Loop: it only hands results over (never blocks on I/O).
 	for stopped := false; !stopped; {
 		select {
 		case <-ctx.Done():
-			trawlingManager.Terminate()
 			stopped = true
+
+		case <-queue.Failed():
+			log.Printf("the local queue failed (%v); committed records stay on disk. Shutting down.", queue.Err())
+			exitCode = 1
+			stopped = true
+
+		case <-summary.C:
+			log.Print(pipeline.Summary())
 
 		case result, ok := <-trawlingManager.Output():
 			if !ok {
 				continue
 			}
-			infoHash := result.InfoHash()
-
-			exists, err := store.DoesTorrentExist(ctx, infoHash[:])
-			if err != nil {
-				go stats.GetInstance().IncDBError(false)
-			} else if !exists {
-				metadataSink.Sink(result)
-			}
-
-		case md := <-metadataSink.Drain():
-			torrent, err := torrentFromMetadata(&md)
-			if err != nil {
-				dropInvalidRecord(err)
-				continue
-			}
-			created, _, err := store.AddTorrent(ctx, torrent, md.Files)
-			switch {
-			case err == nil && !created:
-				// Already present: silently dropped (spec §4.5).
-			case err == nil:
-				// Inserted.
-			case errors.Is(err, persistence.ErrInvalidMetadata):
-				// Invalid metadata — including codec encode failures from
-				// bad input — is dropped with a throttled warning and a
-				// per-cause metric; it is never a database failure.
-				dropInvalidRecord(err)
-			default:
-				go stats.GetInstance().IncDBError(true)
-			}
+			pipeline.Offer(result)
 		}
 	}
+
+	trawlingManager.Terminate()
+	log.Print("shutting down: stopping the pipeline")
+	if err := pipeline.Stop(); err != nil {
+		log.Printf("shutdown incomplete: %v", err)
+		exitCode = 3
+	}
+	log.Print(pipeline.Summary())
+	return exitCode
 }
