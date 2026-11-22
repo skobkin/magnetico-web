@@ -86,3 +86,19 @@ GRANT INSERT, UPDATE, DELETE ON magnetico_web.trackers TO magnetico_web_op;
 <!-- grants:end -->
 
 These statements are executed verbatim by the integration tests, which start the real service as the restricted role and check that revoking any of them (for example `SELECT` on `magneticod.schema_version`) makes startup fail with a controlled message.
+
+## 5. Administrator commands (W2)
+
+`magnetico web user …` and `magnetico web tracker …` administer accounts, invitations and the public tracker list. They use the same database settings as the service (`--database` without a password, or `MAGNETICO_WEB_DATABASE`, or the `web:` file section), open two connections, and refuse to run unless the `magnetico_web` schema is exactly the supported version and the role holds the operator grants of §4. Commands that print absolute links (`user add`, `user reset-password`, `user invite add|list`) also need the public URL (`MAGNETICO_WEB_PUBLIC_URL`); the other commands validate only what they use. Results and requested links go to stdout, failures to stderr with exit status 1; nothing secret is printed except the link you asked for.
+
+| Command | Effect |
+|---|---|
+| `web user add <username> [--email E] [--invites N]` | Enabled account without a password; prints a single-use setup link (72 h). `--invites` defaults to `invite-quota`. |
+| `web user list` | id, username, role, active, password state (`none`/`current`/`legacy`/`needs-reset`), email state, created, last login. |
+| `web user set-role <username> <user\|admin>` | Sets the role. |
+| `web user disable <username>` / `enable <username>` | Disable deletes the account's sessions and suspends its API/RSS tokens and invitations; enable restores them (revoked and expired ones stay dead, sessions do not return). |
+| `web user reset-password <username>` | Issues a setup link (account has no password, 72 h) or a reset link (1 h) and replaces any earlier link. **Completing a reset signs the user out everywhere and permanently revokes all their API and RSS tokens**; clients must be updated. |
+| `web user set-password <username>` | Reads the password from a no-echo terminal prompt (asked twice) or from one line of piped standard input — never from arguments. Same revocations as a completed reset. |
+| `web user revoke-tokens <username>` | Permanently revokes all API and RSS tokens. |
+| `web user invite add <username> [--count N] [--expires-in D]` / `invite list <username>` / `invite revoke <id>` | Invitation links; revocation is by id so codes stay out of shell history. |
+| `web tracker list` / `add <url> [--position N]` / `remove <url\|id>` / `move <url\|id> <position>` | Edits the public tracker list (positions stay 1..n). Running services pick the change up within `tracker-cache-ttl`. |

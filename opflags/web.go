@@ -69,6 +69,13 @@ type WebOptions struct {
 	TrustedProxyPrefixes []netip.Prefix `yaml:"-"`
 	// DevMode is true for a loopback http:// public URL (§4.4.3).
 	DevMode bool `yaml:"-"`
+
+	// Administrator subcommands (`web user …`, `web tracker …`); bare `web`
+	// runs the service. Subcommand records the selected one as "user add",
+	// "tracker move", …; it is never user-settable.
+	User       WebUserCommands    `command:"user" description:"Administer accounts and invitations (operator CLI)."`
+	Tracker    WebTrackerCommands `command:"tracker" description:"Administer the public tracker list (operator CLI)."`
+	Subcommand string             `yaml:"-"`
 }
 
 // SMTPConfigured reports whether the email features are configured.
@@ -268,6 +275,14 @@ func isLoopbackHost(host string) bool {
 }
 
 func (o *WebOptions) checkPublicAndListen() error {
+	if err := o.checkPublicURL(); err != nil {
+		return err
+	}
+	return o.checkListen()
+}
+
+// checkPublicURL validates the public URL and derives PublicBaseURL and DevMode.
+func (o *WebOptions) checkPublicURL() error {
 	const publicHint = "the public URL (--public-url / MAGNETICO_WEB_PUBLIC_URL) is required and must be an absolute https:// URL (http:// only for a loopback host, development mode), without credentials, query or fragment"
 	if strings.TrimSpace(o.PublicURL) == "" {
 		return errors.New(publicHint)
@@ -288,7 +303,10 @@ func (o *WebOptions) checkPublicAndListen() error {
 		return errors.New(publicHint)
 	}
 	o.PublicBaseURL = &url.URL{Scheme: u.Scheme, Host: u.Host}
+	return nil
+}
 
+func (o *WebOptions) checkListen() error {
 	host, port, err := net.SplitHostPort(o.Listen)
 	if err != nil {
 		return errors.New("listen must be a host:port address (--listen / MAGNETICO_WEB_LISTEN)")

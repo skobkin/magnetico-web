@@ -52,7 +52,11 @@ func main() {
 	case "ingest":
 		runIngest(&opFlags.Ingest)
 	case "web":
-		runWeb(&opFlags.Web)
+		if opFlags.Web.Subcommand != "" {
+			runWebAdmin(&opFlags.Web)
+		} else {
+			runWeb(&opFlags.Web)
+		}
 	case "migrate":
 		switch opFlags.Migrate.Subcommand {
 		case "schema-init":

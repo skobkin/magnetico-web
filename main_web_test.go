@@ -542,3 +542,168 @@ func TestSchemaDiagnosticsDoNotLeakCatalogContentsBinary(t *testing.T) {
 		t.Fatalf("startup output leaks catalog contents: %s", out)
 	}
 }
+
+// runWebAdminBinary runs `magnetico web <args>` with the given database and
+// stdin, returning stdout and stderr separately.
+func runWebAdminBinary(t *testing.T, bin, dsn, stdin string, extraEnv []string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, append([]string{"web"}, args...)...)
+	cmd.Env = webEnv(append([]string{"MAGNETICO_WEB_DATABASE=" + dsn, "MAGNETICO_WEB_PUBLIC_URL=https://magnet.example.org"}, extraEnv...)...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var so, se bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &so, &se
+	err := cmd.Run()
+	var ee *exec.ExitError
+	switch {
+	case err == nil:
+		return so.String(), se.String(), 0
+	case errors.As(err, &ee):
+		return so.String(), se.String(), ee.ExitCode()
+	}
+	t.Fatalf("run: %v", err)
+	return
+}
+
+// The operator CLI through the real binary: results on stdout, failures
+// controlled on stderr, password only from piped stdin, nothing secret echoed.
+func TestWebAdminBinary(t *testing.T) {
+	bin := buildBinary(t)
+	dsn := withPassword(t, webTarget(t), "db-secret-pw")
+	if out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init"); code != 0 {
+		t.Fatalf("web-schema-init: exit %d: %s", code, out)
+	}
+	run := func(stdin string, args ...string) (string, string, int) {
+		return runWebAdminBinary(t, bin, dsn, stdin, nil, args...)
+	}
+	const pw = "piped-password-value"
+
+	out, errOut, code := run("", "user", "add", "--invites", "1", "alice")
+	if code != 0 || !strings.Contains(out, "https://magnet.example.org/password/setup/") {
+		t.Fatalf("user add: exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	out, errOut, code = run(pw+"\n", "user", "set-password", "alice")
+	if code != 0 || !strings.Contains(out, "password of alice changed") {
+		t.Fatalf("set-password: exit %d\nstdout: %s\nstderr: %s", code, out, errOut)
+	}
+	if strings.Contains(out+errOut, pw) || strings.Contains(out+errOut, "$argon2") {
+		t.Fatalf("set-password echoed a secret:\n%s%s", out, errOut)
+	}
+	out, _, code = run("", "user", "list")
+	if code != 0 || !strings.Contains(out, "alice") || !strings.Contains(out, "current") || strings.Contains(out, "$argon2") {
+		t.Fatalf("user list: exit %d: %s", code, out)
+	}
+	if out, _, code = run("", "user", "invite", "list", "alice"); code != 0 || !strings.Contains(out, "/register/") {
+		t.Fatalf("invite list: exit %d: %s", code, out)
+	}
+	if out, _, code = run("", "user", "disable", "alice"); code != 0 || !strings.Contains(out, "disabled") {
+		t.Fatalf("disable: exit %d: %s", code, out)
+	}
+	if out, _, code = run("", "tracker", "list"); code != 0 || strings.Count(out, "\n") != 12 {
+		t.Fatalf("tracker list: exit %d: %s", code, out)
+	}
+	if out, _, code = run("", "tracker", "add", "--position", "1", "udp://cli.example.org:1337/announce"); code != 0 || !strings.Contains(out, "position 1") {
+		t.Fatalf("tracker add: exit %d: %s", code, out)
+	}
+
+	// Failures: controlled text on stderr, exit 1, nothing on stdout, no secrets.
+	for name, c := range map[string]struct {
+		stdin string
+		args  []string
+		want  string
+	}{
+		"unknown user":    {"", []string{"user", "disable", "nobody"}, "no such user"},
+		"short password":  {"short\n", []string{"user", "set-password", "alice"}, "too short"},
+		"no password":     {"", []string{"user", "set-password", "alice"}, "no password on standard input"},
+		"invalid tracker": {"", []string{"tracker", "add", "ftp://x.example.org/a"}, "scheme"},
+		"bad invite id":   {"", []string{"user", "invite", "revoke", "abc"}, "positive number"},
+	} {
+		out, errOut, code := run(c.stdin, c.args...)
+		if code != 1 || out != "" || !strings.Contains(errOut, c.want) {
+			t.Errorf("%s: exit %d\nstdout: %q\nstderr: %q", name, code, out, errOut)
+		}
+		if strings.Contains(errOut, "db-secret-pw") || strings.Contains(errOut, "tiny") {
+			t.Errorf("%s leaked a secret: %q", name, errOut)
+		}
+	}
+	// A stray argument is a usage error that does not echo it.
+	if _, errOut, code = run("", "user", "set-password", "alice", "hunter2-typed-by-mistake"); code == 0 || strings.Contains(errOut, "hunter2") {
+		t.Fatalf("stray argument: exit %d: %s", code, errOut)
+	}
+	// Link-printing commands need the public URL; the others do not.
+	out, errOut, code = runWebAdminBinary(t, bin, dsn, "", []string{"MAGNETICO_WEB_PUBLIC_URL="}, "user", "add", "bob")
+	if code == 0 || !strings.Contains(errOut, "public URL") {
+		t.Fatalf("add without a public URL: exit %d: %s", code, errOut)
+	}
+	if out, errOut, code = runWebAdminBinary(t, bin, dsn, "", []string{"MAGNETICO_WEB_PUBLIC_URL="}, "user", "list"); code != 0 {
+		t.Fatalf("list without a public URL: exit %d: %s%s", code, out, errOut)
+	}
+}
+
+// The documented operator grants suffice for the CLI; the runtime role,
+// which may not write trackers, is refused with the controlled privilege error.
+func TestWebAdminBinaryWithDocumentedRoles(t *testing.T) {
+	bin := buildBinary(t)
+	cl := pgtest.IntegrationCluster(t)
+	dsn := webTarget(t)
+	if out, code := runWebSchemaInit(t, bin, dsn, "web-schema-init"); code != 0 {
+		t.Fatalf("web-schema-init: exit %d: %s", code, out)
+	}
+	suffix := pgtest.RandomSuffix()
+	rt, op := "art_"+suffix, "aop_"+suffix
+	admin, err := pgx.Connect(context.Background(), cl.AdminDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+	for _, r := range []string{rt, op} {
+		if _, err := admin.Exec(context.Background(), "CREATE ROLE "+pgtest.QuoteIdent(r)+" LOGIN"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	u, _ := url.Parse(dsn)
+	dbName := strings.TrimPrefix(u.Path, "/")
+	t.Cleanup(func() {
+		c, err := pgx.Connect(context.Background(), cl.AdminDSN)
+		if err != nil {
+			return
+		}
+		defer c.Close(context.Background())
+		_, _ = c.Exec(context.Background(), "DROP DATABASE IF EXISTS "+pgtest.QuoteIdent(dbName)+" WITH (FORCE)")
+		for _, r := range []string{op, rt} {
+			_, _ = c.Exec(context.Background(), "DROP ROLE IF EXISTS "+pgtest.QuoteIdent(r))
+		}
+	})
+	dbConn, err := pgx.Connect(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dbConn.Close(context.Background())
+	grants := strings.NewReplacer("magnetico_web_rt", pgtest.QuoteIdent(rt), "magnetico_web_op", pgtest.QuoteIdent(op)).Replace(docsGrants(t))
+	if _, err := dbConn.Exec(context.Background(), grants); err != nil {
+		t.Fatalf("documented grants: %v", err)
+	}
+	asRole := func(role string) string {
+		ru := *u
+		ru.User = url.UserPassword(role, "role-secret-pw")
+		return ru.String()
+	}
+
+	opDSN := asRole(op)
+	for _, args := range [][]string{
+		{"user", "add", "--invites", "1", "carol"}, {"user", "list"}, {"user", "reset-password", "carol"},
+		{"user", "invite", "add", "carol"}, {"user", "revoke-tokens", "carol"},
+		{"tracker", "add", "udp://op.example.org:1/announce"}, {"tracker", "move", "udp://op.example.org:1/announce", "1"},
+		{"tracker", "remove", "udp://op.example.org:1/announce"},
+	} {
+		stdout, stderr, code := runWebAdminBinary(t, bin, opDSN, "", nil, args...)
+		if code != 0 {
+			t.Fatalf("%v as the documented operator role: exit %d\n%s%s", args, code, stdout, stderr)
+		}
+	}
+	stdout, stderr, code := runWebAdminBinary(t, bin, asRole(rt), "", nil, "tracker", "add", "udp://rt.example.org:1/announce")
+	if code != 1 || stdout != "" || !strings.Contains(stderr, "privileges") || strings.Contains(stderr, "role-secret-pw") {
+		t.Fatalf("runtime role must be refused for the operator CLI: exit %d\n%s%s", code, stdout, stderr)
+	}
+}

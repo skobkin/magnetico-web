@@ -77,3 +77,19 @@ func (b *Backend) Ping(ctx context.Context) error { return b.pool.Ping(ctx) }
 
 // Close closes the pool (it waits for acquired connections).
 func (b *Backend) Close() { b.pool.Close() }
+
+// OpenOperator opens a small pool (two connections) for the administrator
+// CLI and verifies, read-only, that the magnetico_web schema is exactly the
+// supported version and that the role holds the operator privileges
+// (webschema.Operator). The caller closes the pool. Errors never echo the URL.
+func OpenOperator(ctx context.Context, rawURL string) (*pgxpool.Pool, error) {
+	b, err := Open(ctx, rawURL, 2)
+	if err != nil {
+		return nil, err
+	}
+	if err := webschema.Verify(ctx, b.pool, webschema.Operator); err != nil {
+		b.Close()
+		return nil, err
+	}
+	return b.pool, nil
+}

@@ -18,7 +18,7 @@ func (o *OpFlags) Parse() (string, error) {
 // parseArgs is Parse over an explicit argument vector (testable).
 func (o *OpFlags) parseArgs(args []string) (string, error) {
 	parser := flags.NewParser(o, flags.Default)
-	_, err := parser.ParseArgs(args)
+	rest, err := parser.ParseArgs(args)
 	if err != nil {
 		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
 			os.Exit(0)
@@ -62,6 +62,22 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		explicit := explicitOptions(parser.Command)
 		if err := o.applyConfig(explicit, command); err != nil {
 			return "", err
+		}
+		if active.Active != nil {
+			if len(rest) > 0 {
+				// Never echo the argument: it could be a secret typed in the wrong place.
+				return "", errors.New("web: unexpected extra argument (see --help)")
+			}
+			// Operator CLI: `web user …` / `web tracker …`.
+			names := []string{active.Active.Name}
+			for c := active.Active; c.Active != nil; c = c.Active {
+				names = append(names, c.Active.Name)
+			}
+			o.Web.Subcommand = joinCommandPath(names...)
+			if err := o.Web.checkAdmin(explicit["database"]); err != nil {
+				return "", err
+			}
+			return command, nil
 		}
 		if err := o.Web.check(explicit["database"]); err != nil {
 			return "", err

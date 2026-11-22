@@ -78,3 +78,62 @@ Not run: `dht`, `crawler`, `e2e`, full `go test ./...`.
 4. **Memory test.** Only the heap growth (128 MiB observed against a 256 MiB budget) is asserted; RSS is logged as diagnostic.
 5. **Run:** `go build ./...`, `go vet ./...`, `go test -race -short ./internal/web/password` and `go test ./internal/web/password`
    (34 PHP vectors, memory test): all passed.
+
+## Steps 7–8: account stores and operator CLI
+
+**Account store** (`internal/web/accounts`, SQL only; inside `./internal/web/...` so the W1 import-boundary test covers it — a small
+deviation from 07A §4.1's `internal/users`). Users, one-time password links, invitations, API tokens, RSS tokens; lock order invite
+row → user row → dependent rows; every one-time-token write under the user row `FOR UPDATE`; `active` read inside the locking
+statement; expiry always by the database clock; revocation only ever `NULL → now()`; secrets stored as SHA-256 only; each token type
+has its own table and its own `Authenticate*` function (no routing on prefixes).
+
+**Operator CLI** (`internal/web/admincli`, `opflags/web_admin.go`, `main_webadmin.go`): `web user add|list|set-role|disable|enable|
+reset-password|set-password|revoke-tokens|invite add|list|revoke` and `web tracker list|add|remove|move`. `web` is now
+`subcommands-optional`; bare `web` is unchanged. Each command validates only what it uses (database always; public URL only where links
+are printed; `invite-quota` only for `user add`). A stray positional argument is a usage error that does not echo it.
+`set-password` reads a no-echo TTY prompt twice through `golang.org/x/term` v0.48.0 (added at this first use) or one piped line; never
+argv. Tracker writes run under the same advisory key as the seed and renumber densely. `webdb.OpenOperator` opens two connections and
+verifies structure and the operator privileges.
+
+**Deviations / notes.** (1) A hash given to the store must classify as supported (current or legacy); the store does not hash.
+(2) `ListUsers` carries the stored hash inside the process only so the CLI can classify it; it is never printed. (3) The invite status
+`suspended (owner disabled)` shows no link. (4) Tracker URL validation lives in `accounts` (`ValidateTrackerURL`) and is reused by the CLI.
+
+**Tests run** (all against disposable `internal/pgtest` PostgreSQL, synthetic data):
+- `go test -race ./internal/web/accounts`: 22 tests — lifecycle (NULL hash; disable/enable leaves credential rows byte-identical and
+  restores API, `mgf_` and legacy RSS tokens; revoked/expired stay dead; sessions do not return; revoke-tokens), links (replaced, used,
+  expired, replacement after expiry, failed issuance keeps the previous link, completion/set-password revoke sessions + both token types
+  with separate counts, other password links deleted, email-verify link untouched, disabled completion refused and not consumed,
+  purpose mismatch), separation (API vs RSS vs legacy, only SHA-256 stored), invitations (unknown/used/revoked/expired same error,
+  duplicate username keeps the invite, disabled owner), and concurrency (12-way completion → exactly one wins; 16-way issuance → one
+  link; completion vs replacement both orders deterministic via the `beforeCommit` hook plus a 100-iteration stress; completion vs
+  disable; disable vs registration both orders plus 100-iteration stress; authentication loops against disable/enable and revoke).
+  `go test -count=5 -race -run 'Concurrent|Versus' ./internal/web/accounts` also passed.
+- `go test -race ./internal/web/admincli`: every command's output, no hash/password/token leakage, tracker add/move/remove renumbering
+  and validation, password-line reader.
+- `go test ./opflags`: parsing of every command, usage errors, "validate only what is used", database rules, unknown `MAGNETICO_WEB_*`.
+- `go test -race -run TestWebAdminBinary .`: real binary — user add / set-password from a pipe / list / invites / tracker edits,
+  controlled failures on stderr with exit 1, no secret echoed; and with roles built from the **documented** grants: the operator role
+  runs every command, the runtime role is refused for tracker writes with the controlled privilege error.
+
+## Final validation (step 9)
+
+Run at the end of W2, all passing: `go build ./...`; `go vet ./...`; `go test -race ./internal/web/... ./opflags` (the password package
+ran non-short, including all 34 PHP vectors and the memory test, under `-race`); `go test ./persistence ./internal/ingest/pgqueue`;
+`go test -race -run 'TestWeb|TestMigrateWebSchemaInit|TestSchemaDiagnostics' .`; `go test .` (whole root package, 78 s).
+
+**Not run:** `dht/...`, `internal/crawler`, `internal/e2e/...` and the other untouched packages, so the full `go test ./...` was not run
+(the e2e suite spawns crawler binaries). No production or legacy database was touched, the PHP generator ran with `--network none`, and
+no DHT/BitTorrent traffic was produced. Nothing is pushed.
+
+**Residual risks / items for the owner.**
+1. Structural verification compares PostgreSQL deparser text baselined on PG 17; a future major version that changes the text makes
+   verification fail closed until the constants are re-baselined (the integration tests show this at once).
+2. Expired one-time links are not purged; an expired row is replaced at the user's next issuance (bounded: one per user and kind). A
+   purge is W3 work.
+3. "Revoked is permanent" is enforced by the store's conditional SQL only (no triggers, owner decision); an operator with UPDATE on the
+   token tables can still undo it by hand.
+4. The Argon2 bound of 64 MiB is a compatibility decision that the production hash audit can still change.
+5. W3 must call `password.Default.Prepare` before accepting logins and map `ErrBusy` to 503 with `Retry-After`.
+6. W8 must set migrated `invites.created_at` from the owner's `users.created_at` (documented approximation) and use
+   `OVERRIDING SYSTEM VALUE` plus `setval` for legacy ids (proven in `webschema` tests).
