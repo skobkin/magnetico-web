@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
+	"github.com/skobkin/magnetico-web/internal/web/problem"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	"github.com/skobkin/magnetico-web/internal/web/ui"
 )
@@ -60,6 +61,28 @@ func (a *Auth) formGuard(next http.Handler) http.Handler {
 // redirected to /login with its cookie cleared; a database error is 503; and
 // every non-safe method must carry the session-bound CSRF token.
 func (a *Auth) sessionGuard(next http.Handler) http.Handler {
+	return a.sessionGuardWith(next,
+		func(w http.ResponseWriter, r *http.Request) { redirect(w, loginLocation(r)) },
+		func(w http.ResponseWriter, r *http.Request) { a.unavailable(w, r, "") })
+}
+
+// sessionJSONGuard is the guard of server.SessionJSON: the same session
+// resolution as sessionGuard, but failures are application/problem+json
+// (401 for an anonymous or invalid session, 503 for a database error) rather
+// than a redirect or an HTML page.
+func (a *Auth) sessionJSONGuard(next http.Handler) http.Handler {
+	return a.sessionGuardWith(next,
+		func(w http.ResponseWriter, r *http.Request) {
+			problem.Write(w, problem.Problem{Slug: problem.Unauthenticated, Title: "Authentication required",
+				Status: http.StatusUnauthorized, Detail: "Sign in to use this endpoint."})
+		},
+		func(w http.ResponseWriter, r *http.Request) {
+			problem.Write(w, problem.Problem{Slug: problem.TemporarilyBusy, Title: "Service temporarily unavailable",
+				Status: http.StatusServiceUnavailable, RetryAfterSeconds: 5})
+		})
+}
+
+func (a *Auth) sessionGuardWith(next http.Handler, onAnonymous, onUnavailable http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, hash, present, wellFormed := a.readSession(r)
 		var sess accounts.Session
@@ -72,13 +95,13 @@ func (a *Auth) sessionGuard(next http.Handler) http.Handler {
 		if err != nil {
 			if !errors.Is(err, accounts.ErrUnauthenticated) {
 				a.log.Warn("session lookup failed", "request_id", server.RequestID(r.Context()), "error_type", typeName(err))
-				a.unavailable(w, r, "")
+				onUnavailable(w, r)
 				return
 			}
 			if present {
 				a.clearSessionCookie(w)
 			}
-			redirect(w, loginLocation(r))
+			onAnonymous(w, r)
 			return
 		}
 

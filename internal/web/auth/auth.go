@@ -124,8 +124,9 @@ func Install(srv *server.Server, cfg Config) (*Auth, error) {
 
 	rt := srv.Router()
 	rt.SetGuards(map[server.Access]server.Guard{
-		server.PublicForm: a.formGuard,
-		server.Session:    a.sessionGuard,
+		server.PublicForm:  a.formGuard,
+		server.Session:     a.sessionGuard,
+		server.SessionJSON: a.sessionJSONGuard,
 	})
 	rt.Handle("GET /login", server.KindRequest, server.PublicForm, http.HandlerFunc(a.getLogin))
 	rt.Handle("POST /login", server.KindRequest, server.PublicForm, http.HandlerFunc(a.postLogin))

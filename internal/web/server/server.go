@@ -109,6 +109,12 @@ const (
 	// Session routes require a valid session; non-safe methods are
 	// CSRF-protected with the session token.
 	Session
+	// SessionJSON routes are the session-authenticated JSON endpoints that
+	// serve the web UI (not API v2, which is bearer-only). They answer safe
+	// methods only (enforced at registration). An anonymous request gets a
+	// 401 application/problem+json instead of the login redirect, and no
+	// state-changing method exists to need CSRF protection.
+	SessionJSON
 )
 
 func (a Access) String() string {
@@ -119,6 +125,8 @@ func (a Access) String() string {
 		return "public-form"
 	case Session:
 		return "session"
+	case SessionJSON:
+		return "session-json"
 	}
 	return "unknown"
 }
@@ -158,8 +166,8 @@ func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodH
 // GET/HEAD, or a guarded class whose guard was not installed.
 func (r *Router) Handle(pattern string, k Kind, a Access, h http.Handler) {
 	method, _, hasMethod := strings.Cut(pattern, " ")
-	if a == Public && (!hasMethod || !safeMethod(method)) {
-		panic("server: public route " + pattern + " must be GET or HEAD only; state-changing routes need PublicForm or Session")
+	if (a == Public || a == SessionJSON) && (!hasMethod || !safeMethod(method)) {
+		panic("server: " + a.String() + " route " + pattern + " must be GET or HEAD only; state-changing routes need PublicForm or Session")
 	}
 	if a != Public {
 		g := r.guards[a]
