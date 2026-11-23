@@ -27,6 +27,10 @@ const (
 	Typical Shape = "typical"
 	// Deep: long chains of nested directories (depth up to ~24) with few files each.
 	Deep Shape = "deep"
+	// FlatMax: every file in the root with a ~252-byte, highly compressible name:
+	// ~63 MB of path bytes (97% of the 64 MiB aggregate limit) in one directory,
+	// the worst case for a copied-names (arena) index.
+	FlatMax Shape = "flatmax"
 	// DeepChain: a few chains of ~100 nested one- or two-letter directories with
 	// many files at the bottom: the worst case for decoders that copy the file
 	// list once per ancestor (the trie serializer).
@@ -101,6 +105,7 @@ func Corpus() []Spec {
 		{Name: "typical-250k", Shape: Typical, Files: 250_000, Seed: 4},
 		{Name: "flat-250k", Shape: Flat, Files: 250_000, Seed: 5},
 		{Name: "deep-250k", Shape: Deep, Files: 250_000, Seed: 6},
+		{Name: "flatmax-250k", Shape: FlatMax, Files: 250_000, Seed: 12},
 		{Name: "deepchain-250k", Shape: DeepChain, Files: 250_000, Seed: 11},
 		{Name: "wide-250k", Shape: Wide, Files: 250_000, Seed: 7},
 		{Name: "longpath-250k", Shape: LongPath, Files: 250_000, Seed: 8},
@@ -159,6 +164,8 @@ func Generate(s Spec) []codec.File {
 		files = genTree(rng, s, 4, 25, 12)
 	case Deep:
 		files = genDeep(rng, s)
+	case FlatMax:
+		files = genFlatMax(rng, s)
 	case DeepChain:
 		files = genDeepChain(rng, s)
 	case Wide:
@@ -316,6 +323,15 @@ func genDeepChain(rng *rand.Rand, s Spec) []codec.File {
 	files := make([]codec.File, s.Files)
 	for i := range files {
 		files[i] = codec.File{Path: fmt.Sprintf("%s%07d-%s", prefixes[i%chains], i, word(rng, 4)), Size: size(rng)}
+	}
+	return files
+}
+
+func genFlatMax(rng *rand.Rand, s Spec) []codec.File {
+	pad := strings.Repeat("x", 245)
+	files := make([]codec.File, s.Files)
+	for i := range files {
+		files[i] = codec.File{Path: fmt.Sprintf("%07d%s", i, pad), Size: size(rng)}
 	}
 	return files
 }

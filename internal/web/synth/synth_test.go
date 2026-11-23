@@ -60,6 +60,10 @@ func TestShapesHaveTheirCharacter(t *testing.T) {
 	if deep.MaxDepth < 8 {
 		t.Fatalf("deep too shallow: %+v", deep)
 	}
+	fm := Measure(Generate(Spec{Shape: FlatMax, Files: 1000, Seed: 1}))
+	if fm.MaxDepth != 0 || fm.PathBytes/fm.Files < 250 {
+		t.Fatalf("flatmax %+v", fm)
+	}
 	chain := Measure(Generate(Spec{Shape: DeepChain, Files: 5000, Seed: 1}))
 	if chain.MaxDepth < 100 {
 		t.Fatalf("deepchain depth %d", chain.MaxDepth)
