@@ -47,6 +47,13 @@ var (
 	// was verified (changed, reset or already rehashed) or is no longer
 	// active. Nothing was written.
 	ErrLoginStale = errors.New("account changed during login")
+	// ErrEmailUnavailable: confirming the address would violate the
+	// one-verified-address-per-account rule. The transaction was rolled back, so
+	// the link is NOT consumed and the previous address is unchanged.
+	ErrEmailUnavailable = errors.New("email address cannot be confirmed")
+	// ErrTokenLimit: the user already holds MaxActiveTokens unrevoked tokens of
+	// that type.
+	ErrTokenLimit = errors.New("too many active tokens")
 )
 
 // Store is the account store over a pgx pool.
@@ -122,6 +129,19 @@ func lockUserByName(ctx context.Context, tx pgx.Tx, username string) (lockedUser
 	return u, err
 }
 
+// lockUserByID locks the user row FOR UPDATE and reads active in the same
+// statement.
+func lockUserByID(ctx context.Context, tx pgx.Tx, id int64) (lockedUser, error) {
+	u := lockedUser{id: id}
+	err := tx.QueryRow(ctx,
+		`SELECT active, password_hash IS NOT NULL FROM magnetico_web.users WHERE id = $1 FOR UPDATE`,
+		id).Scan(&u.active, &u.hasPassword)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return u, ErrNotFound
+	}
+	return u, err
+}
+
 // Revocations counts what a credential reset removed.
 type Revocations struct {
 	Sessions  int64
@@ -129,19 +149,26 @@ type Revocations struct {
 	RSSTokens int64
 }
 
+func revokeAPITokensTx(ctx context.Context, tx pgx.Tx, userID int64) (int64, error) {
+	tag, err := tx.Exec(ctx, `UPDATE magnetico_web.api_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return tag.RowsAffected(), err
+}
+
+func revokeRSSTokensTx(ctx context.Context, tx pgx.Tx, userID int64) (int64, error) {
+	tag, err := tx.Exec(ctx, `UPDATE magnetico_web.rss_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return tag.RowsAffected(), err
+}
+
 // revokeTokensTx revokes every not-yet-revoked API and RSS token (legacy RSS
 // tokens included). An already revoked token keeps its original revoked_at.
 func revokeTokensTx(ctx context.Context, tx pgx.Tx, userID int64) (api, rss int64, err error) {
-	tag, err := tx.Exec(ctx, `UPDATE magnetico_web.api_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
-	if err != nil {
+	if api, err = revokeAPITokensTx(ctx, tx, userID); err != nil {
 		return 0, 0, err
 	}
-	api = tag.RowsAffected()
-	tag, err = tx.Exec(ctx, `UPDATE magnetico_web.rss_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
-	if err != nil {
+	if rss, err = revokeRSSTokensTx(ctx, tx, userID); err != nil {
 		return 0, 0, err
 	}
-	return api, tag.RowsAffected(), nil
+	return api, rss, nil
 }
 
 // resetRevocationsTx is the shared tail of every password reset (§4.9.6,

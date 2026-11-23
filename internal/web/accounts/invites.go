@@ -89,6 +89,69 @@ func (s *Store) ListInvites(ctx context.Context, username string) ([]Invite, err
 	return out, rows.Err()
 }
 
+// ListInvitesByOwner returns the invitations owned by the user id, newest
+// first. It never returns another owner's rows.
+func (s *Store) ListInvitesByOwner(ctx context.Context, ownerID int64) ([]Invite, error) {
+	rows, err := s.pool.Query(ctx, `SELECT i.id, i.code, COALESCE(ub.username,''), i.used_at, i.created_at, i.expires_at, i.revoked_at,
+            i.expires_at IS NOT NULL AND i.expires_at <= now(), o.active
+        FROM magnetico_web.invites i JOIN magnetico_web.users o ON o.id = i.owner_id
+        LEFT JOIN magnetico_web.users ub ON ub.id = i.used_by
+        WHERE i.owner_id = $1 ORDER BY i.id DESC`, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Invite
+	for rows.Next() {
+		var v Invite
+		if err := rows.Scan(&v.ID, &v.Code, &v.UsedBy, &v.UsedAt, &v.CreatedAt, &v.ExpiresAt, &v.RevokedAt, &v.Expired, &v.OwnerActive); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// RevokeOwnInvite revokes an unused invitation owned by ownerID. An id that is
+// unknown or owned by someone else is ErrNotFound (indistinguishable); a used
+// or already revoked own invitation is reported, not changed.
+func (s *Store) RevokeOwnInvite(ctx context.Context, ownerID, id int64) (RevokeOutcome, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE magnetico_web.invites SET revoked_at = now()
+        WHERE id = $1 AND owner_id = $2 AND revoked_at IS NULL AND used_by IS NULL`, id, ownerID)
+	if err != nil {
+		return 0, err
+	}
+	if tag.RowsAffected() == 1 {
+		return InviteRevoked, nil
+	}
+	var usedBy *int64
+	err = s.pool.QueryRow(ctx, `SELECT used_by FROM magnetico_web.invites WHERE id = $1 AND owner_id = $2`, id, ownerID).Scan(&usedBy)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, ErrNotFound
+	case err != nil:
+		return 0, err
+	case usedBy != nil:
+		return InviteAlreadyUsed, nil
+	}
+	return InviteAlreadyRevoked, nil
+}
+
+// CheckInvite reports whether the code is currently usable: it exists, is
+// unused, unrevoked and unexpired, and its owner is active. It reads only; the
+// caller must show one generic message for every false.
+func (s *Store) CheckInvite(ctx context.Context, code string) (bool, error) {
+	if len(code) == 0 || len(code) > 64 {
+		return false, nil
+	}
+	var ok bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM magnetico_web.invites i
+        JOIN magnetico_web.users o ON o.id = i.owner_id
+        WHERE i.code = $1 AND i.used_by IS NULL AND i.revoked_at IS NULL
+          AND (i.expires_at IS NULL OR i.expires_at > now()) AND o.active)`, code).Scan(&ok)
+	return ok, err
+}
+
 // RevokeOutcome says what RevokeInvite did.
 type RevokeOutcome int
 

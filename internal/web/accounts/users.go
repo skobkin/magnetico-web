@@ -20,6 +20,10 @@ const (
 const (
 	PurposeSetup = "setup"
 	PurposeReset = "reset"
+	// PurposeEmailVerify links confirm an address (web-v1 §4.9.7).
+	PurposeEmailVerify = "email_verify"
+	// EmailLinkTTL is the lifetime of an email verification link (§4.9.4).
+	EmailLinkTTL = 24 * time.Hour
 )
 
 // User is one account row as the CLI and later the web layer need it.
@@ -66,6 +70,18 @@ func (s *Store) GetUser(ctx context.Context, username string) (User, error) {
 	return u, err
 }
 
+// GetUserByID is GetUser by primary key.
+func (s *Store) GetUserByID(ctx context.Context, id int64) (User, error) {
+	var u User
+	err := s.pool.QueryRow(ctx, `SELECT id, username, COALESCE(email,''), email_verified_at IS NOT NULL,
+        COALESCE(password_hash,''), active, role, created_at, last_login_at FROM magnetico_web.users WHERE id = $1`, id).
+		Scan(&u.ID, &u.Username, &u.Email, &u.EmailVerified, &u.PasswordHash, &u.Active, &u.Role, &u.CreatedAt, &u.LastLoginAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return u, ErrNotFound
+	}
+	return u, err
+}
+
 // Link is a freshly issued one-time link; Token is shown exactly once.
 type Link struct {
 	Token     string
@@ -80,7 +96,18 @@ type Link struct {
 // holds the user row FOR UPDATE. The DELETE removes an expired link too, so
 // the unique index cannot conflict, and it is undone if the transaction fails.
 func issueLinkTx(ctx context.Context, tx pgx.Tx, userID int64, purpose string, ttl time.Duration) (Link, error) {
-	if _, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose IN ('setup','reset')`, userID); err != nil {
+	return issueLinkForTx(ctx, tx, userID, purpose, ttl, nil)
+}
+
+// issueLinkForTx is issueLinkTx for any purpose: email is the target address
+// of an email_verify link and nil for setup/reset. Each kind (password link,
+// email link) has at most one outstanding row per user; issuing replaces it.
+func issueLinkForTx(ctx context.Context, tx pgx.Tx, userID int64, purpose string, ttl time.Duration, email *string) (Link, error) {
+	kind := `purpose IN ('setup','reset')`
+	if purpose == PurposeEmailVerify {
+		kind = `purpose = 'email_verify'`
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND `+kind, userID); err != nil {
 		return Link{}, err
 	}
 	token, err := randomToken("", 32)
@@ -88,9 +115,9 @@ func issueLinkTx(ctx context.Context, tx pgx.Tx, userID int64, purpose string, t
 		return Link{}, err
 	}
 	var expires time.Time
-	err = tx.QueryRow(ctx, `INSERT INTO magnetico_web.one_time_tokens (token_hash, user_id, purpose, expires_at)
-        VALUES ($1, $2, $3, statement_timestamp() + make_interval(secs => $4)) RETURNING expires_at`,
-		hashToken(token), userID, purpose, ttl.Seconds()).Scan(&expires)
+	err = tx.QueryRow(ctx, `INSERT INTO magnetico_web.one_time_tokens (token_hash, user_id, purpose, email, expires_at)
+        VALUES ($1, $2, $3, $4, statement_timestamp() + make_interval(secs => $5)) RETURNING expires_at`,
+		hashToken(token), userID, purpose, email, ttl.Seconds()).Scan(&expires)
 	if err != nil {
 		if c, ok := uniqueViolation(err); ok && c == "one_time_tokens_one_per_kind" {
 			return Link{}, ErrConflict
