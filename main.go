@@ -29,6 +29,9 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/progress"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
+	"github.com/skobkin/magnetico-web/internal/web/accounts"
+	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
+	"github.com/skobkin/magnetico-web/internal/web/password"
 	webserver "github.com/skobkin/magnetico-web/internal/web/server"
 	webdb "github.com/skobkin/magnetico-web/internal/web/webdb"
 	"github.com/skobkin/magnetico-web/internal/web/webschema"
@@ -327,6 +330,20 @@ func runWeb(o *opflags.WebOptions) {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}
+	// Authentication (W3): sessions, CSRF, login/logout, rate limits and the
+	// purger. password.Default is prepared by a startup hook before the
+	// listener opens.
+	if _, err := webauth.Install(srv, webauth.Config{
+		Store:    accounts.New(backend.Pool()),
+		Verifier: password.Default,
+		Lifetimes: accounts.SessionLifetimes{
+			Idle: o.SessionIdleTimeout, Absolute: o.SessionAbsoluteLifetime, Remember: o.SessionRememberLifetime,
+		},
+		DevMode: o.DevMode,
+	}); err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
 
 	err = srv.Run(ctx)
 	if errors.Is(err, webserver.ErrShutdownIncomplete) {
@@ -351,6 +368,8 @@ func webErrorDetail(err error) string {
 		return webschema.ErrWebSchemaUnsupported.Error()
 	case errors.Is(err, webschema.ErrWebPrivileges):
 		return webschema.ErrWebPrivileges.Error()
+	case errors.Is(err, webauth.ErrPrepare):
+		return webauth.ErrPrepare.Error()
 	}
 	return controlledErrorDetail(err)
 }

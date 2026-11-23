@@ -72,6 +72,10 @@ func (b *Backend) Verify(ctx context.Context) error {
 	return webschema.Verify(ctx, b.pool, webschema.Runtime)
 }
 
+// Pool exposes the pool to the stores built on it (accounts). The backend
+// still owns it: Close closes it.
+func (b *Backend) Pool() *pgxpool.Pool { return b.pool }
+
 // Ping implements the readiness check.
 func (b *Backend) Ping(ctx context.Context) error { return b.pool.Ping(ctx) }
 

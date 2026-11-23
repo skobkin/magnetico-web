@@ -157,3 +157,28 @@ func (r *Renderer) Render(w http.ResponseWriter, status int, page string, data a
 	_, err := w.Write(buf.Bytes())
 	return err
 }
+
+// LoginPage is the data of the sign-in form (W3's minimal presentation; W5
+// owns the real design).
+type LoginPage struct {
+	CSRFToken string
+	Next      string // validated local path or ""
+	Username  string // echoed after a failed attempt (escaped by the template); never the password
+	Remember  bool
+	Error     string // generic message, "" for none
+}
+
+// HomePage is the interim signed-in page served at the exact root until W4
+// adds the torrent pages.
+type HomePage struct {
+	Username  string
+	CSRFToken string // session-bound token for the logout form
+}
+
+// MessagePage is a plain notice (CSRF failure, temporary unavailability).
+type MessagePage struct {
+	Heading  string
+	Message  string
+	LinkHref string // optional same-origin link
+	LinkText string
+}

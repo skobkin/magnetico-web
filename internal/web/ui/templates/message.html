@@ -1,0 +1,6 @@
+{{define "title"}}{{.Heading}}{{end}}
+{{define "content"}}
+<h1>{{.Heading}}</h1>
+<p>{{.Message}}</p>
+{{if .LinkHref}}<p><a href="{{.LinkHref}}">{{.LinkText}}</a></p>{{end}}
+{{end}}
