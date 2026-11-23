@@ -24,11 +24,9 @@ import (
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
-	"github.com/skobkin/magnetico-web/internal/web/filetree"
 	"github.com/skobkin/magnetico-web/internal/web/fileview"
 	"github.com/skobkin/magnetico-web/internal/web/gate"
 	"github.com/skobkin/magnetico-web/internal/web/pathfmt"
-	"github.com/skobkin/magnetico-web/internal/web/problem"
 	"github.com/skobkin/magnetico-web/internal/web/search"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	trackerspkg "github.com/skobkin/magnetico-web/internal/web/trackers"
@@ -82,9 +80,10 @@ type Deps struct {
 
 // Handlers serves the W4 routes.
 type Handlers struct {
-	d   Deps
-	srv *server.Server
-	log *slog.Logger
+	d     Deps
+	srv   *server.Server
+	log   *slog.Logger
+	files *FileAPI
 }
 
 // Install registers the routes on srv's router: the HTML pages are Session
@@ -96,6 +95,8 @@ func Install(srv *server.Server, d Deps) (*Handlers, error) {
 		return nil, errors.New("torrents: search, details and view are required")
 	}
 	h := &Handlers{d: d, srv: srv, log: srv.Logger()}
+	h.files = &FileAPI{Details: d.Details, View: d.View, Log: srv.Logger(),
+		DirURL: func(id int32) string { return torrentPath(id) + "/files" }}
 	rt := srv.Router()
 	rt.Handle("GET /torrents", server.KindSearch, server.Session, http.HandlerFunc(h.list))
 	rt.Handle("GET /torrents/{id}", server.KindRequest, server.Session, http.HandlerFunc(h.details))
@@ -438,134 +439,10 @@ func (h *Handlers) details(w http.ResponseWriter, r *http.Request) {
 
 // ---- file view JSON ----------------------------------------------------------
 
-func writeBody(w http.ResponseWriter, body *fileview.Body) {
-	defer body.Release()
-	b := body.Bytes()
-	hd := w.Header()
-	hd.Set("Content-Type", "application/json")
-	hd.Set("Cache-Control", "private, no-store")
-	hd.Set("Content-Length", strconv.Itoa(len(b)))
-	_, _ = w.Write(b)
-}
-
-// fileTree serves GET /torrents/{id}/files/tree.
-func (h *Handlers) fileTree(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(r.PathValue("id"))
-	if !ok {
-		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such torrent.")
-		return
-	}
-	t, err := h.d.Details.TorrentByID(r.Context(), id)
-	if err != nil {
-		h.failJSON(w, r, id, err)
-		return
-	}
-	body, err := h.d.View.Tree(r.Context(), t)
-	if err != nil {
-		h.logFileView(r, id, "tree", err, 0)
-		h.failJSON(w, r, id, err)
-		return
-	}
-	h.logFileView(r, id, "tree", nil, len(body.Bytes()))
-	writeBody(w, body)
-}
-
-// fileDir serves GET /torrents/{id}/files?dir=&offset=&limit=.
-func (h *Handlers) fileDir(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseID(r.PathValue("id"))
-	if !ok {
-		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such torrent.")
-		return
-	}
-	q, err := url.ParseQuery(r.URL.RawQuery)
-	if err != nil || len(q["dir"]) > 1 || len(q["offset"]) > 1 || len(q["limit"]) > 1 {
-		jsonProblem(w, problem.InvalidParameter, "Invalid parameter", http.StatusBadRequest, "The query string is not valid.")
-		return
-	}
-	pg, err := fileview.ParsePage(q.Get("offset"), q.Get("limit"))
-	if err != nil {
-		h.failJSON(w, r, id, err)
-		return
-	}
-	body, err := h.d.View.Dir(r.Context(), id, q.Get("dir"), pg)
-	if err != nil {
-		h.logFileView(r, id, "dir", err, 0)
-		h.failJSON(w, r, id, err)
-		return
-	}
-	h.logFileView(r, id, "dir", nil, len(body.Bytes()))
-	writeBody(w, body)
-}
-
-func (h *Handlers) logFileView(r *http.Request, id int32, op string, err error, n int) {
-	outcome := "ok"
-	if err != nil {
-		outcome = fmt.Sprintf("%T", err)
-	}
-	h.log.Info("file view", "request_id", server.RequestID(r.Context()), "torrent_id", id, "op", op, "outcome", outcome, "bytes", n)
-}
-
-func jsonProblem(w http.ResponseWriter, slug, title string, status int, detail string) {
-	problem.Write(w, problem.Problem{Slug: slug, Title: title, Status: status, Detail: detail})
-}
-
-// failJSON maps a read-path error to a problem+json response. It mirrors fail
-// (same categories, same log safety) for the JSON endpoints.
-func (h *Handlers) failJSON(w http.ResponseWriter, r *http.Request, id int32, err error) {
-	rid := server.RequestID(r.Context())
-	var le *codec.LimitError
-	var ue *fileview.UnavailableError
-	busy := func(title string) {
-		problem.Write(w, problem.Problem{Slug: problem.TemporarilyBusy, Title: title,
-			Status: http.StatusServiceUnavailable, Detail: "Please try again shortly.", RetryAfterSeconds: 5})
-	}
-	switch {
-	case errors.Is(err, context.Canceled):
-		return
-	case errors.Is(err, persistence.ErrTorrentNotFound):
-		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such torrent.")
-	case errors.Is(err, fileview.ErrBadPath), errors.Is(err, fileview.ErrBadPage):
-		jsonProblem(w, problem.InvalidParameter, "Invalid parameter", http.StatusBadRequest,
-			"The directory path, offset or limit is not valid.")
-	case errors.Is(err, fileview.ErrNoSuchDir):
-		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such directory in this torrent.")
-	case errors.As(err, &ue):
-		problem.Write(w, problem.Problem{Slug: problem.FullTreeUnavailable, Title: "Full file tree unavailable",
-			Status:    http.StatusUnprocessableEntity,
-			Detail:    "The complete file tree is not available for this torrent. Browse it directory by directory instead.",
-			Alternate: torrentPath(id) + "/files"})
-	case errors.Is(err, filetree.ErrIndexComplexity):
-		h.log.Warn("file hierarchy exceeds the web index limits", "request_id", rid, "torrent_id", id)
-		jsonProblem(w, problem.IndexTooComplex, "File structure too complex", http.StatusUnprocessableEntity,
-			"The file structure of this torrent exceeds this server's browsing limits.")
-	case errors.Is(err, gate.ErrBusy):
-		busy("The server is busy")
-	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, persistence.ErrStatementTimeout),
-		errors.Is(err, persistence.ErrBudgetExhausted):
-		busy("The request timed out")
-	case errors.Is(err, persistence.ErrBlobChanged), errors.Is(err, filecache.ErrClosed), errors.Is(err, persistence.ErrStorageIO):
-		h.log.Warn("file list temporarily unavailable", "request_id", rid, "torrent_id", id, "error_type", fmt.Sprintf("%T", err))
-		busy("Temporarily unavailable")
-	case errors.Is(err, persistence.ErrIntegrityMissingBlob):
-		h.log.Error("file list blob missing", "request_id", rid, "torrent_id", id, "category", "missing_blob")
-		jsonProblem(w, problem.InternalError, "File list unavailable", http.StatusInternalServerError,
-			"The file list of this torrent is missing from the database.")
-	case errors.Is(err, filecache.ErrTooLargeToIndex):
-		jsonProblem(w, problem.InternalError, "File list too large", http.StatusInternalServerError,
-			"This file list is too large to browse.")
-	case errors.Is(err, persistence.ErrCorruptBlob):
-		attrs := []any{"request_id", rid, "torrent_id", id, "category", "corrupt_blob"}
-		if errors.As(err, &le) {
-			attrs = append(attrs, "limit", le.Limit, "actual", le.Actual, "allowed", le.Allowed)
-		}
-		h.log.Error("file list blob rejected", attrs...)
-		jsonProblem(w, problem.InternalError, "File list unavailable", http.StatusInternalServerError,
-			"The stored file list of this torrent is damaged or exceeds the supported limits.")
-	default:
-		h.log.Error("request failed", "request_id", rid, "torrent_id", id, "error_type", fmt.Sprintf("%T", err))
-		jsonProblem(w, problem.InternalError, "Internal error", http.StatusInternalServerError, "Something went wrong on our side.")
-	}
-}
+// fileTree and fileDir are the session-authenticated adapters; the logic is
+// FileAPI, shared with /api/v2.
+func (h *Handlers) fileTree(w http.ResponseWriter, r *http.Request) { h.files.Tree(w, r) }
+func (h *Handlers) fileDir(w http.ResponseWriter, r *http.Request)  { h.files.Dir(w, r) }
 
 // ---- error mapping ----------------------------------------------------------
 

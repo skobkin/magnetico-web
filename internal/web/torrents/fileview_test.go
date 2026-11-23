@@ -656,22 +656,6 @@ func TestEncodeSaturationIsBusyAndRecovers(t *testing.T) {
 	}
 }
 
-func TestNoPublicAPIv2RoutesYet(t *testing.T) {
-	e := newEnv(t)
-	for _, r := range e.srv.Router().Routes() {
-		if strings.Contains(r.Pattern, "/api/") {
-			t.Errorf("API route %s must not exist before W7's bearer authentication", r.Pattern)
-		}
-	}
-	c := e.signedIn()
-	id := e.seed("x", 5, 1, nil)
-	for _, p := range []string{fmt.Sprintf("/api/v2/torrents/%d", id), fmt.Sprintf("/api/v2/torrents/%d/files", id), fmt.Sprintf("/api/v2/torrents/%d/files/tree", id)} {
-		if res := c.get(p); res.StatusCode != 404 {
-			t.Errorf("%s: %d, want 404", p, res.StatusCode)
-		}
-	}
-}
-
 func TestSearchPageUiMarkupSortingAndMagnets(t *testing.T) {
 	e := newEnv(t)
 	small := e.seed("alpha <b>release</b>", 100, 3, nil)

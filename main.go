@@ -31,6 +31,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	webaccount "github.com/skobkin/magnetico-web/internal/web/account"
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
+	webapiv2 "github.com/skobkin/magnetico-web/internal/web/apiv2"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
 	"github.com/skobkin/magnetico-web/internal/web/fileview"
@@ -424,6 +425,15 @@ func runWeb(o *opflags.WebOptions) {
 
 	if _, err := webtorrents.Install(srv, webtorrents.Deps{
 		Search: searchSvc, Details: reader, View: viewSvc, Trackers: trackerCache, PublicBase: o.PublicBaseURL,
+	}); err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+
+	// Public REST API v2 (W7): bearer API tokens only, over the same search,
+	// details and file-view services as the pages.
+	if _, err := webapiv2.Install(srv, webapiv2.Config{
+		Auth: accountStore, Search: searchSvc, Details: reader, View: viewSvc, Trackers: trackerCache,
 	}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())

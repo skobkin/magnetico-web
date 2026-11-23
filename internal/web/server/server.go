@@ -172,6 +172,17 @@ type Router struct {
 // called before any route of those classes is registered.
 func (r *Router) SetGuards(g map[Access]Guard) { r.guards = g }
 
+// SetGuard installs the guard of one access class, keeping the others. Feature
+// packages that own a credential type (the API v2 bearer guard) install theirs
+// with it; the auth package installs the three session-based classes with
+// SetGuards.
+func (r *Router) SetGuard(a Access, g Guard) {
+	if r.guards == nil {
+		r.guards = map[Access]Guard{}
+	}
+	r.guards[a] = g
+}
+
 // Routes lists the registered routes in registration order.
 func (r *Router) Routes() []Route { return append([]Route(nil), r.routes...) }
 

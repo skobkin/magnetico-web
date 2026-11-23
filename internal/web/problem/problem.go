@@ -25,6 +25,7 @@ const (
 	InternalError         = "internal-error"
 	MethodNotAllowed      = "method-not-allowed"
 	ServiceNotImplemented = "not-implemented"
+	RateLimited           = "rate-limited"
 )
 
 // Problem is one problem document.

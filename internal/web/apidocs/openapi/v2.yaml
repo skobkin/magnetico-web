@@ -1,0 +1,449 @@
+openapi: 3.1.0
+info:
+  title: Magnetico API
+  version: "2.0"
+  description: |
+    Read-only JSON API of a private Magnetico instance: torrent search, torrent
+    details and the file list of a torrent.
+
+    **Authentication.** Every endpoint except the RSS feed requires an API
+    token sent as `Authorization: Bearer <token>`. API tokens start with
+    `mgt_` and are created by a signed-in user on the account page; the secret
+    is shown once. Session cookies, RSS tokens, legacy tokens and tokens in
+    the query string are **not** accepted and get `401`. RSS tokens
+    (`mgf_...`) open only the RSS feed.
+
+    **Errors** are `application/problem+json` (RFC 9457). `type` is a stable
+    URN of the form `urn:magnetico:problem:<slug>`; see the `Problem` schema.
+
+    **Timestamps** are RFC 3339 in UTC. **Names** of files and directories are
+    arbitrary byte strings: when they are valid UTF-8 the member `name` is the
+    string; otherwise `name` is `null` and `name_base64` holds the exact bytes
+    (RFC 4648 standard alphabet, with padding). Nothing is ever replaced by
+    U+FFFD.
+
+    **File lists.** Two independent operations exist. `files/tree` returns the
+    whole hierarchy in one document, but only for torrents with
+    `full_tree_available = true`; for others it answers `422`. `files` returns
+    one bounded page of one directory and works for every torrent.
+servers:
+  - url: /api/v2
+security:
+  - bearerAuth: []
+tags:
+  - name: Torrents
+  - name: Files
+paths:
+  /torrents:
+    get:
+      tags: [Torrents]
+      operationId: listTorrents
+      summary: Search torrents or look one up by info hash
+      description: |
+        Without parameters returns the newest torrents. `q` is split on
+        whitespace; words shorter than 3 characters are ignored; every other
+        word must occur in the name (case-insensitively, `%` and `_` are
+        literal). Results use keyset pagination: pass `next_cursor` as `cursor`
+        to continue. No total count is provided. `info_hash` is an exact
+        lookup returning zero or one item and cannot be combined with `q`,
+        `sort`, `order` or `cursor`.
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 512}
+        - name: info_hash
+          in: query
+          description: Exactly 40 hexadecimal characters, either case.
+          schema: {type: string, pattern: "^[0-9a-fA-F]{40}$"}
+        - name: sort
+          in: query
+          description: Unknown values fall back to `discovered`. `name` needs at least one usable word in `q`.
+          schema: {type: string, enum: [discovered, size, name], default: discovered}
+        - name: order
+          in: query
+          description: Unknown values use the default of the sort (descending, except ascending for `name`).
+          schema: {type: string, enum: [asc, desc]}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+        - name: cursor
+          in: query
+          description: Opaque value from a previous `next_cursor`, valid only for the same search.
+          schema: {type: string, maxLength: 8192}
+      responses:
+        "200":
+          description: A page of torrents.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TorrentPage"}
+        "400": {$ref: "#/components/responses/InvalidParameter"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/InternalError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /torrents/{id}:
+    get:
+      tags: [Torrents]
+      operationId: getTorrent
+      summary: Torrent metadata
+      description: |
+        Returns the metadata, the magnet URI (with the configured trackers) and
+        `full_tree_available`: `true` means `files/tree` can deliver the whole
+        file hierarchy in one response, `false` means use `files`. Clients may
+        always choose `files`.
+      parameters:
+        - {$ref: "#/components/parameters/TorrentId"}
+      responses:
+        "200":
+          description: The torrent.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TorrentDetails"}
+        "400": {$ref: "#/components/responses/InvalidParameter"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/InternalError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /torrents/{id}/files/tree:
+    get:
+      tags: [Files]
+      operationId: getFileTree
+      summary: The complete file hierarchy (small torrents only)
+      description: |
+        Available only when the torrent's `full_tree_available` is `true`. The
+        limit is applied before any byte of the response is sent, so a `200` is
+        never started for a tree that turns out too large. Otherwise the answer
+        is `422` with the `full-tree-unavailable` problem, whose `alternate`
+        member is the URL of the paginated `files` endpoint. A hierarchy beyond
+        the server's index limits answers `422` `index-too-complex`.
+      parameters:
+        - {$ref: "#/components/parameters/TorrentId"}
+      responses:
+        "200":
+          description: file-tree v1.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FileTree"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422":
+          description: The tree cannot be delivered in one response.
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+              examples:
+                fullTreeUnavailable:
+                  value:
+                    type: "urn:magnetico:problem:full-tree-unavailable"
+                    title: Full file tree unavailable
+                    status: 422
+                    detail: The complete file tree is not available for this torrent. Browse it directory by directory instead.
+                    alternate: /api/v2/torrents/42/files
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/InternalError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+  /torrents/{id}/files:
+    get:
+      tags: [Files]
+      operationId: getFilePage
+      summary: One page of one directory (any torrent)
+      description: |
+        Directories are addressed by deterministic positional paths: `""` is
+        the root, otherwise decimal components joined by `_` (for example
+        `2_5_6`); component *i* is the index of a subdirectory in its parent's
+        listing, where subdirectories are listed first, sorted by name bytes.
+        Entries are the subdirectories, then the files in canonical order.
+        Continue with `next_offset` (not `offset + limit`): a page is cut when
+        it would exceed 1 MiB, so it can hold fewer entries than `limit`.
+        An offset past the end is a valid empty page. Duplicate files are
+        distinct entries, each with its canonical position `file_index`.
+      parameters:
+        - {$ref: "#/components/parameters/TorrentId"}
+        - name: dir
+          in: query
+          description: Positional directory path; at most 256 components. Empty or absent means the root.
+          schema:
+            type: string
+            pattern: "^((0|[1-9][0-9]{0,5})(_(0|[1-9][0-9]{0,5})){0,255})?$"
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 1000, default: 160}
+      responses:
+        "200":
+          description: file-dir-page v1.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/FileDirPage"}
+        "400": {$ref: "#/components/responses/InvalidParameter"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422":
+          description: The file hierarchy exceeds this server's browsing limits (`index-too-complex`).
+          content:
+            application/problem+json:
+              schema: {$ref: "#/components/schemas/Problem"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/InternalError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        An API token (`mgt_...`) created on the account page. Put it in the
+        `Authorization` header only; it is never accepted in a URL or cookie.
+  parameters:
+    TorrentId:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int32, minimum: 1}
+  responses:
+    InvalidParameter:
+      description: A parameter is malformed (`invalid-parameter`).
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    Unauthenticated:
+      description: |
+        The Authorization header is missing or does not carry a valid, current
+        API token (`unauthenticated`). The same answer is given for unknown,
+        expired, revoked and suspended tokens.
+      headers:
+        WWW-Authenticate:
+          schema: {type: string}
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    NotFound:
+      description: No such torrent or directory (`not-found`).
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    RateLimited:
+      description: Too many requests (`rate-limited`).
+      headers:
+        Retry-After:
+          schema: {type: integer, minimum: 0}
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    Unavailable:
+      description: The server is busy, a deadline passed or storage is unavailable (`temporarily-unavailable`). Retry after the delay.
+      headers:
+        Retry-After:
+          schema: {type: integer, minimum: 0}
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    InternalError:
+      description: A stored file list is missing or damaged, or an unexpected failure (`internal-error`).
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+  schemas:
+    Torrent:
+      type: object
+      required: [id, info_hash, name, total_size, file_count, discovered_at]
+      properties:
+        id: {type: integer, format: int32}
+        info_hash:
+          type: string
+          pattern: "^[0-9a-f]{40}$"
+          description: Lower-case hexadecimal.
+        name: {type: string}
+        total_size: {type: integer, format: int64, minimum: 0}
+        file_count: {type: integer, format: int32, minimum: 0}
+        discovered_at: {type: string, format: date-time}
+    TorrentDetails:
+      allOf:
+        - $ref: "#/components/schemas/Torrent"
+        - type: object
+          required: [magnet_uri, full_tree_available]
+          properties:
+            magnet_uri:
+              type: string
+              description: A magnet URI with the name and the configured trackers.
+            full_tree_available:
+              type: boolean
+              description: |
+                `true` when `files/tree` can deliver the whole hierarchy in one
+                response. `false` means use `files`.
+    TorrentPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: "#/components/schemas/Torrent"}
+        next_cursor:
+          type: [string, "null"]
+          description: Pass as `cursor` to get the next page; `null` at the end.
+    NamedUTF8:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+    NamedBytes:
+      type: object
+      required: [name, name_base64]
+      properties:
+        name: {type: "null"}
+        name_base64:
+          type: string
+          contentEncoding: base64
+          description: The exact bytes (RFC 4648 §4, with padding).
+    Name:
+      description: |
+        Exactly one of two forms: `name` is a string (valid UTF-8, possibly
+        empty), or `name` is `null` and `name_base64` carries the bytes.
+      oneOf:
+        - $ref: "#/components/schemas/NamedUTF8"
+        - $ref: "#/components/schemas/NamedBytes"
+    FileTree:
+      type: object
+      required: [version, file_count, size, root]
+      properties:
+        version: {type: integer, const: 1}
+        file_count: {type: integer, minimum: 0}
+        size: {type: integer, minimum: 0}
+        root: {$ref: "#/components/schemas/FileTreeRoot"}
+    FileTreeRoot:
+      type: object
+      description: The root directory; it has no name.
+      required: [file_count, size, dirs, files]
+      properties:
+        file_count: {type: integer, minimum: 0}
+        size: {type: integer, minimum: 0}
+        dirs:
+          type: array
+          description: Subdirectories sorted by name bytes; the item at index *i* has positional component *i*.
+          items: {$ref: "#/components/schemas/FileTreeDir"}
+        files:
+          type: array
+          description: Files in canonical order.
+          items: {$ref: "#/components/schemas/FileTreeFile"}
+    FileTreeDir:
+      allOf:
+        - $ref: "#/components/schemas/Name"
+        - type: object
+          required: [file_count, size, dirs, files]
+          properties:
+            file_count: {type: integer, minimum: 0, description: Recursive.}
+            size: {type: integer, minimum: 0, description: Recursive.}
+            dirs:
+              type: array
+              items: {$ref: "#/components/schemas/FileTreeDir"}
+            files:
+              type: array
+              items: {$ref: "#/components/schemas/FileTreeFile"}
+    FileTreeFile:
+      allOf:
+        - $ref: "#/components/schemas/Name"
+        - type: object
+          required: [size, file_index, duplicate]
+          properties:
+            size: {type: integer, minimum: 0}
+            file_index:
+              type: integer
+              minimum: 0
+              description: Canonical position of the file in the torrent; the identity of duplicates.
+            duplicate:
+              type: boolean
+              description: True when the name equals the previous file entry's name in the same directory.
+    FileDirPage:
+      type: object
+      required: [version, path, ancestors, dir, offset, limit, next_offset, entries]
+      properties:
+        version: {type: integer, const: 1}
+        path:
+          type: string
+          description: Positional path of this directory (`""` for the root).
+        ancestors:
+          type: array
+          description: The directories from the root's child down to this directory.
+          items: {$ref: "#/components/schemas/Ancestor"}
+        dir: {$ref: "#/components/schemas/DirSummary"}
+        offset: {type: integer, minimum: 0}
+        limit: {type: integer, minimum: 1, maximum: 1000}
+        next_offset:
+          type: [integer, "null"]
+          minimum: 0
+          description: Offset of the first row not returned, or `null` at the end. Continue with this value, not `offset + limit`.
+        entries:
+          type: array
+          items: {$ref: "#/components/schemas/DirEntry"}
+    Ancestor:
+      allOf:
+        - $ref: "#/components/schemas/Name"
+        - type: object
+          required: [path]
+          properties:
+            path: {type: string}
+    DirSummary:
+      type: object
+      required: [file_count, size, dir_count, entry_count]
+      properties:
+        file_count: {type: integer, minimum: 0, description: Recursive.}
+        size: {type: integer, minimum: 0, description: Recursive.}
+        dir_count: {type: integer, minimum: 0, description: Immediate subdirectories.}
+        entry_count: {type: integer, minimum: 0, description: Listing rows (`dir_count` plus immediate files).}
+    DirEntry:
+      oneOf:
+        - $ref: "#/components/schemas/DirEntryDir"
+        - $ref: "#/components/schemas/FileEntry"
+      discriminator:
+        propertyName: type
+        mapping:
+          dir: "#/components/schemas/DirEntryDir"
+          file: "#/components/schemas/FileEntry"
+    DirEntryDir:
+      allOf:
+        - $ref: "#/components/schemas/Name"
+        - type: object
+          required: [type, path, file_count, size, dir_count, entry_count]
+          properties:
+            type: {type: string, const: dir}
+            path: {type: string, description: Positional path of the subdirectory.}
+            file_count: {type: integer, minimum: 0}
+            size: {type: integer, minimum: 0}
+            dir_count: {type: integer, minimum: 0}
+            entry_count: {type: integer, minimum: 0}
+    FileEntry:
+      allOf:
+        - $ref: "#/components/schemas/Name"
+        - type: object
+          required: [type, size, file_index, duplicate]
+          properties:
+            type: {type: string, const: file}
+            size: {type: integer, minimum: 0}
+            file_index: {type: integer, minimum: 0}
+            duplicate: {type: boolean}
+    Problem:
+      type: object
+      description: An RFC 9457 problem document. Bodies never contain names, paths or internal detail.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          description: A stable URN.
+          enum:
+            - "urn:magnetico:problem:unauthenticated"
+            - "urn:magnetico:problem:not-found"
+            - "urn:magnetico:problem:invalid-parameter"
+            - "urn:magnetico:problem:full-tree-unavailable"
+            - "urn:magnetico:problem:index-too-complex"
+            - "urn:magnetico:problem:temporarily-unavailable"
+            - "urn:magnetico:problem:internal-error"
+            - "urn:magnetico:problem:rate-limited"
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        alternate:
+          type: string
+          description: For `full-tree-unavailable`, the URL of the paginated file endpoint to use instead.
