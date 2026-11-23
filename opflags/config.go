@@ -32,7 +32,13 @@ const (
 	// `migrate torrents` source DSN outside the command line (env over
 	// file; there is no flag, so no explicit-map entry exists).
 	migrateSourceDatabaseYamlKey = "migrateSourceDatabaseURL"
-	migrationSourceEnvName       = migrationEnvPrefix + "SOURCE_DSN"
+
+	// migrateUsersSourceYamlKey and migrationUsersSourceEnvName configure the
+	// legacy PHP application's database for `migrate users` (a different
+	// database from the torrent source). Config file and environment only.
+	migrateUsersSourceYamlKey   = "migrateUsersSourceDatabaseURL"
+	migrationUsersSourceEnvName = migrationEnvPrefix + "USERS_SOURCE_DSN"
+	migrationSourceEnvName      = migrationEnvPrefix + "SOURCE_DSN"
 )
 
 // crawlSetting describes one configurable crawl option: its CLI long name,
@@ -215,6 +221,8 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		CrawlOptions             `yaml:",inline"`
 		MigrateDatabaseURL       string `yaml:"migrateDatabaseURL"`
 		MigrateSourceDatabaseURL string `yaml:"migrateSourceDatabaseURL"`
+		// MigrateUsersSourceDatabaseURL is the legacy PHP users database.
+		MigrateUsersSourceDatabaseURL string `yaml:"migrateUsersSourceDatabaseURL"`
 		// Web is the `web:` section; its keys are checked by mergeWebYaml.
 		Web any `yaml:"web"`
 	}
@@ -248,6 +256,8 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		o.Migrate.Errors.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.Errors.Export.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.Cleanup.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Users.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.Users.Verify.DatabaseURL = file.MigrateDatabaseURL
 	}
 
 	// The migration source DSN has no CLI flag, so there is no explicit
@@ -259,6 +269,11 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 		o.Migrate.VerifyContent.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 		o.Migrate.Torrents.RetryErrors.SourceDatabaseURL = file.MigrateSourceDatabaseURL
 		o.Migrate.Errors.Export.SourceDatabaseURL = file.MigrateSourceDatabaseURL
+	}
+	// The users source has its own key (never shared with the torrent source).
+	if _, found := present[migrateUsersSourceYamlKey]; found {
+		o.Migrate.Users.SourceDatabaseURL = file.MigrateUsersSourceDatabaseURL
+		o.Migrate.Users.Verify.SourceDatabaseURL = file.MigrateUsersSourceDatabaseURL
 	}
 
 	return nil
@@ -325,6 +340,8 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 			o.Migrate.Errors.DatabaseURL = value
 			o.Migrate.Errors.Export.DatabaseURL = value
 			o.Migrate.Cleanup.DatabaseURL = value
+			o.Migrate.Users.DatabaseURL = value
+			o.Migrate.Users.Verify.DatabaseURL = value
 		}
 	}
 
@@ -364,14 +381,25 @@ func (o *OpFlags) applyEnvMigrationConfig() error {
 		}
 	}
 
+	// The legacy PHP users database has its own variable (a different
+	// database from the torrent source); it feeds only `migrate users`.
+	if value, ok := os.LookupEnv(migrationUsersSourceEnvName); ok && value != "" {
+		switch o.Migrate.Subcommand {
+		case "users":
+			o.Migrate.Users.SourceDatabaseURL = value
+		case "users-verify":
+			o.Migrate.Users.Verify.SourceDatabaseURL = value
+		}
+	}
+
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if !strings.HasPrefix(name, migrationEnvPrefix) || name == migrationSourceEnvName {
+		if !strings.HasPrefix(name, migrationEnvPrefix) || name == migrationSourceEnvName || name == migrationUsersSourceEnvName {
 			continue
 		}
 		return fmt.Errorf(
-			"unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s",
-			name, migrationSourceEnvName,
+			"unknown environment variable %s; known variables: MAGNETICO_CONFIG_FILE_PATH, %s, %s",
+			name, migrationSourceEnvName, migrationUsersSourceEnvName,
 		)
 	}
 

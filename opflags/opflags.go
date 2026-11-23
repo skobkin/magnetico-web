@@ -30,6 +30,7 @@ type MigrateOptions struct {
 	Torrents         TorrentsOptions   `command:"torrents" description:"Import torrents from an original magnetico v0.12.0 PostgreSQL source into the target (offline migration; interruptible and resumable)." subcommands-optional:"true"`
 	VerifyDecode     VerifyOptions     `command:"verify-decode" description:"Full target-only decode scan of an imported database: every stored torrent is fetched and decoded, metadata revalidated, orphan blobs reported. The source database is never contacted."`
 	VerifyContent    VerifyOptions     `command:"verify-content" description:"Full source↔target equality scan of an imported database: every source row is compared against its target counterpart. Read-only on both databases."`
+	Users            UsersOptions      `command:"users" description:"Import the legacy PHP accounts (users, invitations, API tokens → RSS tokens) into the magnetico_web schema in ONE transaction, identity-preserving. --dry-run is read-only on both databases. A final run is an offline operation (see docs/web-deployment.md §10); nested: verify." subcommands-optional:"true"`
 	Errors           ErrorsOptions     `command:"errors" description:"Forensic access to the migration error/verification registry."`
 	Cleanup          CleanupOptions    `command:"cleanup" description:"Gated, fail-closed teardown of the magnetico_migration operational schema. The default is a non-destructive gate-by-gate preview; --execute drops the schema in one transaction after every gate passes."`
 
@@ -313,4 +314,40 @@ func validateIngestURL(raw string) (*url.URL, error) {
 		}
 	}
 	return nil, bad
+}
+
+// UsersOptions carries the options of `migrate users` (docs/wip/07H-user-
+// migration-plan.md §2). The target DSN follows the same flag/env/file
+// precedence as the other migrate commands. The SOURCE DSN deliberately has
+// no CLI flag: it can only come from the config file key
+// migrateUsersSourceDatabaseURL or MAGNETICO_MIGRATION_USERS_SOURCE_DSN, so it
+// can never appear in `ps` output, and it never falls back to the target (or
+// to the torrent source) DSN.
+type UsersOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database holding the magnetico_web schema to import into." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	SourceTimezone         string `long:"source-timezone" description:"IANA time zone of the legacy PHP application (the legacy timestamps carry no zone; required, no default; confirm it with php -r 'echo date_default_timezone_get();')."`
+	DryRun                 bool   `long:"dry-run" description:"Read-only preflight on both databases: validates everything, prints the plan digest, writes nothing (sequence state included). Allowed during normal operation."`
+	AcceptNeedsReset       int    `long:"accept-needs-reset" description:"Acknowledge, by exact number, the accounts whose legacy password hash format is unsupported (they cannot log in until an administrator resets them)." default:"0"`
+	ReplaceUsers           bool   `long:"replace-users" description:"DESTRUCTIVE: delete every user account and all user-owned data in the target (sessions, one-time links, API and RSS tokens, invitations, users) and import again, in the same transaction. Never touches torrents, trackers, settings or schema versions. A real run requires --confirm-plan."`
+	ConfirmPlan            string `long:"confirm-plan" description:"The plan digest printed by a previous --dry-run with identical options (required for a real --replace-users run; any source, target, timezone or option change invalidates it)."`
+	DeleteUnmatchedUserIDs string `long:"delete-unmatched-user-ids" description:"With --replace-users: comma-separated ids of target accounts that are not in the source and may be deleted; must equal the unmatched set exactly."`
+	SourceWritesStopped    bool   `long:"source-writes-stopped" description:"Operator assertion that the legacy application is stopped and legacy writes are prevented. Required for a final run (not for --dry-run)."`
+	ReportJSON             string `long:"report-json" description:"Write the secret-free JSON report here (mode 0600, created exclusively; an existing file is never overwritten)."`
+
+	// SourceDatabaseURL is the read-only legacy PHP database (schema "users").
+	SourceDatabaseURL string `yaml:"migrateUsersSourceDatabaseURL"`
+
+	Verify UsersVerifyOptions `command:"verify" description:"Read-only source↔target reconciliation of a completed import (exit status 0 only on an exact match)."`
+}
+
+// UsersVerifyOptions carries the options of `migrate users verify`.
+type UsersVerifyOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the PostgreSQL database holding the magnetico_web schema to verify." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable" yaml:"migrateDatabaseURL"`
+
+	SourceTimezone string `long:"source-timezone" description:"IANA time zone of the legacy PHP application (the same value the import used)."`
+	ReportJSON     string `long:"report-json" description:"Write the secret-free JSON report here (mode 0600, created exclusively)."`
+
+	// SourceDatabaseURL is the read-only legacy PHP database (schema "users").
+	SourceDatabaseURL string `yaml:"migrateUsersSourceDatabaseURL"`
 }

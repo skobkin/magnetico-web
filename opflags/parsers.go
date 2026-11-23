@@ -84,7 +84,7 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		}
 	case "migrate":
 		if active.Active == nil {
-			return "", errors.New("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, web-schema-init, torrents, verify-decode, verify-content, errors, cleanup (see --help)")
+			return "", errors.New("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, web-schema-init, torrents, users, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 		sub := active.Active
 		switch {
@@ -94,6 +94,11 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 			// known nested command, so the name check is belt and braces).
 			o.Migrate.Subcommand = sub.Active.Name
 			o.transferSharedFlagsToRetry(sub, sub.Active)
+		case sub.Name == "users" && sub.Active != nil:
+			// `migrate users verify` — the nested reconciliation is the
+			// effective subcommand.
+			o.Migrate.Subcommand = "users-verify"
+			o.transferSharedFlagsToUsersVerify(sub, sub.Active)
 		case sub.Name == "errors":
 			// `migrate errors export` — the nested forensic export is the
 			// effective subcommand; bare `migrate errors` is a usage error.
@@ -154,5 +159,24 @@ func (o *OpFlags) transferSharedFlagsToExport(parent, nested *flags.Command) {
 	x := &e.Export
 	if pset["database"] && !nset["database"] {
 		x.DatabaseURL = e.DatabaseURL
+	}
+}
+
+// transferSharedFlagsToUsersVerify moves the shared options the operator
+// positioned before the nested command onto Users.Verify (the same
+// parent/nested precedence as transferSharedFlagsToRetry: the nested position
+// always wins; this runs before the config layers).
+func (o *OpFlags) transferSharedFlagsToUsersVerify(parent, nested *flags.Command) {
+	pset, nset := explicitInCommand(parent), explicitInCommand(nested)
+	u := &o.Migrate.Users
+	v := &u.Verify
+	if pset["database"] && !nset["database"] {
+		v.DatabaseURL = u.DatabaseURL
+	}
+	if pset["source-timezone"] && !nset["source-timezone"] {
+		v.SourceTimezone = u.SourceTimezone
+	}
+	if pset["report-json"] && !nset["report-json"] {
+		v.ReportJSON = u.ReportJSON
 	}
 }
