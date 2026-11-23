@@ -95,8 +95,8 @@ type Config struct {
 
 // Defaults (docs/wip/07F-web-ui-report.md records the measurements).
 const (
-	DefaultMaxTreeFiles    = 12_000
-	DefaultMaxTreeEstimate = 3 << 20
+	DefaultMaxTreeFiles    = 4_000
+	DefaultMaxTreeEstimate = 1 << 20
 	DefaultMaxTreeBytes    = 4 << 20
 	DefaultMaxPageBytes    = 1 << 20
 	DefaultEncodeSlots     = 8

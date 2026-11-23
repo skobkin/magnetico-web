@@ -727,3 +727,32 @@ func TestTreeHonoursContext(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// The owner-approved defaults (conservative Demo 3.1 values). A change here is
+// a product decision: update docs/specs/web-v1.md with it.
+func TestDefaultLimitsAreThePinnedValues(t *testing.T) {
+	t.Parallel()
+	if DefaultMaxTreeFiles != 4000 || DefaultMaxTreeEstimate != 1<<20 || DefaultMaxTreeBytes != 4<<20 || DefaultEncodeSlots != 8 {
+		t.Fatalf("defaults changed: %d files, %d estimate, %d bytes, %d slots",
+			DefaultMaxTreeFiles, DefaultMaxTreeEstimate, DefaultMaxTreeBytes, DefaultEncodeSlots)
+	}
+	f := newFake()
+	s := newService(t, f, Config{})
+	at := f.add(t, 1, manyFiles(4000))
+	d, err := s.Decide(bg(), at)
+	if err != nil || !d.FullTreeAvailable() {
+		t.Fatalf("4,000 files must be tree mode: %+v %v", d, err)
+	}
+	b, err := s.Tree(bg(), at)
+	if err != nil {
+		t.Fatalf("a 4,000-file tree must serialize within the cap: %v", err)
+	}
+	if n := len(b.Bytes()); n > DefaultMaxTreeEstimate {
+		t.Errorf("a 4,000-file tree is %d bytes, above the 1 MiB estimate", n)
+	}
+	b.Release()
+	over := f.add(t, 2, manyFiles(4001))
+	if d, err := s.Decide(bg(), over); err != nil || d.FullTreeAvailable() || d.Reason != "file_count" {
+		t.Fatalf("4,001 files must be refused for the full tree: %+v %v", d, err)
+	}
+}

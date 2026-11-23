@@ -171,8 +171,8 @@ func ensureLoadData(t *testing.T, bin, dsn string) (rtDSN, opDSN string, d loadD
 	_ = conn.QueryRow(ctx, `SELECT count(*) FROM magneticod.torrents WHERE name LIKE 'load/tree#%'`).Scan(&haveTree)
 	if haveTree == 0 && os.Getenv("MAGNETICO_LOAD_SKIP_SEED") == "" {
 		// Full-tree workloads: torrents the backend serves as one JSON tree
-		// (3,500–10,500 files each), plus one hierarchy beyond the index limits.
-		base := synth.Spec{Name: "tree", Shape: synth.Typical, Files: 7000, Seed: 88}
+		// (1,300–3,900 files each, under the 4,000-file tree limit), plus one hierarchy beyond the index limits.
+		base := synth.Spec{Name: "tree", Shape: synth.Typical, Files: 2600, Seed: 88}
 		for _, s := range synth.Torrents(base, 24) {
 			if _, err := seedTorrent(ctx, conn, "load/"+s.Name, synth.Generate(s)); err != nil {
 				t.Fatal(err)
@@ -863,7 +863,7 @@ func TestWebLoad(t *testing.T) {
 		return res, map[string]any{"tree_clients": 16, "dir_clients": 16, "duration": dur.String()}
 	})
 	// Details page latency with and without the mode-decision header peek:
-	// tree-pool torrents (peek: ≤ 12,000 files) versus a 250,000-file torrent
+	// tree-pool torrents (peek: ≤ 4,000 files) versus a 250,000-file torrent
 	// (decided from the file count alone, no blob access).
 	run("details", func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {
 		res := d.drive(dur/2, []workload{{name: "peek", workers: 1, acc: newAcc(), pick: func(r *rand.Rand) string {
