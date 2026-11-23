@@ -796,3 +796,31 @@ func TestBackendCloseIsBounded(t *testing.T) {
 func (r *Router) rawHandle(pattern string, k Kind, h http.Handler) {
 	r.mux.Handle(pattern, routeDeadline(pattern, k, r.dl)(h))
 }
+
+// The server bounds request headers (maxHeaderBytes, which includes the
+// request line and therefore the URL). A URL well below the bound is served;
+// one far above it gets 431, never a hang or a truncated URL. The file
+// browser carries a directory in the `dir` query parameter, so codec-valid
+// directory paths long enough (after percent-escaping) cannot be navigated;
+// see docs/web-deployment.md.
+func TestRequestLineLimitBoundary(t *testing.T) {
+	f := newFixture(t, nil)
+	addr, done, cancel := startServer(t, f)
+	defer func() { cancel(); <-done }()
+
+	get := func(n int) int {
+		t.Helper()
+		resp, err := noKeepAliveClient().Get("http://" + addr + "/healthz?x=" + strings.Repeat("a", n))
+		if err != nil {
+			t.Fatalf("query of %d bytes: %v", n, err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := get(maxHeaderBytes / 2); got != 200 {
+		t.Errorf("URL of ~%d bytes: %d, want 200", maxHeaderBytes/2, got)
+	}
+	if got := get(maxHeaderBytes * 2); got != http.StatusRequestHeaderFieldsTooLarge {
+		t.Errorf("URL of ~%d bytes: %d, want 431", maxHeaderBytes*2, got)
+	}
+}

@@ -556,3 +556,43 @@ func TestDecodeSaturationIsBusyAndRecovers(t *testing.T) {
 	}
 	_ = filecache.DecodeCapacity
 }
+
+// A directory is addressed by its exact path in the `dir` query parameter, and
+// the HTTP server bounds the request line (see server.TestRequestLineLimitBoundary).
+// Paths up to codec.MaxPathBytes are valid, and percent-escaping can triple
+// their length, so a codec-valid directory can have a link no server will
+// accept. The link must still be generated losslessly (never truncated or
+// altered), and a moderately long directory must round-trip.
+func TestLongDirectoryLinkLimitation(t *testing.T) {
+	e := newEnv(t)
+	moderate := strings.Repeat("d", 3000) // escaped link far below the 16 KiB bound
+	huge := strings.Repeat("é", 20000)    // 40 000 bytes (codec-valid, < 64 KiB); 120 000 escaped
+	id := e.seed("long", 0, 1, []codec.File{
+		{Path: moderate + "/f", Size: 1},
+		{Path: huge + "/f", Size: 1},
+	})
+	c := e.signedIn()
+
+	c.get(fmt.Sprintf("/torrents/%d/files", id))
+	var gotHuge string
+	for _, l := range c.links() {
+		if strings.Contains(l, "/files?dir=") && len(l) > 100000 {
+			gotHuge = l
+		}
+	}
+	if want := filesHref(id, huge+"/", 0); gotHuge != want {
+		t.Fatalf("link to the huge directory was altered or missing (got %d bytes, want %d)", len(gotHuge), len(want))
+	}
+	const serverLimit = 16 << 10 // server.maxHeaderBytes
+	if len(gotHuge) <= serverLimit {
+		t.Fatalf("test premise: link %d bytes should exceed the %d-byte server bound", len(gotHuge), serverLimit)
+	}
+
+	link := filesHref(id, moderate+"/", 0)
+	if len(link) >= serverLimit {
+		t.Fatalf("test premise: moderate link is %d bytes", len(link))
+	}
+	if res := c.get(link); res.StatusCode != 200 || !strings.Contains(c.body, ">f<") {
+		t.Fatalf("moderate directory: %d", res.StatusCode)
+	}
+}
