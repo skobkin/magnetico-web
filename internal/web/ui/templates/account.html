@@ -1,6 +1,8 @@
 {{define "title"}}Account{{end}}
 {{define "nav"}}{{template "navbar" .}}{{end}}
 {{define "user"}}{{template "userbox" .}}{{end}}
+{{/* Feed autodiscovery (browsers such as Vivaldi offer "subscribe" only for a declared feed). Only on the page that has just revealed a token, because the feed URL needs one. */}}
+{{define "head"}}{{if and .Secret (eq .Secret.Kind "rss")}}<link rel="alternate" type="application/rss+xml" title="{{siteTitle}}: latest torrents" href="{{.Secret.URL}}">{{end}}{{end}}
 {{define "content"}}
 <div class="page-intro"><div class="page-title-wrap"><h1>Account</h1><p>{{.Username}} · Personal settings and credentials</p></div></div>
 <nav class="tabs" aria-label="Account sections">

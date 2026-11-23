@@ -32,6 +32,7 @@
 <meta name="robots" content="noindex, nofollow">
 <title>{{template "title" .}} · {{siteTitle}}</title>
 <link rel="stylesheet" href="{{asset "app.css"}}">
+{{block "head" .}}{{end}}
 <script src="{{asset "theme.js"}}"></script>
 <script src="{{asset "app.js"}}" defer></script>
 </head>

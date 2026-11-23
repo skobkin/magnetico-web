@@ -279,6 +279,9 @@ func TestTokensCreateShowOnceListRevoke(t *testing.T) {
 	if !strings.Contains(c.body, publicBase+"/api/v2/feeds/latest.rss?feed_token="+rssPlain) {
 		t.Fatal("ready-to-copy v2 URL missing")
 	}
+	if !strings.Contains(c.body, `<link rel="alternate" type="application/rss+xml"`) {
+		t.Fatal("feed autodiscovery link missing on the page that reveals the RSS token")
+	}
 	if res.Header.Get("Cache-Control") != "private, no-store" || res.Header.Get("Referrer-Policy") != "no-referrer" {
 		t.Fatal("secret response headers")
 	}
