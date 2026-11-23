@@ -1,0 +1,11 @@
+# go1.27.0 linux/amd64, cpu="AMD Ryzen 9 7950X3D 16-Core Processor" cores=8 GOMAXPROCS=8 GOGC=default(100) GOMEMLIMIT=unset kernel=6.12.117+deb13-amd64 mem=32102 MiB cgroup(mem="" cpu="")
+limits: MaxDirs=250000 MaxDepth=256
+case                                               files      dirs    index MiB    alloc MiB      build  result
+250k-files-250k-dirs (max dirs)                   250000    250000         16.7         67.2       29ms  ok (peak heap 46 MiB)
+1k-files x 250-deep chains (250k dirs)              1000    250000         10.0         59.5       25ms  ok (peak heap 28 MiB)
+1953-files x 128-deep chains (250k dirs)            1953    249984         10.1         59.6       19ms  ok (peak heap 26 MiB)
+250k-files-in-one-256-deep-dir                    250000       256          6.5          9.9      534ms  ok (peak heap 153 MiB)
+REJECT 250001 dirs                                250001         0          0.0         56.4       21ms  filetree: directory hierarchy exceeds the web index limit (dirs) (peak heap 151 MiB)
+REJECT 1001-files x 250-deep (250.2k dirs)          1001         0          0.0         55.4       26ms  filetree: directory hierarchy exceeds the web index limit (dirs) (peak heap 27 MiB)
+REJECT 1 file 20000 deep                               1         0          0.0          0.0         0s  filetree: directory hierarchy exceeds the web index limit (depth) (peak heap 0 MiB)
+REJECT 2000-files x 257-deep                        2000         0          0.0          0.0         0s  filetree: directory hierarchy exceeds the web index limit (depth) (peak heap 2 MiB)
