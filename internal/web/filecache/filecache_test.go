@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -854,4 +855,26 @@ func TestNoGoroutineLeakAfterChurnAndClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait(t, "goroutines to return to the baseline", func() bool { return runtime.NumGoroutine() <= base })
+}
+
+func TestIndexComplexityIsTypedNotCorrupt(t *testing.T) {
+	t.Parallel()
+	src := newFake()
+	src.put(t, 1, []codec.File{{Path: strings.Repeat("d/", 300) + "f", Size: 1}}, "v1")
+	c := newCache(t, src, Config{})
+
+	_, err := c.Get(bg(), 1)
+	if !errors.Is(err, filetree.ErrIndexComplexity) {
+		t.Fatalf("want ErrIndexComplexity, got %v", err)
+	}
+	if errors.Is(err, persistence.ErrCorruptBlob) {
+		t.Fatalf("a complexity rejection must not be classified as corruption: %v", err)
+	}
+	if st := c.Stats(); st.Entries != 0 {
+		t.Fatalf("the error must not be cached: %+v", st)
+	}
+	// Not cached: the next request rebuilds (and fails the same way).
+	if _, err := c.Get(bg(), 1); !errors.Is(err, filetree.ErrIndexComplexity) {
+		t.Fatalf("second Get: %v", err)
+	}
 }

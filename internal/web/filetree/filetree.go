@@ -48,7 +48,41 @@ var (
 	ErrNegativeSize = errors.New("filetree: negative file size")
 	ErrOverflow     = errors.New("filetree: aggregate size or count overflows")
 	ErrTooLarge     = errors.New("filetree: list exceeds the index's 32-bit capacity")
+
+	// ErrIndexComplexity reports a valid file list whose directory hierarchy
+	// exceeds the web index's resource limits (Limits). It is not a codec or
+	// storage fault: the torrent stays valid, it is just not browsable here.
+	ErrIndexComplexity = errors.New("filetree: directory hierarchy exceeds the web index limits")
 )
+
+// Limit names carried by ComplexityError.
+const (
+	LimitDirs  = "dirs"
+	LimitDepth = "depth"
+)
+
+// ComplexityError is the typed form of ErrIndexComplexity.
+type ComplexityError struct {
+	Limit   string // LimitDirs or LimitDepth
+	Allowed int
+}
+
+func (e *ComplexityError) Error() string {
+	return "filetree: directory hierarchy exceeds the web index limit (" + e.Limit + ")"
+}
+
+// Is makes errors.Is(err, ErrIndexComplexity) true.
+func (e *ComplexityError) Is(target error) bool { return target == ErrIndexComplexity }
+
+// Limits bound the size of the directory index independently of the codec's
+// own limits (web resource limits, not a validity rule).
+type Limits struct {
+	MaxDirs  int // indexed directories, excluding the root
+	MaxDepth int // directory components in one path
+}
+
+// DefaultLimits are the production web index limits (07F measurements).
+var DefaultLimits = Limits{MaxDirs: 250_000, MaxDepth: 256}
 
 // Entry is one row of a directory listing.
 type Entry struct {
@@ -82,6 +116,10 @@ type Index interface {
 	// unknown directory or a prefix without the trailing separator.
 	Lookup(dir string) (DirID, bool)
 	Info(d DirID) DirInfo
+	// Child is the i-th subdirectory of d in listing order, the positional
+	// path component; DirName is a directory's exact name bytes.
+	Child(d DirID, i int) (DirID, bool)
+	DirName(d DirID) string
 	// Page appends rows [from, from+n) of directory d to dst (clamped to the
 	// listing) and returns it.
 	Page(d DirID, from, n int, dst []Entry) []Entry
@@ -117,6 +155,24 @@ type core struct {
 	kids  []uint32 // per directory: dir ids sorted by name, then file positions
 	names namer
 	nfile int
+}
+
+// Child returns the i-th subdirectory of d in listing order (the positional
+// component). It reports false when i is out of range.
+func (c *core) Child(d DirID, i int) (DirID, bool) {
+	r := &c.dirs[d]
+	if i < 0 || i >= int(r.nDirs) {
+		return 0, false
+	}
+	return DirID(c.kids[int(r.kidLo)+i]), true
+}
+
+// DirName returns the exact name bytes of directory d (empty for the root).
+func (c *core) DirName(d DirID) string {
+	if d == Root {
+		return ""
+	}
+	return c.names.dirName(d)
 }
 
 func (c *core) Files() int { return c.nfile }
@@ -215,7 +271,7 @@ func addSize(a, b int64) (int64, bool) {
 const ctxCheckEvery = 4096
 
 // scan is phase 1.
-func scan(ctx context.Context, files []codec.File) (*skeleton, error) {
+func scan(ctx context.Context, files []codec.File, lim Limits) (*skeleton, error) {
 	if len(files) > math.MaxInt32 {
 		return nil, ErrTooLarge
 	}
@@ -264,6 +320,9 @@ func scan(ctx context.Context, files []codec.File) (*skeleton, error) {
 				break
 			}
 			comp := path[pos : pos+j]
+			if depth >= lim.MaxDepth {
+				return nil, &ComplexityError{Limit: LimitDepth, Allowed: lim.MaxDepth}
+			}
 			if matching && depth < len(stack) && s.name(files, stack[depth]) == comp {
 				depth++
 			} else {
@@ -276,6 +335,9 @@ func scan(ctx context.Context, files []codec.File) (*skeleton, error) {
 				parent := uint32(0)
 				if depth > 0 {
 					parent = stack[depth-1]
+				}
+				if len(s.td) > lim.MaxDirs { // td holds the root too
+					return nil, &ComplexityError{Limit: LimitDirs, Allowed: lim.MaxDirs}
 				}
 				if len(s.td) >= math.MaxUint32/2 {
 					return nil, ErrTooLarge
@@ -377,7 +439,14 @@ const (
 
 // BuildArena builds variant A. files must be canonical and is not retained.
 func BuildArena(ctx context.Context, files []codec.File) (*Arena, error) {
-	s, err := scan(ctx, files)
+	return BuildArenaLimits(ctx, files, DefaultLimits)
+}
+
+// BuildArenaLimits is BuildArena with explicit complexity limits. A list
+// beyond them fails early with a *ComplexityError, before the index arrays
+// grow.
+func BuildArenaLimits(ctx context.Context, files []codec.File, lim Limits) (*Arena, error) {
+	s, err := scan(ctx, files, lim)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +515,7 @@ const dirRefBytes = 12
 // BuildRef builds variant B. The caller hands over files: it must stay
 // unmodified for the life of the index.
 func BuildRef(ctx context.Context, files []codec.File) (*Ref, error) {
-	s, err := scan(ctx, files)
+	s, err := scan(ctx, files, DefaultLimits)
 	if err != nil {
 		return nil, err
 	}

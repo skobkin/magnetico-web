@@ -525,8 +525,12 @@ func (f *flight) build() (filetree.Index, error) {
 	idx, err := filetree.BuildArena(c.rootCtx, files)
 	files = nil
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		switch {
+		case errors.Is(err, context.Canceled):
 			return nil, ErrClosed
+		case errors.Is(err, filetree.ErrIndexComplexity):
+			// Valid data beyond the web index limits: not corruption.
+			return nil, err
 		}
 		return nil, fmt.Errorf("%w: %w", persistence.ErrCorruptBlob, err)
 	}
