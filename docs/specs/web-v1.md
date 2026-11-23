@@ -653,3 +653,13 @@ The `magnetico_web` schema, its structural verification, the roles and grants, t
 - Rate limits and the mail queue are per process (one instance, §4.6.2).
 - The v1 feed's exact legacy XML bytes could not be reproduced or compared (the legacy generator library is not available); the structure follows §8.2.1 and is guarded by a structural golden test.
 
+### 14.8 W8 user migration: implementation record
+
+W8 implements `magnetico migrate users` exactly as designed in `docs/wip/07H-user-migration-plan.md`; the contract of §§4.8.3, 4.9.7 and 5.2 is unchanged and this subsection records only what the implementation makes concrete. Operator reference: `docs/web-deployment.md` §10; evidence: `docs/wip/07H-user-migration-report.md`.
+
+- One target transaction; the web schema, its structural verification, the grants and the revocation semantics are unchanged. Ids are explicit (`OVERRIDING SYSTEM VALUE`, never `nextval()`/`setval()`); the three identities (`users`, `invites`, `rss_tokens`) are advanced with the transactional `ALTER TABLE … ALTER COLUMN id RESTART WITH n`, never backward.
+- Migrated accounts: `role = 'user'`, `active = true`, `email_verified_at = NULL`, `password_changed_at`/`last_login_at` NULL. Invitations: `used_at` NULL (the legacy table has no time), `created_at` = the owner's migrated `created_at` (§5.3). Legacy tokens: `rss_tokens` only, `token_hash = accounts.TokenDigest(key)` (the same function authentication uses), `legacy = true`, original `created_at`, ids assigned in `(created_at, owner, digest)` order.
+- Legacy timestamps carry no zone and are converted with the operator-stated IANA zone.
+- Password hashes are classified as verified (exact PHP vectors), unvetted (parsed within the verifier's bounds, no exact vectors; a final run refuses) or unsupported (`needs-reset`, acknowledged by exact count).
+- A dry-run writes nothing to either database, sequence state included.
+

@@ -1,6 +1,6 @@
 # Task 07H — W8 user migration: design plan
 
-**Status:** design only, approved in principle by the owner (2026-11-24, including the corrections on sequence semantics, write isolation, password-compatibility categories and plan-digest binding). No code, schema migration, grant change or dependency is part of 07H. W8 implementation starts only with a separate owner assignment.
+**Status:** the design was approved by the owner (2026-11-24), including the corrections on sequence semantics, write isolation, password-compatibility categories and plan-digest binding. It is **implemented** as W8 (stages S1–S4); the implementation record and the deliberate refinements of this text are in [`07H-user-migration-report.md`](07H-user-migration-report.md). Task 07I and W9 are separate assignments.
 
 Inputs: `master` PHP entities, Doctrine migrations and `security.yaml`/`doctrine.yaml` history; `internal/web/{webschema,password,accounts}`; `opflags`, `main.go`, `internal/migration/pgidentity`; `docs/specs/web-v1.md` §§4, 5, 12, 14; `07A` §§1.4, 3.3, 3.10, 3.13.
 
@@ -120,7 +120,7 @@ magnetico migrate users verify --source-timezone <IANA> [--report-json <path>]
   - The flag is an operator assertion, not a proof. The migrator also reports the evidence it can observe (step 2).
 
 **Sequence of one final run** (the dry-run differences are noted at the end):
-1. **Configuration validation.** Reject flag conflicts such as `--confirm-plan` without `--replace-users`.
+1. **Configuration validation.** Reject flag conflicts such as `--delete-unmatched-user-ids` without `--replace-users` (a `--confirm-plan` without `--replace-users` is allowed, as §4.3 says: it is checked like any confirmation).
 2. **Connections.**
    - Open the source with `default_transaction_read_only=on`.
    - Open the target.

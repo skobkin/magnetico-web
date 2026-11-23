@@ -175,3 +175,41 @@ Routes: `GET /torrents` (search, a *search* route with the search deadline), `GE
 * **Documentation pages and CSP.** The interactive pages use the normal policy plus `img-src 'self' data:` (the renderer's stylesheet uses inline `data:` icons) — no inline script or style, no `eval`, no other origin; the relaxation applies to `/api/v1` and `/api/v2` only. Whether the renderer runs cleanly under this policy in real browsers has **not** been verified on the development VM.
 * **Reverse proxy timeouts** are unchanged (§3): `/api/v2/torrents` is a search route (`SEARCH_TIMEOUT` + 10 s write deadline); every other new route is an ordinary request (`REQUEST_TIMEOUT` + 5 s).
 
+
+## 10. Migrating the legacy PHP accounts (W8)
+
+`magnetico migrate users` imports the accounts of the legacy PHP/Symfony application into `magnetico_web` in **one target transaction**: a failed, cancelled or interrupted run changes nothing. The design, decisions and cutover rationale are in `docs/wip/07H-user-migration-plan.md`; the implementation record is `docs/wip/07H-user-migration-report.md`. Nothing here connects to production by itself: you point the command at databases you choose.
+
+**What it does.** Users and invitations keep their numeric ids and relationships; usernames are copied byte for byte (case-sensitive); password hashes are copied unchanged (the web service verifies them directly and rehashes on the first successful login); every migrated account is an active `user`; historical email addresses are copied as written and are **unverified** (use the account page to verify; until then they are not used for self-service recovery, and an administrator-issued reset link is the fallback). Every legacy API token becomes a **legacy RSS token** (`rss_tokens`, SHA-256 only, original creation time, `legacy = true`) so existing `…/api/v1/feed/rss/last?api-token=…` URLs keep working; **no** `api_tokens`, sessions or one-time links are created. Not migrated: PHP sessions, remember-me cookies, password-reset tokens, reCAPTCHA state.
+
+**Databases and configuration.**
+
+| | Setting |
+|---|---|
+| Target (has `magnetico_web`) | `--database`, `MAGNETICO_MIGRATE_DATABASE`, or the `migrateDatabaseURL` file key (the other `migrate` commands' convention) |
+| Source (legacy PHP database, schema `users`) | `MAGNETICO_MIGRATION_USERS_SOURCE_DSN` or the `migrateUsersSourceDatabaseURL` file key **only**: no flag (it can never appear in `ps`), no default, never the target or the torrent source (`MAGNETICO_MIGRATION_SOURCE_DSN`) |
+| `--source-timezone` | **required**, an IANA zone (`php -r 'echo date_default_timezone_get();'` in the legacy container); legacy timestamps carry no zone |
+
+DSNs, hashes, token keys, invitation codes, emails and usernames are never printed or written to a report: records are identified by numeric id and finding code, and database errors are reduced to the SQLSTATE and constraint name.
+
+**Privileges.** The source role needs `CONNECT`, `USAGE` on schema `users`, and `SELECT` on `users.users`, `users.invites`, `users.api_tokens` and the Doctrine `migration_versions` table; every source transaction is `READ ONLY`, and a role that can write a legacy table is reported as a warning. A `--dry-run` needs only `SELECT` on the six user-owned `magnetico_web` tables and on their three identity sequences (`users`, `invites`, `rss_tokens`). A **final run uses the owner of the `magnetico_web` tables** (the identity `RESTART` is an `ALTER TABLE`): it needs `INSERT` on `users`, `invites`, `rss_tokens`, and with `--replace-users` also `DELETE` on all six. It is never run as the runtime or operator role, and no grant or schema change is made.
+
+**Commands.**
+
+```text
+magnetico migrate users --source-timezone ZONE --dry-run [--accept-needs-reset N]
+        [--replace-users [--delete-unmatched-user-ids ID,ID]] [--report-json FILE]
+magnetico migrate users --source-timezone ZONE --source-writes-stopped [--accept-needs-reset N]
+        [--replace-users --confirm-plan DIGEST [--delete-unmatched-user-ids ID,ID]] [--report-json FILE]
+magnetico migrate users verify --source-timezone ZONE [--report-json FILE]
+```
+
+* **`--dry-run`** is read-only on both databases (a `READ ONLY` target transaction, no locks, no sequence calls: sequence state is untouched). It checks the source schema fingerprint (exactly the five known Doctrine migrations and the legacy columns), validates every row against the target constraints, classifies the target and prints the **plan digest**. It may run during normal operation. It exits 0 only when a final run would be accepted; otherwise it names the reasons (`would_refuse`) and exits 1.
+* **A final run is an offline operation.** Stop the legacy application and prevent legacy writes first, then pass `--source-writes-stopped`: it is an operator assertion, not a proof. The migrator reports what it can observe (other client backends, a database-level read-only default) and re-reads the source before committing, but that is defence in depth only: there is no cross-database atomic snapshot. The `ACCESS EXCLUSIVE` table locks it takes serialise against conflicting database operations only; they do **not** prove the web service is stopped, so stop the service and operator commands yourself.
+* **Refusals** (exit 1, nothing written): `config`, `source-schema`, `target-schema`, `privileges`, `source-empty`, `data-blocked` (unstorable values, orphans, duplicates; nothing is transformed or dropped), `unvetted-hash-format`, `needs-reset-unacknowledged`, `target-not-empty`, `unmatched-target-accounts`, `plan-mismatch`, `source-writes-not-asserted`, `lock-timeout`, `source-changed`, `verify-failed`, `storage`.
+* **Password hashes** fall in three categories. *Verified*: exact parameters with PHP-generated vectors. *Unvetted*: the verifier parses them but no exact vectors exist; a final run refuses until vectors are added in a reviewed change. *Unsupported*: they cannot log in; acknowledge the exact number with `--accept-needs-reset N` and issue administrator reset links afterwards (completing a reset permanently revokes that user's legacy RSS URLs). The aggregate-only audit for the legacy database is `docs/wip/07H-audit.sql`.
+* **Re-running** a completed, untouched import is a no-op (`already-migrated`). A populated target that is not exactly the expected import is refused unless `--replace-users` is given.
+* **`--replace-users` is destructive**: it deletes every account and all user-owned data in the target (sessions, one-time links, API and RSS tokens, invitations, users) and imports again, in the same transaction. It never touches torrents, trackers, settings or schema versions, and never moves an id sequence backward. A target account that is not in the source (same id **and** username) is protected: the run refuses unless `--delete-unmatched-user-ids` equals that set exactly. A real run requires `--confirm-plan` with the digest of a previous `--dry-run --replace-users` with identical options (the preview needs none and prints what would be discarded). The digest binds the source data, the time zone, the target state, the destructive operation, the deletion scope and the acknowledgement, so changing any of them invalidates the confirmation.
+* **Reports.** `--report-json FILE` writes a secret-free JSON report (counts, ids, classes, digests) with mode 0600, created exclusively: an existing file is never overwritten.
+
+**Cutover.** Run the audit, rehearse on copies, then: stop the legacy application and prevent its writes, back up both databases, stop the web service, `--dry-run`, run for real, `verify`, promote the first administrator with `magnetico web user set-role <username> admin`, start the web service. The full checklist is §9 of the plan.
