@@ -89,3 +89,9 @@ type AccountPage struct {
 	APITokens        []TokenRow
 	Secret           *NewSecret
 }
+
+// DocsPage is a public API documentation page.
+type DocsPage struct {
+	Title   string
+	SpecURL string // same-origin path of the OpenAPI document
+}

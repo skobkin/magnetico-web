@@ -14,6 +14,10 @@ var forbidden = []string{
 	"github.com/skobkin/magnetico-web/internal/ingest",
 	"github.com/skobkin/magnetico-web/dht",
 	"modernc.org/sqlite",
+	// Test-only dependencies (OpenAPI schema validation): imported from
+	// _test.go files only, never by a package that ships in the binary.
+	"github.com/santhosh-tekuri/jsonschema",
+	"github.com/dlclark/regexp2",
 }
 
 // TestWebPackagesDoNotImportForbiddenPackages checks the dependency graph of

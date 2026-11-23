@@ -1,4 +1,4 @@
-openapi: 3.1.0
+openapi: 3.2.0
 info:
   title: Magnetico API
   version: "2.0"
@@ -340,6 +340,8 @@ components:
       required: [name]
       properties:
         name: {type: string}
+      not:
+        required: [name_base64]
     NamedBytes:
       type: object
       required: [name, name_base64]

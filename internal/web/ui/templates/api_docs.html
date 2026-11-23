@@ -1,0 +1,21 @@
+{{define "title"}}{{.Title}}{{end}}
+{{define "content"}}{{end}}
+{{/* A standalone page: the Swagger UI bundle brings its own stylesheet, so the application layout is not used. */}}
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>{{.Title}} · Magnetico</title>
+<link rel="stylesheet" href="{{asset "swagger-ui.css"}}">
+</head>
+<body>
+<nav aria-label="API documentation"><a href="/api">All API documentation</a> · <a href="{{.SpecURL}}">Download the OpenAPI document</a></nav>
+<div id="swagger-ui" data-spec="{{.SpecURL}}"></div>
+<noscript><p>The interactive documentation needs JavaScript. You can read the OpenAPI document directly: <a href="{{.SpecURL}}">{{.SpecURL}}</a>.</p></noscript>
+<script src="{{asset "swagger-ui-bundle.js"}}"></script>
+<script src="{{asset "docs.js"}}"></script>
+</body>
+</html>
+{{end}}

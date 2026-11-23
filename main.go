@@ -31,6 +31,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	webaccount "github.com/skobkin/magnetico-web/internal/web/account"
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
+	webapidocs "github.com/skobkin/magnetico-web/internal/web/apidocs"
 	webapiv2 "github.com/skobkin/magnetico-web/internal/web/apiv2"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
 	webfeed "github.com/skobkin/magnetico-web/internal/web/feed"
@@ -448,6 +449,10 @@ func runWeb(o *opflags.WebOptions) {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}
+
+	// Public API documentation (W7): landing page, the vendored interactive
+	// renderer and the embedded OpenAPI documents.
+	webapidocs.Install(srv)
 
 	err = srv.Run(ctx)
 	if errors.Is(err, webserver.ErrShutdownIncomplete) {
