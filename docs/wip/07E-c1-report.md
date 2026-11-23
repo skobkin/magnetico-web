@@ -261,3 +261,17 @@ Per the owner's direction, search-index optimisation is **deferred until after t
 - `concurrent-unbounded.jsonl` was produced before the harness recorded `Files` for concurrent runs (those rows have `Files=0`); the report's tables do not use that field.
 - **Not measured:** the analytic 80 MiB worst-case A bound; peak behaviour with the real cache and search together; `Index.Bytes()` for B excludes allocator rounding.
 - The synthetic corpus checks `codec.Decode` on forced encodings only for the datasets listed; the O(files × depth) scan cost was measured at depth ≤ 100.
+
+## 14. Decisions resolved after C1 (owner, before Steps 6–8)
+
+| Decision | Resolution | Where implemented |
+|---|---|---|
+| Index variant (O2) | **Arena (A)** in production; Ref (B) kept for comparison/tests, no runtime selection | `internal/web/filecache` uses `filetree.BuildArena` |
+| Gate capacity | **192 MiB** (from 256 MiB) | `filecache.DecodeCapacity` |
+| Cache budget | **128 MiB** byte-bounded LRU | `filecache.CacheBudget` |
+| Weight model (O1) | Keep the conservative `W0` with an index-overhead allowance (`+36·files`); treat it as an admission estimate, not a bound. Options (i)–(iii) of §5 not adopted | `filecache.Weight` |
+| Codec work | none; the "≤ 3× uncompressed" allocation target stays a documented target (C1 numbers preserved) | — |
+| LCP shortcut | not implemented | — |
+| Search-index tuning | deferred until after 0.8.0 release and migration, with real data | — |
+
+**Verification of the 192 MiB assumption.** The largest weight any blob valid under the default codec limits can have is `32 MiB + 64 MiB + 64 MiB + 60 B × 250,000 = 174.3 MiB`, which fits in 192 MiB with 17.7 MiB to spare, so no legal file list is made unbrowsable and no weight is clamped. `filecache.New` refuses to start if the source's limits would allow a larger weight, and `TestMaxWeightFitsDefaultCapacity` pins the number. The weight itself is still only an estimate: §5 measured peaks of up to 2.1× W0 for trie-encoded long-path lists and 1.6–1.9× for flat near-limit names; at the 192 MiB capacity those cases are admitted one at a time (W0 ≈ 165 MiB leaves no room for a second), so the observed single-build peak is the exposure, not the sum. The end-to-end measurements are in `07E-web-search-details-report.md`.

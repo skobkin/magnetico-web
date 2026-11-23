@@ -362,7 +362,14 @@ func runWeb(o *opflags.WebOptions) {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}
-	srv.OnDrained(fileCache.Close)
+	srv.OnDrained(func(ctx context.Context) error {
+		err := fileCache.Close(ctx)
+		st := fileCache.Stats()
+		logger.Info("file index cache stopped", "hits", st.Hits, "misses", st.Misses, "coalesced", st.Coalesced,
+			"builds", st.Builds, "build_errors", st.BuildErrors, "evictions", st.Evictions, "expired", st.Expired,
+			"replaced", st.Replaced, "oversize", st.Oversize, "retries", st.Retries, "entries", st.Entries, "bytes", st.Bytes)
+		return err
+	})
 	if _, err := webtorrents.Install(srv, webtorrents.Deps{Search: searchSvc, Details: reader, Files: fileCache}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())

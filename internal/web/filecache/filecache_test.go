@@ -824,3 +824,34 @@ func TestConcurrentStress(t *testing.T) {
 		t.Fatalf("budget exceeded: %+v", s)
 	}
 }
+
+func TestNoGoroutineLeakAfterChurnAndClose(t *testing.T) {
+	base := runtime.NumGoroutine()
+	src := newFake()
+	for id := int32(1); id <= 6; id++ {
+		src.put(t, id, mkFiles(fmt.Sprintf("t%d", id), 150), "v1")
+	}
+	c, err := New(src, Config{Budget: 64 << 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for g := 0; g < 12; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				ctx, cancel := context.WithTimeout(bg(), time.Duration(i%4)*time.Millisecond)
+				_, _ = c.Get(ctx, int32((g+i)%6+1))
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+	cctx, cancel := context.WithTimeout(bg(), 5*time.Second)
+	defer cancel()
+	if err := c.Close(cctx); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, "goroutines to return to the baseline", func() bool { return runtime.NumGoroutine() <= base })
+}

@@ -238,7 +238,7 @@ A weighted semaphore with **FIFO waiters, a bounded waiter count and a bounded w
 
 | Constant | Search | Decode |
 |---|---|---|
-| Capacity | `SearchConcurrency` (default 4) | 256 MiB |
+| Capacity | `SearchConcurrency` (default 4) | 192 MiB (final, C1) |
 | Max wait | 5 s | 5 s |
 | Max waiters | 4 × capacity | 32 |
 
@@ -314,7 +314,7 @@ Built from the canonical `[]File` in two phases (scan, then pack), retaining **n
 | Item | Value | Source |
 |---|---|---|
 | Display page size (files) | 500 | spec §6.4.3 (proposal) |
-| Decode gate capacity | 256 MiB | spec §6.4.4 (proposal) |
+| Decode gate capacity | 192 MiB (**final**: lowered from the provisional 256 MiB at C1) | spec §6.4.4; C1 decision |
 | Cache budget | 128 MiB | spec §6.4.4 (proposal) |
 | Decode and search queue wait | 5 s | spec §6.4.4 |
 | Codec limits | `codec.DefaultLimits()` (32 MiB stored, 64 MiB uncompressed, 250,000 files, 64 KiB path, 64 MiB aggregate paths) | wire-format §5 |
@@ -328,7 +328,7 @@ Peak transient memory of one cold request:
 where `P` is the retained path byte volume. `P` **cannot be derived** from the declared payload length: prefix-delta payloads are small while the reconstructed paths are large. The only hard bound is `MaxAggregatePathBytes` (64 MiB).
 
 - **Initial model = a conservative admission estimate, not a proven peak-memory bound** (revision 2). `P = min(file_count × MaxPathBytes, 64 MiB)` bounds only the *retained* path bytes. The model ignores transient garbage (slice growth by `append`, the O(n × depth) trie copies, strings freed only at the next GC) and Go heap overhead, so actual peak can exceed `W`. Nothing in W4 claims otherwise; the benchmark reports measured peak versus `W` for every shape.
-- **When the calculated `W` exceeds gate capacity (256 MiB)** (revision 2): the request is **not** silently clamped and admitted as "safe". The rule is:
+- **When the calculated `W` exceeds gate capacity (192 MiB)** (revision 2): the request is **not** silently clamped and admitted as "safe". The rule is:
   1. Compute `W` unclamped. The codec limits (32 MiB stored + 64 MiB declared + 24 × 250,000 + 64 MiB paths + index overhead) put the worst case near 170–180 MiB, which fits; the rule is for configurations or blobs where it does not.
   2. If `W ≤ capacity`: admit with weight `W`.
   3. If `W > capacity`: **reject without reading the blob** with a typed `ErrTooLargeToIndex`, rendered as a 500-class "this file list is too large to browse" page with an `ERROR` log (`torrent_id`, `W`, capacity; no paths). A blob can only get here if limits were raised above the defaults, so it is a configuration invariant violation, not a routine path. A startup assertion checks `W_max(codec limits) ≤ capacity` and fails startup otherwise.
@@ -339,7 +339,7 @@ where `P` is the retained path byte volume. `P` **cannot be derived** from the d
 
 ### 7.3 Memory arithmetic and `GOMEMLIMIT`
 
-The in-flight budget is decode gate (256 MiB) + cache (128 MiB) + runtime and request baseline + GC headroom. Go's heap can reach about twice the live set at `GOGC=100`, so the target of ≤ 640 MiB RSS in a 1 GiB container is not guaranteed by the budgets alone. The benchmark procedure (§8) runs the 32-concurrent workload under several `GOMEMLIMIT` values and reports `VmHWM`. **No number is claimed before measurement**; the report ends with a recommended `GOMEMLIMIT` for the container, with the evidence.
+The in-flight budget is decode gate (192 MiB) + cache (128 MiB) + runtime and request baseline + GC headroom. Go's heap can reach about twice the live set at `GOGC=100`, so the target of ≤ 640 MiB RSS in a 1 GiB container is not guaranteed by the budgets alone. The benchmark procedure (§8) runs the 32-concurrent workload under several `GOMEMLIMIT` values and reports `VmHWM`. **No number is claimed before measurement**; the report ends with a recommended `GOMEMLIMIT` for the container, with the evidence.
 
 ---
 
@@ -487,3 +487,26 @@ MAGNETICO_BENCH_LARGE=1 go test -run TestLoad -v ./internal/web/filetree   # 8 /
 ```
 
 `dht/...`, `internal/crawler` and `internal/e2e/...` are not run, and the report states that a full `go test ./...` was not run.
+
+
+---
+
+## Final values after C1 (implemented in Steps 6–8)
+
+Where this plan said "provisional", the following became final. The implementation and measurements are in `07E-web-search-details-report.md`.
+
+| Item | Final value |
+|---|---|
+| Production index | `filetree.Arena` (variant A). `Ref` (B) stays for tests and comparison; no runtime switch |
+| Decode gate capacity | **192 MiB** (was 256 MiB) |
+| Cache budget | **128 MiB**, byte-bounded LRU over `Index.Bytes()` + 256 B per entry |
+| Decode weight | `stored + declared + 24·files + P + 36·files`, `P = min(files·MaxPathBytes, MaxAggregatePathBytes)` — the C1 `W0` plus a 36 B/file index-overhead allowance. An *admission estimate*, not a proven physical-memory bound |
+| Largest admissible weight (default codec limits) | 32 MiB + 64 MiB + 64 MiB + 60·250,000 B = **174.3 MiB ≤ 192 MiB**; checked at startup by `filecache.New` and by a test |
+| Cache identity | torrent id, file count, total size, blob `xmin`; maximum age 10 min; revalidated on every request by `FileIdentity` |
+| Queue | decode: 32 waiters, 5 s; search: 4 × `SEARCH_CONCURRENCY` waiters, 5 s |
+| Build timeout | 30 s for the database and queue phases of one build |
+| Retry on blob replacement | at most 3 identity lookups per request; limit and corruption errors are never retried |
+| Shutdown | `Server.OnDrained` hook stops the cache after requests drain and before the database closes |
+| Allocation target (≤ 3× uncompressed) | documented measurement target, not a release gate; C1 results preserved |
+| Codec | unchanged apart from the additive `PeekDecodedSize` (O3) |
+| Search-index tuning | deferred until after 0.8.0 and migration, with real data |

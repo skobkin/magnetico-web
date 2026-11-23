@@ -14,6 +14,11 @@ go.work.sum
 magnetico
 vendor/
 
+# Root-level `go build` output of the single binary (`go build` in the repository
+# root writes ./magnetico-web; the ELF was once committed by mistake).
+/magnetico-web
+
+
 # Owner-provided read-only sample dump (real-data extract; never commit).
 /magneticod-sample.sql.gz
 
