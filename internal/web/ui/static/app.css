@@ -1501,7 +1501,10 @@ a.table-sort:hover{text-decoration:none}
 .secret-reveal{border:1px solid var(--accent);background:var(--accent-bg);border-radius:8px;margin:15px;padding:15px}
 .secret-reveal .notice{background:transparent;margin:8px 0}
 .secret-reveal code{display:block;padding:9px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px;word-break:break-all;margin:8px 0;font-size:12px}
-.token-form{max-width:520px;margin:0 15px 15px}
+.token-form{margin:0;padding:14px 15px;border:0;border-radius:0;background:transparent}
+.token-form .form-grid{grid-template-columns:minmax(0,2fr) minmax(0,1fr) auto;align-items:end;gap:12px}
+.token-form .field{margin:0}
+.token-form .btn{height:36px}
 .subsection-note{color:var(--subtext);font-size:12px;margin:0;padding:12px 15px 0}
 .warning-copy{padding:12px 15px;background:var(--raised);border-top:1px solid var(--border);color:var(--subtext);font-size:11px}
 .warning-copy p{margin:0 0 6px}
@@ -1513,5 +1516,5 @@ a.table-sort:hover{text-decoration:none}
 .auth-wide{max-width:520px}
 .consequences{margin:8px 0 0;padding-left:18px}
 @media(max-width:900px){.profile-grid{grid-template-columns:1fr}.account-row{grid-template-columns:1.4fr 1fr auto}.account-row .date.last-used{display:none}}
-@media(max-width:680px){.tabs .tab{padding:9px 10px;font-size:12px}.form-grid{grid-template-columns:1fr;gap:0}.account-row{grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:10px 12px}.account-row .date{display:none}.mobile-token-meta{display:block}.account-row .actions{align-items:center}.token-form{margin:0 12px 12px}.secret-reveal{margin:12px;padding:12px}.account-row .btn.small{padding:5px 8px}}
+@media(max-width:680px){.tabs .tab{padding:9px 10px;font-size:12px}.form-grid{grid-template-columns:1fr;gap:0}.account-row{grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:10px 12px}.account-row .date{display:none}.mobile-token-meta{display:block}.account-row .actions{align-items:center}.token-form{padding:12px}.token-form .form-grid{grid-template-columns:1fr;gap:10px}.token-form .btn{width:100%}.secret-reveal{margin:12px;padding:12px}.account-row .btn.small{padding:5px 8px}}
 @media(max-width:360px){.badge{margin-left:2px}}
