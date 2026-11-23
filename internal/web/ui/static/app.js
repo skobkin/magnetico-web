@@ -511,6 +511,7 @@
      * offset, otherwise entries between its end and the page we left would be
      * skipped. Pages are byte-limited, so a page can hold fewer entries than
      * the limit; the start is then moved closer until the ranges meet. */
+    var firstLoad = true; // the initial listing must not steal focus on page open
     function go(path, offset, reach) {
       var mine = ++seq;
       cur.status = "loading"; cur.failure = null;
@@ -546,7 +547,8 @@
         restored = false;
         cur.status = "ready"; cur.data = res.body; cur.path = path; cur.offset = offset;
         writeLocation(path, offset, ctx.env);
-        draw(true);
+        draw(!firstLoad);
+        firstLoad = false;
         var entries = res.body.entries || [];
         announce("Directory loaded: " + (entries.length ? "entries " + (offset + 1) + " to " + (offset + entries.length) : "no entries") +
           " of " + (res.body.dir ? res.body.dir.entry_count : 0) + ".");
