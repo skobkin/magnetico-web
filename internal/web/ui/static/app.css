@@ -302,6 +302,9 @@ main {
   color:var(--muted);
   font-size:11px;
 }
+.site-footer a {
+  color:var(--subtext);
+}
 .page-intro {
   display:flex;
   justify-content:space-between;

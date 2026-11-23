@@ -331,8 +331,9 @@ func TestDocumentationIsPublicNoindexAndSelfContained(t *testing.T) {
 			if !strings.Contains(b, `name="robots" content="noindex, nofollow"`) {
 				t.Errorf("%s lacks the robots meta tag", path)
 			}
-			// No absolute URL to another origin anywhere in the markup.
-			if m := regexp.MustCompile(`(?i)(src|href|action)="https?://[^"]*"`).FindString(b); m != "" {
+			// Nothing is loaded from, or submitted to, another origin. Plain
+			// anchors (the footer's source-code link) are navigation only.
+			if m := regexp.MustCompile(`(?i)(\ssrc|\saction|<link[^>]*\shref)="https?://[^"]*"`).FindString(b); m != "" {
 				t.Errorf("%s references another origin: %s", path, m)
 			}
 			if regexp.MustCompile(`(?i)\sstyle\s*=|\son[a-z]+\s*=|<style|<script[^>]*>[^<]`).MatchString(b) {
