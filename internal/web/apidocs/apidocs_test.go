@@ -65,6 +65,17 @@ func newServer(t *testing.T) *server.Server {
 	if _, err := feed.Install(srv, feed.Config{Auth: rssAuth{}, Rows: fakeRows{}, PublicBase: pu}); err != nil {
 		t.Fatal(err)
 	}
+	// A stand-in for the session guard: the cookie "sess=ok" is a signed-in
+	// user; everything else is redirected to the sign-in page.
+	srv.Router().SetGuard(server.Session, func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if c, err := r.Cookie("sess"); err != nil || c.Value != "ok" {
+				http.Redirect(w, r, "/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusSeeOther)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	apidocs.Install(srv)
 	return srv
 }
@@ -143,7 +154,7 @@ func TestEveryAPIRouteHasItsOwnAccessClass(t *testing.T) {
 		case strings.HasPrefix(path, "/api/v2/torrents") || path == "/api/v2/":
 			want = "api-token"
 		case strings.HasPrefix(path, "/api"):
-			want = "public"
+			want = "session"
 		}
 		if want != "" && r.Access.String() != want {
 			t.Errorf("%s: access %s, want %s", r.Pattern, r.Access, want)
@@ -299,6 +310,10 @@ func TestV2DocumentsTheFileViewContractAndTheCredentialSplit(t *testing.T) {
 func get(h http.Handler, path string, hdr map[string]string) *http.Response {
 	req := httptest.NewRequest("GET", path, nil)
 	req.RemoteAddr = "203.0.113.9:1"
+	if hdr["X-Anonymous"] == "" {
+		req.AddCookie(&http.Cookie{Name: "sess", Value: "ok"})
+	}
+	delete(hdr, "X-Anonymous")
 	for k, v := range hdr {
 		req.Header.Set(k, v)
 	}
@@ -309,13 +324,28 @@ func get(h http.Handler, path string, hdr map[string]string) *http.Response {
 
 func body(r *http.Response) string { b, _ := io.ReadAll(r.Body); return string(b) }
 
-func TestDocumentationIsPublicNoindexAndSelfContained(t *testing.T) {
+func TestDocumentationRequiresASession(t *testing.T) {
+	h := newServer(t).Handler()
+	for _, path := range []string{"/api", "/api/v1", "/api/v2", "/api/v1/openapi.yaml", "/api/v2/openapi.yaml"} {
+		r := get(h, path, map[string]string{"X-Anonymous": "1"})
+		if r.StatusCode != http.StatusSeeOther || !strings.HasPrefix(r.Header.Get("Location"), "/login?next=") {
+			t.Errorf("%s anonymous: %d %q", path, r.StatusCode, r.Header.Get("Location"))
+		}
+		// A bearer token is not a session.
+		r = get(h, path, map[string]string{"X-Anonymous": "1", "Authorization": "Bearer mgt_xxxx"})
+		if r.StatusCode != http.StatusSeeOther {
+			t.Errorf("%s with a bearer token: %d", path, r.StatusCode)
+		}
+	}
+}
+
+func TestDocumentationIsNoindexAndSelfContained(t *testing.T) {
 	h := newServer(t).Handler()
 	for path, wantCT := range map[string]string{
 		"/api": "text/html", "/api/v1": "text/html", "/api/v2": "text/html",
 		"/api/v1/openapi.yaml": "application/yaml", "/api/v2/openapi.yaml": "application/yaml",
 	} {
-		r := get(h, path, nil) // no credentials at all
+		r := get(h, path, nil) // signed in, nothing else
 		b := body(r)
 		if r.StatusCode != 200 || !strings.HasPrefix(r.Header.Get("Content-Type"), wantCT) {
 			t.Errorf("%s: %d %q", path, r.StatusCode, r.Header.Get("Content-Type"))
@@ -344,8 +374,8 @@ func TestDocumentationIsPublicNoindexAndSelfContained(t *testing.T) {
 			}
 		}
 	}
-	// A request with credentials gets the same page and no personalised content.
-	a, b := body(get(h, "/api/v2", nil)), body(get(h, "/api/v2", map[string]string{"Authorization": "Bearer mgt_xxxx", "Cookie": "api-token=secret"}))
+	// Extra credentials change nothing: the page is the same static document.
+	a, b := body(get(h, "/api/v2", nil)), body(get(h, "/api/v2", map[string]string{"Authorization": "Bearer mgt_xxxx", "api-token": "secret"}))
 	if a != b {
 		t.Error("the documentation page depends on request credentials")
 	}
@@ -454,7 +484,7 @@ func TestSpecEndpointsHonourConditionalRequests(t *testing.T) {
 	h := newServer(t).Handler()
 	r := get(h, "/api/v2/openapi.yaml", nil)
 	etag := r.Header.Get("ETag")
-	if etag == "" || r.Header.Get("Cache-Control") != "public, max-age=300" {
+	if etag == "" || r.Header.Get("Cache-Control") != "private, max-age=300" {
 		t.Fatalf("etag=%q cc=%q", etag, r.Header.Get("Cache-Control"))
 	}
 	if r2 := get(h, "/api/v2/openapi.yaml", map[string]string{"If-None-Match": etag}); r2.StatusCode != 304 {

@@ -390,16 +390,24 @@ func TestWebBinaryAccountAPIFeedsDocsAndEmail(t *testing.T) {
 		t.Fatalf("details lacks the short link:\n%s", b.body)
 	}
 
-	// 5. Public documentation.
-	for path, want := range map[string]string{"/api": "API documentation", "/api/v1": "swagger-ui", "/api/v2": "swagger-ui", "/api/v2/openapi.yaml": "openapi: 3.2.0", "/api/v1/openapi.yaml": "deprecated"} {
-		code, hdr, body := plain(t, base, path, nil)
-		if code != 200 || !strings.Contains(body, want) || hdr.Get("X-Robots-Tag") != "noindex, nofollow" {
-			t.Errorf("%s: %d %q", path, code, hdr.Get("X-Robots-Tag"))
+	// 5. Documentation: anonymous requests go to the sign-in page; a signed-in
+	// session gets the pages.
+	docs := map[string]string{"/api": "API documentation", "/api/v1": "swagger-ui", "/api/v2": "swagger-ui", "/api/v2/openapi.yaml": "openapi: 3.2.0", "/api/v1/openapi.yaml": "deprecated"}
+	for path := range docs {
+		if code, hdr, _ := plain(t, base, path, nil); code != 303 || !strings.HasPrefix(hdr.Get("Location"), "/login?next=") {
+			t.Errorf("%s anonymous: %d %q", path, code, hdr.Get("Location"))
 		}
 	}
-	_, hdr, body = plain(t, base, "/api/v2", nil)
-	if !strings.Contains(hdr.Get("Content-Security-Policy"), "img-src 'self' data:") {
-		t.Errorf("docs CSP = %q", hdr.Get("Content-Security-Policy"))
+	for path, want := range docs {
+		res := b.get(path)
+		if res.StatusCode != 200 || !strings.Contains(b.body, want) || res.Header.Get("X-Robots-Tag") != "noindex, nofollow" {
+			t.Errorf("%s: %d %q", path, res.StatusCode, res.Header.Get("X-Robots-Tag"))
+		}
+	}
+	res := b.get("/api/v2")
+	body = b.body
+	if !strings.Contains(res.Header.Get("Content-Security-Policy"), "img-src 'self' data:") {
+		t.Errorf("docs CSP = %q", res.Header.Get("Content-Security-Policy"))
 	}
 	for _, m := range regexp.MustCompile(`(?:src|href)="(/static/[^"]+)"`).FindAllStringSubmatch(body, -1) {
 		if code, _, _ := plain(t, base, m[1], nil); code != 200 {

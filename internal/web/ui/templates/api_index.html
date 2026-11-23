@@ -1,6 +1,8 @@
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
 {{define "title"}}API documentation{{end}}
 {{define "content"}}
-<div class="page-intro"><div class="page-title-wrap"><h1>API documentation</h1><p>Public reference for the interfaces of this instance.</p></div></div>
+<div class="page-intro"><div class="page-title-wrap"><h1>API documentation</h1><p>Reference for the interfaces of this instance.</p></div></div>
 <section class="section-card"><div class="section-card-head"><div><h2>API v2</h2><p>The JSON API and the RSS feed for new integrations.</p></div></div><div class="section-card-body">
 <p>Torrent search, torrent details and the file list of a torrent, authenticated with an <strong>API token</strong> in the <code>Authorization: Bearer</code> header. The v2 RSS feed uses a separate <strong>RSS token</strong>.</p>
 <div class="form-actions"><a class="btn primary" href="/api/v2">Open the v2 documentation</a><a class="btn" href="/api/v2/openapi.yaml">OpenAPI document (YAML)</a></div>
@@ -10,6 +12,6 @@
 <div class="form-actions"><a class="btn" href="/api/v1">Open the v1 documentation</a><a class="btn" href="/api/v1/openapi.yaml">OpenAPI document (YAML)</a></div>
 </div></section>
 <section class="section-card"><div class="section-card-body">
-<p>Tokens are created on your <a href="/account?tab=api">account page</a> after signing in; they are shown once. These pages never contain a token, and nothing you type into them is stored. The interactive "Try it out" feature sends only <code>GET</code> requests to this server, with the token you paste into the Authorize dialog.</p>
+<p>Tokens are created on your <a href="/account?tab=api">account page</a> after signing in; they are shown once. These pages are only for signed-in users. They never contain a token, and nothing you type into them is stored. The interactive "Try it out" feature sends only <code>GET</code> requests to this server, with the token you paste into the Authorize dialog.</p>
 </div></section>
 {{end}}

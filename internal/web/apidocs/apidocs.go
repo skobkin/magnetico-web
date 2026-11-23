@@ -1,11 +1,13 @@
-// Package apidocs holds the embedded OpenAPI documents and serves the public
-// API documentation (docs/specs/web-v1.md §9): the landing page /api, the
+// Package apidocs holds the embedded OpenAPI documents and serves the
+// API documentation for signed-in users (docs/specs/web-v1.md §9): the landing page /api, the
 // interactive pages /api/v1 and /api/v2 (the vendored Swagger UI, started by
 // the first-party docs.js) and the documents /api/v1/openapi.yaml and
 // /api/v2/openapi.yaml.
 //
-// Everything here is public and static. The pages contain no credentials or
-// user data, make no request to any other origin and store nothing. The
+// The pages require a session (anonymous requests go to the sign-in page) but
+// are otherwise static: they contain no credentials or user data beyond the
+// signed-in name in the header, make no request to any other origin and store
+// nothing. The
 // documents describe only implemented endpoints; tests keep them consistent
 // with the router and valid against the OpenAPI schema.
 package apidocs
@@ -16,6 +18,7 @@ import (
 	"encoding/hex"
 	"net/http"
 
+	"github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	"github.com/skobkin/magnetico-web/internal/web/ui"
 )
@@ -40,12 +43,16 @@ const docsCSP = "default-src 'self'; img-src 'self' data:; base-uri 'none'; form
 // Install registers the public documentation routes.
 func Install(srv *server.Server) {
 	rt := srv.Router()
+	// The documentation is for signed-in users: anonymous requests are sent
+	// to the sign-in page like any other page.
 	pub := func(pattern string, h http.HandlerFunc) {
-		rt.Handle("GET "+pattern, server.KindRequest, server.Public, h)
+		rt.Handle("GET "+pattern, server.KindRequest, server.Session, h)
 	}
 	pub("/api", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if err := srv.Renderer().Render(w, http.StatusOK, "api_index", struct{}{}); err != nil {
+		p, _ := auth.Current(r.Context())
+		page := struct{ Username, CSRFToken string }{p.Username, auth.SessionFormToken(r)}
+		if err := srv.Renderer().Render(w, http.StatusOK, "api_index", page); err != nil {
 			srv.ErrorPage(w, r, http.StatusInternalServerError)
 		}
 	})
@@ -71,7 +78,7 @@ func spec(doc []byte) http.HandlerFunc {
 		h := w.Header()
 		h.Set("Content-Type", "application/yaml; charset=utf-8")
 		h.Set("ETag", etag)
-		h.Set("Cache-Control", "public, max-age=300")
+		h.Set("Cache-Control", "private, max-age=300")
 		if r.Header.Get("If-None-Match") == etag {
 			w.WriteHeader(http.StatusNotModified)
 			return

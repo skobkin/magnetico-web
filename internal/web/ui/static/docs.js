@@ -24,7 +24,9 @@
     docExpansion: "list",
     defaultModelsExpandDepth: 1,
     requestInterceptor: function (req) {
-      req.credentials = "omit";
+      // The documentation itself needs the session; the requests of "Try it
+      // out" never carry it (they authenticate with the pasted token only).
+      if (String(req.url).indexOf(el.getAttribute("data-spec")) < 0) { req.credentials = "omit"; }
       return req;
     }
   });
