@@ -307,6 +307,12 @@ main {
 .site-footer a {
   color:var(--subtext);
 }
+.footer-links {
+  display:flex;
+  gap:18px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
 .page-intro {
   display:flex;
   justify-content:space-between;
