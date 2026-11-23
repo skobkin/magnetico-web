@@ -74,6 +74,23 @@ func (s *Service) Hash(ctx context.Context, pw string) (string, error) {
 	return s.hash(ctx, pw)
 }
 
+// Rehash returns a new current-parameter argon2id hash of a password that was
+// just verified successfully (rehash-on-login, spec §4.3.4). Unlike Hash it
+// does not apply the new-password policy: a legacy password may be shorter
+// than 8 or longer than 1,024 bytes and must still upgrade. Any input of
+// 1..MaxLoginLength bytes is accepted; it must only be called with a password
+// that Verify accepted. It goes through the shared limiter, so ErrBusy is
+// possible (the caller then completes the login without rehash).
+func (s *Service) Rehash(ctx context.Context, pw string) (string, error) {
+	switch {
+	case len(pw) == 0:
+		return "", ErrTooShort
+	case len(pw) > MaxLoginLength:
+		return "", ErrTooLong
+	}
+	return s.hash(ctx, pw)
+}
+
 func (s *Service) hash(ctx context.Context, pw string) (string, error) {
 	h := argonHash{id: true, memory: s.params.Memory, time: s.params.Time, threads: s.params.Threads,
 		salt: make([]byte, saltLen)}

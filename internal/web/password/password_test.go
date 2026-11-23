@@ -446,3 +446,49 @@ func TestDefaultServiceUsesSpecParameters(t *testing.T) {
 }
 
 var _ = argon2.Version
+
+func TestRehashAcceptsAnyLoginLengthAndProducesCurrentHash(t *testing.T) {
+	svc := fastService()
+	ctx := context.Background()
+	for _, n := range []int{1, 7, 8, 1025, MaxLoginLength} {
+		pw := strings.Repeat("p", n)
+		h, err := svc.Rehash(ctx, pw)
+		if err != nil {
+			t.Fatalf("len %d: %v", n, err)
+		}
+		if svc.params.Classify(h) != ClassCurrent {
+			t.Errorf("len %d: rehash is not current-class", n)
+		}
+		if ok, err := svc.Verify(ctx, pw, h); err != nil || !ok {
+			t.Errorf("len %d: rehash does not verify: %v %v", n, ok, err)
+		}
+		if ok, _ := svc.Verify(ctx, pw+"x", h); ok && n < MaxLoginLength {
+			t.Errorf("len %d: rehash verifies a different password", n)
+		}
+	}
+	if _, err := svc.Rehash(ctx, ""); !errors.Is(err, ErrTooShort) {
+		t.Errorf("empty: %v", err)
+	}
+	if _, err := svc.Rehash(ctx, strings.Repeat("p", MaxLoginLength+1)); !errors.Is(err, ErrTooLong) {
+		t.Errorf("over limit: %v", err)
+	}
+	// Hash still enforces the new-password policy; Rehash deliberately does not.
+	if _, err := svc.Hash(ctx, "short"); !errors.Is(err, ErrTooShort) {
+		t.Errorf("Hash policy changed: %v", err)
+	}
+}
+
+func TestRehashGoesThroughTheLimiter(t *testing.T) {
+	l := NewLimiter(1, 50*time.Millisecond)
+	svc := NewService(l, fastParams)
+	// Hold the only slot; Rehash must be refused with ErrBusy, not bypass it.
+	release := make(chan struct{})
+	held := make(chan struct{})
+	go func() { _ = l.Do(context.Background(), func() { close(held); <-release }) }()
+	<-held
+	_, err := svc.Rehash(context.Background(), "some password")
+	close(release)
+	if !errors.Is(err, ErrBusy) {
+		t.Fatalf("Rehash with a saturated limiter: %v, want ErrBusy", err)
+	}
+}

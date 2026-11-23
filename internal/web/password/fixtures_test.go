@@ -136,3 +136,43 @@ func TestFixturesHaveExpectedCoverage(t *testing.T) {
 		}
 	}
 }
+
+// Every PHP-era hash that verifies must, once rehashed, verify (and only) its
+// own password against the new argon2id hash.
+func TestRehashOfPHPFixtures(t *testing.T) {
+	_, cases := loadFixtures(t)
+	svc := NewService(NewLimiter(2, time.Minute), fastParams)
+	ctx := context.Background()
+	n := 0
+	for _, c := range cases {
+		if !c.Verifies || testing.Short() && (strings.Contains(c.ID, "cost13") ||
+			c.Family != "bcrypt" && !strings.HasSuffix(c.ID, "/ascii") && !strings.HasSuffix(c.ID, "/len73")) {
+			continue
+		}
+		pw := b64(t, c.PasswordB64)
+		if len(pw) == 0 || len(pw) > MaxLoginLength {
+			continue
+		}
+		ok, err := svc.Verify(ctx, pw, c.Hash)
+		if err != nil || !ok {
+			t.Fatalf("%s: legacy verify: %v %v", c.ID, ok, err)
+		}
+		nh, err := svc.Rehash(ctx, pw)
+		if err != nil {
+			t.Fatalf("%s: rehash: %v", c.ID, err)
+		}
+		if svc.params.Classify(nh) != ClassCurrent {
+			t.Errorf("%s: rehash not current", c.ID)
+		}
+		if ok, err := svc.Verify(ctx, pw, nh); err != nil || !ok {
+			t.Errorf("%s: rehashed hash rejects the password: %v %v", c.ID, ok, err)
+		}
+		if ok, _ := svc.Verify(ctx, b64(t, c.WrongB64), nh); ok && b64(t, c.WrongB64) != pw {
+			t.Errorf("%s: rehashed hash accepts the wrong password", c.ID)
+		}
+		n++
+	}
+	if n == 0 {
+		t.Fatal("no fixtures exercised")
+	}
+}

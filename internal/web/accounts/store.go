@@ -1,7 +1,8 @@
 // Package accounts is the SQL-only account and credential store of the web
 // service (docs/specs/web-v1.md §4, 07A §4): users, one-time password links,
 // invitations, API tokens and RSS tokens. It has no HTTP types and no
-// sessions logic beyond deleting sessions (creation and lookup are W3).
+// sessions logic beyond the session store (sessions.go) and the login commit
+// (login.go), which belong to W3.
 //
 // Rules the store enforces with conditional SQL under row locks (the schema
 // has no triggers):
@@ -42,6 +43,10 @@ var (
 	ErrInvitationUnavailable = errors.New("invitation is not available")
 	ErrConflict              = errors.New("concurrent update; retry")
 	ErrUnauthenticated       = errors.New("credential rejected")
+	// ErrLoginStale: the account no longer has the exact password hash that
+	// was verified (changed, reset or already rehashed) or is no longer
+	// active. Nothing was written.
+	ErrLoginStale = errors.New("account changed during login")
 )
 
 // Store is the account store over a pgx pool.
