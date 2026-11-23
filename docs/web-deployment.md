@@ -1,4 +1,4 @@
-# `magnetico web` — configuration, database and reverse-proxy notes (W1–W5)
+# `magnetico web` — configuration, database and reverse-proxy notes (W1–W7)
 
 Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Nothing here has been integration-tested against a real proxy yet (that belongs to a later milestone).
 
@@ -18,9 +18,9 @@ Precedence: **command line > `MAGNETICO_WEB_*` environment > YAML file > default
 | `MAGNETICO_WEB_SEARCH_CONCURRENCY` | `searchConcurrency` | `4` |
 | `MAGNETICO_WEB_REQUEST_TIMEOUT` | `requestTimeout` | `30s` |
 | `MAGNETICO_WEB_SHUTDOWN_TIMEOUT` | `shutdownTimeout` | `30s` (1s–10m) |
-| `MAGNETICO_WEB_INVITE_QUOTA` | `inviteQuota` | `0` |
-| `MAGNETICO_WEB_TRACKER_CACHE_TTL` | `trackerCacheTTL` | `60s` |
-| `MAGNETICO_WEB_SMTP_HOST` / `_PORT` / `_SECURITY` / `_USERNAME` / `_FROM` | `smtpHost` / `smtpPort` / `smtpSecurity` / `smtpUsername` / `smtpFrom` | unset |
+| `MAGNETICO_WEB_INVITE_QUOTA` | `inviteQuota` | `0` (invitations a user receives when the account is created or registers; users cannot create more, §8) |
+| `MAGNETICO_WEB_TRACKER_CACHE_TTL` | `trackerCacheTTL` | `60s` (how often the public tracker list is re-read, §9) |
+| `MAGNETICO_WEB_SMTP_HOST` / `_PORT` / `_SECURITY` / `_USERNAME` / `_FROM` | `smtpHost` / `smtpPort` / `smtpSecurity` / `smtpUsername` / `smtpFrom` | unset (email features off; §8) |
 | `MAGNETICO_WEB_LOG_LEVEL` / `_LOG_FORMAT` | `logLevel` / `logFormat` | `info` / `text` |
 
 Durations use Go syntax (`30s`, `12h`; there is no `d` unit). Each setting also has a long flag (`--request-timeout`, …).
@@ -125,7 +125,7 @@ These statements are executed verbatim by the integration tests, which start the
 
 ## 7. Search, torrent details and the file browser (W4, reworked in W5)
 
-Routes: `GET /torrents` (search, a *search* route with the search deadline), `GET /torrents/{id}` (metadata; reads at most the blob's first 12 bytes to choose the browsing mode, never decodes it) and the two JSON endpoints behind the details page's file browser, `GET /torrents/{id}/files/tree` and `GET /torrents/{id}/files?dir=&offset=&limit=` (W5; they replace the W4 HTML directory pages). `GET /` redirects to `/torrents`. All need a session; the JSON endpoints answer `401` `application/problem+json` instead of redirecting. No public `/api/v2` route exists yet (W7).
+Routes: `GET /torrents` (search, a *search* route with the search deadline), `GET /torrents/{id}` (metadata; reads at most the blob's first 12 bytes to choose the browsing mode, never decodes it) and the two JSON endpoints behind the details page's file browser, `GET /torrents/{id}/files/tree` and `GET /torrents/{id}/files?dir=&offset=&limit=` (W5; they replace the W4 HTML directory pages). `GET /` redirects to `/torrents`. All need a session; the JSON endpoints answer `401` `application/problem+json` instead of redirecting. `/api/v2` is described in §9.
 
 **Fixed limits (constants, not configuration):** file-list decode admission **192 MiB** of estimated working set (bounded queue: 32 waiters, 5 s), file-index cache **128 MiB** (LRU, entries revalidated against the database on every request and expired after 10 min), directory pages of at most 1,000 entries and 1 MiB (the UI asks for 160), search queue 4 × `SEARCH_CONCURRENCY` waiters / 5 s. A saturated decode queue or search queue answers **503 with `Retry-After`**, never a partial or empty list.
 
@@ -140,3 +140,37 @@ Routes: `GET /torrents` (search, a *search* route with the search deadline), `GE
 - The target "peak RSS ≤ 640 MiB at 32 concurrent clients" was **not met** in the worst mixed workload (≤ 740 MiB); plan for ≥ 1 GiB, not 768 MiB.
 - On shutdown the file-index cache stops after in-flight requests drain and before the database pool closes; the stop is logged with the cache counters (`file index cache stopped`).
 - **Directory addressing (W5).** Directories are addressed by short positional paths (at most 256 numeric components, under 2 KB), so the W4 limitation for very long directory URLs no longer exists and the 16 KiB request-header limit is no longer a concern for the file browser. A hierarchy beyond the index limits is the only case in which a valid torrent cannot be browsed.
+
+## 8. Accounts, email and credentials (W6)
+
+**Routes.** `GET /account?tab=profile|invitations|rss|api` and the `POST` actions below it (password, email, email/resend, API and RSS tokens, token and invitation revocation); public `/register/{code}`, `/password/forgot`, `/password/setup/{token}`, `/password/reset/{token}`, `/email/verify/{token}`. Every `POST` carries the CSRF token (session-bound on the account page, pre-session-bound on public forms). Pages that show or are reached through a credential send `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`.
+
+**Invitations.** A user sees and revokes only their own pre-minted invitations (`INVITE_QUOTA` at account creation or registration); there is no self-service creation. Further invitations: `web user invite add`.
+
+**Tokens.** At most 50 unrevoked API tokens and 50 unrevoked RSS tokens per user; creation is limited to a burst of 10 and one more every 6 minutes per account and type. Plaintext is shown once; only SHA-256 is stored. **Revoked rows are kept** (no database role may delete token rows) and there is no lifetime cap on them: with the creation limit this grows slowly, but operators who care should watch `magnetico_web.api_tokens` and `rss_tokens`, and a future operator command may prune old revoked rows.
+
+**Email is optional.** Without `MAGNETICO_WEB_SMTP_HOST` the profile page says email is unavailable, `/password/forgot` says recovery is not available, and sign-in, tokens, password change and administrator-issued links work as before. With SMTP configured:
+
+* `MAGNETICO_WEB_SMTP_SECURITY` is `starttls` (submission, usually port 587) or `tls` (implicit TLS, usually 465). There is **no plaintext mode and no fallback, loopback included**: if STARTTLS is not offered, or the certificate does not verify (system root certificates, the configured host name as the expected name, TLS 1.2 or newer), nothing is sent and no credential is transmitted. There is no option to skip verification. To trust a private CA, point `SSL_CERT_FILE` (or `SSL_CERT_DIR`) at it in the service's environment; that replaces the system roots for the whole process.
+* The username and `MAGNETICO_WEB_SMTP_PASSWORD` are optional but must be given together; the password is environment-only and is never logged.
+* Mail is queued in memory (capacity 32 messages queued or in flight, two workers, 30 s per message, jobs older than 15 minutes are dropped unsent). Nothing is persisted: a restart loses queued mail, and a user can request a verification email again from the account page. A password-recovery message that cannot be queued is silently dropped (the page answer never depends on it). The logs carry only the failure category (for example `tls`, `starttls-missing`, `auth`, `rejected`, `timeout`), never an address or a link.
+* Password-reset and setup emails state that completing them signs the user out everywhere and revokes **all API tokens and all RSS tokens and feed URLs**.
+
+**Privileges.** The documented runtime role (§4) is sufficient: token creation and `last_used_at` use `INSERT`/`UPDATE`, one-time links and sessions use `DELETE`, the tracker list uses `SELECT` on `trackers`. The real-binary test runs the whole feature set under exactly those grants.
+
+## 9. API v2, RSS feeds, magnet links and documentation (W7)
+
+| Path | Credential | Notes |
+|---|---|---|
+| `GET /api/v2/torrents`, `/torrents/{id}`, `/torrents/{id}/files/tree`, `/torrents/{id}/files` | API token (`mgt_…`) in `Authorization: Bearer` only | JSON, `private, no-store`; same limits as the web file browser (§7) |
+| `GET /api/v2/feeds/latest.rss?feed_token=` | RSS token (`mgf_…`, or a migrated legacy token) in `feed_token` only | RSS 2.0, newest 1,000 per page, `page` 1–10 |
+| `GET /api/v1/feed/rss/last` (deprecated) | RSS token in the `api-token` header, cookie or query | same document; failures use the legacy JSON envelope; `page=1` is now the newest 1,000 (clients may see up to 1,000 recent items they have never seen once after the upgrade; GUIDs are info hashes) |
+| `GET /magnet/{infohash}` | none | `307` to `magnet:?xt=urn:btih:…&tr=…` with the configured trackers, no name; never looks the torrent up |
+| `GET /api`, `/api/v1`, `/api/v2`, `/api/{v1,v2}/openapi.yaml` | none | public, `noindex`; interactive documentation (Swagger UI, vendored; "Try it out" is `GET` only and uses a token the user pastes in) |
+
+* **Credentials are separate.** API tokens never open a feed and RSS tokens never open the JSON API; a revoked, expired or suspended (owner disabled) token fails on its very next request, and `disable`/`enable` leave token rows untouched. A password reset revokes both types.
+* **Feed URLs contain a credential.** The service never logs query strings, never echoes the token, sends `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. **Configure the reverse proxy to omit or mask query strings in its own access logs** and do not enable response caching for these paths (a cache key that includes the query would store a per-user URL; the pages are cheap and the service caches the rendered page for 60 s itself, after checking the token). Failures are rate limited per client address (burst 20, one more every 10 s) and successes per token.
+* **Tracker list.** Loaded from `magnetico_web.trackers` at startup (startup fails if it cannot be read), refreshed at most every `TRACKER_CACHE_TTL` by one background task, last good list kept if a refresh fails (a warning is logged). Edits made with `web tracker …` appear within the TTL. `/magnet` and every magnet link use this snapshot and never wait for the database.
+* **Documentation pages and CSP.** The interactive pages use the normal policy plus `img-src 'self' data:` (the renderer's stylesheet uses inline `data:` icons) — no inline script or style, no `eval`, no other origin; the relaxation applies to `/api/v1` and `/api/v2` only. Whether the renderer runs cleanly under this policy in real browsers has **not** been verified on the development VM.
+* **Reverse proxy timeouts** are unchanged (§3): `/api/v2/torrents` is a search route (`SEARCH_TIMEOUT` + 10 s write deadline); every other new route is an ordinary request (`REQUEST_TIMEOUT` + 5 s).
+

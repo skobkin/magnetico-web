@@ -630,6 +630,8 @@ Each milestone ends in a reviewable change set and a stop. No milestone starts w
 | W8 | User migration | **Separate approved task**: `migrate users` (identity-preserving, case-sensitive usernames kept verbatim, handling of historical emails, legacy invitation import, **legacy tokens → `rss_tokens` only**: `sha256`, `legacy = true`, original timestamps, zero `api_tokens`) | Specified separately; depends on the hash audit, DDL approval and W2 verifiers | Specified separately |
 | W9 | Integration, security, regression | Real-binary e2e (like `internal/e2e`), security checklist, load test of search, soak of the web service with realistic data, deployment notes (Traefik log redaction, proxy timeouts above the search timeout) | No P0/P1 findings open; memory recommendation for the container | e2e with disposable PostgreSQL, scripted abuse cases (brute force, CSRF, enumeration, spoofed `X-Forwarded-For`), accessibility review |
 
+**Status (task 07G, 2026-11-23).** W6 and W7 were implemented together as one coordinated assignment (stages S1–S5): [`07G-web-account-api-report.md`](07G-web-account-api-report.md). The acceptance criteria above are covered by the tests listed in that report; the implementation record and the deliberate deviations (no self-service invitation creation, Swagger UI with GET-only "Try it out", OpenAPI 3.2.0, token caps and creation limits, mail queue sizing and delivery rules) are in `web-v1.md` §14. Not done and not claimed: any real-browser check of the new pages and of the vendored documentation renderer; W8 and W9 are not started.
+
 The Task 06 e2e harness (`internal/e2e`) and `internal/pgtest` are reused; they run synthetic data only, and no step in this plan sends DHT traffic.
 
 ## 9. Documents and README
