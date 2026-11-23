@@ -567,6 +567,22 @@ func TestRecoveryLinkEligibility(t *testing.T) {
 	if err != nil || l.Purpose != PurposeReset || l.Token == "" {
 		t.Fatalf("verified: %+v, %v", l, err)
 	}
+	if l.Email != "rec@example.org" {
+		t.Fatalf("link email = %q", l.Email)
+	}
+	// A different spelling locates the account but the result carries the
+	// stored verified address.
+	exec(t, pool, `UPDATE magnetico_web.users SET email = 'Rec.Mixed@Example.ORG' WHERE id = $1`, u.ID)
+	for _, in := range []string{"rec.mixed@example.org", "REC.MIXED@EXAMPLE.ORG"} {
+		ml, err := s.IssueRecoveryLink(ctx, in)
+		if err != nil || ml.Email != "Rec.Mixed@Example.ORG" {
+			t.Fatalf("submitted %q: email %q, %v; want the stored spelling", in, ml.Email, err)
+		}
+	}
+	exec(t, pool, `UPDATE magnetico_web.users SET email = 'rec@example.org' WHERE id = $1`, u.ID)
+	if l, err = s.IssueRecoveryLink(ctx, "rec@example.org"); err != nil {
+		t.Fatal(err)
+	}
 	// It works as a reset link and revokes everything.
 	api, _ := s.CreateAPIToken(ctx, u.ID, "", nil)
 	if _, err := s.CompletePasswordLink(ctx, l.Token, PurposeReset, testHash(t)); err != nil {

@@ -233,7 +233,7 @@ func (h *Handlers) recoveryJob(addr string) mailer.Job {
 		if setup {
 			path = "/password/setup/"
 		}
-		_ = send(mailer.PasswordLinkMessage(addr, h.absolute(path+link.Token), setup, ttl))
+		_ = send(mailer.PasswordLinkMessage(link.Email, h.absolute(path+link.Token), setup, ttl))
 	}
 }
 

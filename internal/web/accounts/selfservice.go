@@ -231,7 +231,9 @@ type RecoveryLink struct {
 // setup (72 h) otherwise; it replaces any earlier password link. An unknown or
 // unverified address, or an inactive account, is ErrNotFound (the caller must
 // not distinguish these to the requester). The unique verified-email index
-// guarantees at most one account matches.
+// guarantees at most one account matches. The submitted address only locates
+// the account: RecoveryLink.Email is the stored verified spelling, the only
+// address a recovery message may be sent to.
 func (s *Store) IssueRecoveryLink(ctx context.Context, email string) (RecoveryLink, error) {
 	var out RecoveryLink
 	if err := ValidateEmail(email); err != nil {
@@ -241,8 +243,9 @@ func (s *Store) IssueRecoveryLink(ctx context.Context, email string) (RecoveryLi
 		out = RecoveryLink{}
 		var id int64
 		var hasPassword bool
-		err := tx.QueryRow(ctx, `SELECT id, password_hash IS NOT NULL FROM magnetico_web.users
-            WHERE lower(email) = lower($1) AND email_verified_at IS NOT NULL AND active FOR UPDATE`, email).Scan(&id, &hasPassword)
+		var stored string
+		err := tx.QueryRow(ctx, `SELECT id, password_hash IS NOT NULL, email FROM magnetico_web.users
+            WHERE lower(email) = lower($1) AND email_verified_at IS NOT NULL AND active FOR UPDATE`, email).Scan(&id, &hasPassword, &stored)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -256,7 +259,7 @@ func (s *Store) IssueRecoveryLink(ctx context.Context, email string) (RecoveryLi
 		if out.Link, err = issueLinkTx(ctx, tx, id, purpose, ttl); err != nil {
 			return err
 		}
-		out.Email = email
+		out.Email = stored // the verified spelling, never the submitted one
 		return nil
 	})
 	return out, err

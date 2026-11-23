@@ -331,6 +331,31 @@ func TestForgotPasswordIsIndistinguishableAndDoesNoWorkInTheRequest(t *testing.T
 	}
 }
 
+// The submitted spelling only locates the account: the message goes to the
+// exact verified address stored in users.email.
+func TestForgotPasswordMailsTheStoredVerifiedSpelling(t *testing.T) {
+	e := newEnv(t)
+	u := e.mkUser("mixed", pw1)
+	e.exec(`UPDATE magnetico_web.users SET email = 'Mixed.Case@Example.ORG', email_verified_at = now() WHERE id = $1`, u.ID)
+	for _, addr := range []string{"mixed.case@example.org", "MIXED.CASE@EXAMPLE.ORG", "Mixed.Case@Example.ORG"} {
+		c := e.client()
+		f := c.form("/password/forgot", "email", addr)
+		if res := c.post("/password/forgot", f); res.StatusCode != 200 {
+			t.Fatalf("%s: %d", addr, res.StatusCode)
+		}
+		e.settle()
+	}
+	msgs := e.mailer.all()
+	if len(msgs) == 0 {
+		t.Fatal("no recovery message was sent")
+	}
+	for i, m := range msgs {
+		if m.To != "Mixed.Case@Example.ORG" {
+			t.Fatalf("message %d addressed to %q, want the stored spelling", i, m.To)
+		}
+	}
+}
+
 func TestForgotPasswordFullFlowMailsOnlyTheVerifiedActiveAccount(t *testing.T) {
 	e := newEnv(t)
 	valid := e.mkUser("valid", pw1)

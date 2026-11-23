@@ -54,6 +54,11 @@ func TestStructuralGoldenForBothFeeds(t *testing.T) {
 		if !strings.HasPrefix(string(r.Body), `<?xml version="1.0" encoding="UTF-8"?>`) {
 			t.Fatalf("no XML declaration:\n%.100s", r.Body)
 		}
+		for _, must := range []string{`xmlns:dc="http://purl.org/dc/elements/1.1/"`, `<dc:creator>Magnetico Web</dc:creator>`} {
+			if !strings.Contains(string(r.Body), must) {
+				t.Fatalf("%s: legacy author metadata lost, missing %s", tc.path, must)
+			}
+		}
 		got, want := canon(t, r.Body), canon(t, []byte(golden(t, tc.self, id1, id2, id3)))
 		if got != want {
 			t.Fatalf("%s: structure differs\n got: %s\nwant: %s", tc.path, got, want)
