@@ -10,5 +10,8 @@
 <dt>Info hash</dt><dd><code>{{.InfoHash}}</code></dd>
 <dt>Magnet (no trackers)</dt><dd><a href="{{.Magnet}}">Open magnet link</a></dd>
 </dl>
-<p><a href="{{.FilesHref}}">Browse files</a></p>
+<section id="file-browser" data-mode="{{.Mode}}" data-tree-url="{{.TreeURL}}" data-dir-url="{{.DirURL}}">
+<h2>Files</h2>
+<noscript><p>The file browser needs JavaScript. Everything else on this page works without it.</p></noscript>
+</section>
 {{end}}

@@ -12,7 +12,6 @@
 package pathfmt
 
 import (
-	"net/url"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -115,28 +114,4 @@ func Plain(segs []Segment) string {
 		b.WriteString(s.Text)
 	}
 	return b.String()
-}
-
-// ---- directory query parameters -------------------------------------------
-
-// DirParam is the name of the query parameter that carries a directory.
-const DirParam = "dir"
-
-// EncodeDir percent-encodes the exact bytes of a directory prefix for a query
-// string value (url.QueryEscape: every byte outside the unreserved set becomes
-// %XX, so "/", ".", "..", "%", "+", "&", "#", NUL and invalid UTF-8 survive
-// and no component is ever normalised by a browser or a mux).
-func EncodeDir(dir string) string { return url.QueryEscape(dir) }
-
-// DecodeDir is the inverse of EncodeDir. It is stricter than url.ParseQuery
-// only in reporting malformed escapes as an error.
-func DecodeDir(v string) (string, error) { return url.QueryUnescape(v) }
-
-// DirQuery returns "dir=<encoded>" for a raw query string; the root ("") is
-// represented by omitting the parameter and yields "".
-func DirQuery(dir string) string {
-	if dir == "" {
-		return ""
-	}
-	return DirParam + "=" + EncodeDir(dir)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	"github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
+	"github.com/skobkin/magnetico-web/internal/web/fileview"
 	"github.com/skobkin/magnetico-web/internal/web/password"
 	"github.com/skobkin/magnetico-web/internal/web/ratelimit"
 	"github.com/skobkin/magnetico-web/internal/web/search"
@@ -61,6 +62,7 @@ type envOpts struct {
 	searchWait time.Duration
 	searchTO   time.Duration
 	cache      filecache.Config
+	view       fileview.Config
 	poolMax    int32
 }
 
@@ -70,8 +72,10 @@ type env struct {
 	pool   *pgxpool.Pool
 	reader *persistence.Reader
 	cache  *filecache.Cache
+	view   *fileview.Service
 	search *search.Service
 	log    *syncBuf
+	srv    *server.Server
 	n      int
 }
 
@@ -139,7 +143,12 @@ func newEnv(t *testing.T, mutate ...func(*envOpts)) *env {
 		defer cancel()
 		_ = e.cache.Close(c)
 	})
-	if _, err := Install(srv, Deps{Search: e.search, Details: e.reader, Files: e.cache}); err != nil {
+	o.view.Logger = logger
+	if e.view, err = fileview.New(e.cache, e.reader, o.view); err != nil {
+		t.Fatal(err)
+	}
+	e.srv = srv
+	if _, err := Install(srv, Deps{Search: e.search, Details: e.reader, View: e.view}); err != nil {
 		t.Fatal(err)
 	}
 	e.h = srv.Handler()

@@ -1,7 +1,9 @@
-// Package torrents holds the W4 HTTP handlers: torrent search and listing,
-// torrent details and the file browser (docs/wip/07E-web-search-details-plan.md
-// §4). Handlers translate between HTTP and the search service and the
-// file-index cache; they hold no SQL and make no decisions about memory.
+// Package torrents holds the web HTTP handlers: torrent search and listing,
+// torrent details and the two session-authenticated JSON file-view endpoints
+// that feed the details page's file browser (docs/wip/07E-web-search-details-plan.md
+// §4, docs/wip/07F-web-ui-report.md). Handlers translate between HTTP and the
+// search service and the shared file-view service; they hold no SQL and make
+// no decisions about memory.
 //
 // Logs never carry search text, torrent names, file paths or cursors; they
 // carry ids, outcome categories and counts only.
@@ -23,20 +25,15 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
 	"github.com/skobkin/magnetico-web/internal/web/filetree"
+	"github.com/skobkin/magnetico-web/internal/web/fileview"
 	"github.com/skobkin/magnetico-web/internal/web/gate"
 	"github.com/skobkin/magnetico-web/internal/web/pathfmt"
+	"github.com/skobkin/magnetico-web/internal/web/problem"
 	"github.com/skobkin/magnetico-web/internal/web/search"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	"github.com/skobkin/magnetico-web/internal/web/ui"
 	"github.com/skobkin/magnetico-web/persistence"
 )
-
-// PageRows is the fixed number of rows of a file-browser page.
-const PageRows = 500
-
-// maxNameDisplay bounds the bytes of one name rendered in a row; the cut is
-// shown explicitly by pathfmt (the exact bytes stay reachable by directory).
-const maxNameDisplay = 2048
 
 const (
 	retryBusy    = "5"
@@ -53,22 +50,24 @@ type Details interface {
 	TorrentByID(ctx context.Context, id int32) (persistence.Torrent, error)
 }
 
-// Files is *filecache.Cache.
-type Files interface {
-	Get(ctx context.Context, id int32) (filecache.Result, error)
+// View is *fileview.Service.
+type View interface {
+	Decide(ctx context.Context, t persistence.Torrent) (fileview.Decision, error)
+	Tree(ctx context.Context, t persistence.Torrent) (*fileview.Body, error)
+	Dir(ctx context.Context, id int32, path string, pg fileview.Page) (*fileview.Body, error)
 }
 
 var (
 	_ Searcher = (*search.Service)(nil)
 	_ Details  = (*persistence.Reader)(nil)
-	_ Files    = (*filecache.Cache)(nil)
+	_ View     = (*fileview.Service)(nil)
 )
 
 // Deps are the handlers' collaborators.
 type Deps struct {
 	Search  Searcher
 	Details Details
-	Files   Files
+	View    View
 }
 
 // Handlers serves the W4 routes.
@@ -78,17 +77,20 @@ type Handlers struct {
 	log *slog.Logger
 }
 
-// Install registers the W4 routes on srv's router (all Session routes; the
-// list is a KindSearch route so it gets the search deadline).
+// Install registers the routes on srv's router: the HTML pages are Session
+// routes (the list is a KindSearch route so it gets the search deadline) and
+// the file-view endpoints are SessionJSON routes (401 problem+json when
+// anonymous).
 func Install(srv *server.Server, d Deps) (*Handlers, error) {
-	if d.Search == nil || d.Details == nil || d.Files == nil {
-		return nil, errors.New("torrents: search, details and files are required")
+	if d.Search == nil || d.Details == nil || d.View == nil {
+		return nil, errors.New("torrents: search, details and view are required")
 	}
 	h := &Handlers{d: d, srv: srv, log: srv.Logger()}
 	rt := srv.Router()
 	rt.Handle("GET /torrents", server.KindSearch, server.Session, http.HandlerFunc(h.list))
 	rt.Handle("GET /torrents/{id}", server.KindRequest, server.Session, http.HandlerFunc(h.details))
-	rt.Handle("GET /torrents/{id}/files", server.KindRequest, server.Session, http.HandlerFunc(h.files))
+	rt.Handle("GET /torrents/{id}/files/tree", server.KindRequest, server.SessionJSON, http.HandlerFunc(h.fileTree))
+	rt.Handle("GET /torrents/{id}/files", server.KindRequest, server.SessionJSON, http.HandlerFunc(h.fileDir))
 	return h, nil
 }
 
@@ -305,8 +307,13 @@ type detailPage struct {
 	Files                     int32
 	Discovered, DiscoveredISO string
 	Magnet                    template.URL // built here from hex and a query-escaped name
-	FilesHref                 string
+	// File browser: the backend picks the mode; the page only carries it.
+	Mode    fileview.Mode
+	TreeURL string
+	DirURL  string
 }
+
+func torrentPath(id int32) string { return "/torrents/" + strconv.FormatInt(int64(id), 10) }
 
 func (h *Handlers) details(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(r.PathValue("id"))
@@ -319,131 +326,155 @@ func (h *Handlers) details(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, id, err)
 		return
 	}
+	// The mode decision needs at most a 12-byte header peek and never blocks
+	// the page: when it fails the browser starts in the always-valid
+	// directory mode and the file view reports the real problem itself.
+	dec, derr := h.d.View.Decide(r.Context(), t)
+	if derr != nil && !errors.Is(derr, context.Canceled) {
+		h.log.Warn("file view decision unavailable", "request_id", server.RequestID(r.Context()),
+			"torrent_id", id, "error_type", fmt.Sprintf("%T", derr))
+	}
 	hd, iso := when(t.DiscoveredOn)
 	hash := fmt.Sprintf("%x", t.InfoHash)
 	h.render(w, r, http.StatusOK, "torrent", detailPage{
 		chrome: h.chrome(r), Name: pathfmt.Display(t.Name), Size: FormatSize(t.TotalSize), InfoHash: hash,
 		Files: t.FileCount, Discovered: hd, DiscoveredISO: iso,
-		Magnet:    template.URL("magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(t.Name)), // #nosec: hex and escaped text only
-		FilesHref: "/torrents/" + strconv.FormatInt(int64(id), 10) + "/files",
+		Magnet:  template.URL("magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(t.Name)), // #nosec: hex and escaped text only
+		Mode:    dec.Mode,
+		TreeURL: torrentPath(id) + "/files/tree",
+		DirURL:  torrentPath(id) + "/files",
 	})
 }
 
-// ---- files ------------------------------------------------------------------
+// ---- file view JSON ----------------------------------------------------------
 
-type crumb struct {
-	Name []pathfmt.Segment
-	Href string // "" for the current directory
+func writeBody(w http.ResponseWriter, body *fileview.Body) {
+	defer body.Release()
+	b := body.Bytes()
+	hd := w.Header()
+	hd.Set("Content-Type", "application/json")
+	hd.Set("Cache-Control", "private, no-store")
+	hd.Set("Content-Length", strconv.Itoa(len(b)))
+	_, _ = w.Write(b)
 }
 
-type fileRow struct {
-	Name  []pathfmt.Segment
-	Dir   bool
-	Href  string
-	Size  string
-	Files uint32
-	Dup   bool
-}
-
-type filesPage struct {
-	chrome
-	Name                  []pathfmt.Segment
-	TorrentHref, RootHref string
-	Crumbs                []crumb
-	DirFiles              uint32
-	DirSize               string
-	Rows                  []fileRow
-	Total, First, Last    int
-	Prev, Next            string
-}
-
-func filesHref(id int32, dir string, from int) string {
-	u := "/torrents/" + strconv.FormatInt(int64(id), 10) + "/files"
-	var q []string
-	if dir != "" {
-		q = append(q, pathfmt.DirQuery(dir))
-	}
-	if from > 0 {
-		q = append(q, "from="+strconv.Itoa(from))
-	}
-	if len(q) > 0 {
-		u += "?" + strings.Join(q, "&")
-	}
-	return u
-}
-
-func (h *Handlers) files(w http.ResponseWriter, r *http.Request) {
+// fileTree serves GET /torrents/{id}/files/tree.
+func (h *Handlers) fileTree(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseID(r.PathValue("id"))
 	if !ok {
-		h.srv.ErrorPage(w, r, http.StatusNotFound)
+		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such torrent.")
 		return
 	}
-	// r.URL.Query() has already percent-decoded the value exactly once; it is
-	// the raw directory prefix and must not be decoded again.
-	q := r.URL.Query()
-	dir := q.Get(pathfmt.DirParam)
-	from := 0
-	if s := q.Get("from"); s != "" {
-		n, err := strconv.Atoi(s)
-		if err != nil || n < 0 || strconv.Itoa(n) != s {
-			h.notice(w, r, http.StatusBadRequest, "", "Invalid page", "The page position is not valid.", filesHref(id, dir, 0), "Back to the directory")
-			return
-		}
-		from = n
-	}
-
-	res, err := h.d.Files.Get(r.Context(), id)
+	t, err := h.d.Details.TorrentByID(r.Context(), id)
 	if err != nil {
-		h.fail(w, r, id, err)
+		h.failJSON(w, r, id, err)
 		return
 	}
-	d, found := res.Index.Lookup(dir)
-	if !found {
-		h.notice(w, r, http.StatusNotFound, "", "Directory not found", "That directory does not exist in this torrent.", filesHref(id, "", 0), "Back to the root")
+	body, err := h.d.View.Tree(r.Context(), t)
+	if err != nil {
+		h.logFileView(r, id, "tree", err, 0)
+		h.failJSON(w, r, id, err)
 		return
 	}
-	info := res.Index.Info(d)
-	total := info.Total()
-	if from > 0 && from >= total {
-		h.notice(w, r, http.StatusBadRequest, "", "Invalid page", "The page position is beyond the end of the directory.", filesHref(id, dir, 0), "Back to the directory")
-		return
-	}
+	h.logFileView(r, id, "tree", nil, len(body.Bytes()))
+	writeBody(w, body)
+}
 
-	pg := filesPage{
-		chrome: h.chrome(r), Name: pathfmt.Display(res.Torrent.Name),
-		TorrentHref: "/torrents/" + strconv.FormatInt(int64(id), 10), RootHref: filesHref(id, "", 0),
-		DirFiles: info.Files, DirSize: FormatSize(info.Size), Total: total,
+// fileDir serves GET /torrents/{id}/files?dir=&offset=&limit=.
+func (h *Handlers) fileDir(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseID(r.PathValue("id"))
+	if !ok {
+		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such torrent.")
+		return
 	}
-	if dir != "" {
-		comps := strings.Split(dir[:len(dir)-1], "/")
-		for i, c := range comps {
-			cr := crumb{Name: pathfmt.Component(c, maxNameDisplay)}
-			if i < len(comps)-1 {
-				cr.Href = filesHref(id, strings.Join(comps[:i+1], "/")+"/", 0)
-			}
-			pg.Crumbs = append(pg.Crumbs, cr)
+	q, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil || len(q["dir"]) > 1 || len(q["offset"]) > 1 || len(q["limit"]) > 1 {
+		jsonProblem(w, problem.InvalidParameter, "Invalid parameter", http.StatusBadRequest, "The query string is not valid.")
+		return
+	}
+	pg, err := fileview.ParsePage(q.Get("offset"), q.Get("limit"))
+	if err != nil {
+		h.failJSON(w, r, id, err)
+		return
+	}
+	body, err := h.d.View.Dir(r.Context(), id, q.Get("dir"), pg)
+	if err != nil {
+		h.logFileView(r, id, "dir", err, 0)
+		h.failJSON(w, r, id, err)
+		return
+	}
+	h.logFileView(r, id, "dir", nil, len(body.Bytes()))
+	writeBody(w, body)
+}
+
+func (h *Handlers) logFileView(r *http.Request, id int32, op string, err error, n int) {
+	outcome := "ok"
+	if err != nil {
+		outcome = fmt.Sprintf("%T", err)
+	}
+	h.log.Info("file view", "request_id", server.RequestID(r.Context()), "torrent_id", id, "op", op, "outcome", outcome, "bytes", n)
+}
+
+func jsonProblem(w http.ResponseWriter, slug, title string, status int, detail string) {
+	problem.Write(w, problem.Problem{Slug: slug, Title: title, Status: status, Detail: detail})
+}
+
+// failJSON maps a read-path error to a problem+json response. It mirrors fail
+// (same categories, same log safety) for the JSON endpoints.
+func (h *Handlers) failJSON(w http.ResponseWriter, r *http.Request, id int32, err error) {
+	rid := server.RequestID(r.Context())
+	var le *codec.LimitError
+	var ue *fileview.UnavailableError
+	busy := func(title string) {
+		problem.Write(w, problem.Problem{Slug: problem.TemporarilyBusy, Title: title,
+			Status: http.StatusServiceUnavailable, Detail: "Please try again shortly.", RetryAfterSeconds: 5})
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		return
+	case errors.Is(err, persistence.ErrTorrentNotFound):
+		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such torrent.")
+	case errors.Is(err, fileview.ErrBadPath), errors.Is(err, fileview.ErrBadPage):
+		jsonProblem(w, problem.InvalidParameter, "Invalid parameter", http.StatusBadRequest,
+			"The directory path, offset or limit is not valid.")
+	case errors.Is(err, fileview.ErrNoSuchDir):
+		jsonProblem(w, problem.NotFound, "Not found", http.StatusNotFound, "No such directory in this torrent.")
+	case errors.As(err, &ue):
+		problem.Write(w, problem.Problem{Slug: problem.FullTreeUnavailable, Title: "Full file tree unavailable",
+			Status:    http.StatusUnprocessableEntity,
+			Detail:    "The complete file tree is not available for this torrent. Browse it directory by directory instead.",
+			Alternate: torrentPath(id) + "/files"})
+	case errors.Is(err, filetree.ErrIndexComplexity):
+		h.log.Warn("file hierarchy exceeds the web index limits", "request_id", rid, "torrent_id", id)
+		jsonProblem(w, problem.IndexTooComplex, "File structure too complex", http.StatusUnprocessableEntity,
+			"The file structure of this torrent exceeds this server's browsing limits.")
+	case errors.Is(err, gate.ErrBusy):
+		busy("The server is busy")
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, persistence.ErrStatementTimeout),
+		errors.Is(err, persistence.ErrBudgetExhausted):
+		busy("The request timed out")
+	case errors.Is(err, persistence.ErrBlobChanged), errors.Is(err, filecache.ErrClosed), errors.Is(err, persistence.ErrStorageIO):
+		h.log.Warn("file list temporarily unavailable", "request_id", rid, "torrent_id", id, "error_type", fmt.Sprintf("%T", err))
+		busy("Temporarily unavailable")
+	case errors.Is(err, persistence.ErrIntegrityMissingBlob):
+		h.log.Error("file list blob missing", "request_id", rid, "torrent_id", id, "category", "missing_blob")
+		jsonProblem(w, problem.InternalError, "File list unavailable", http.StatusInternalServerError,
+			"The file list of this torrent is missing from the database.")
+	case errors.Is(err, filecache.ErrTooLargeToIndex):
+		jsonProblem(w, problem.InternalError, "File list too large", http.StatusInternalServerError,
+			"This file list is too large to browse.")
+	case errors.Is(err, persistence.ErrCorruptBlob):
+		attrs := []any{"request_id", rid, "torrent_id", id, "category", "corrupt_blob"}
+		if errors.As(err, &le) {
+			attrs = append(attrs, "limit", le.Limit, "actual", le.Actual, "allowed", le.Allowed)
 		}
+		h.log.Error("file list blob rejected", attrs...)
+		jsonProblem(w, problem.InternalError, "File list unavailable", http.StatusInternalServerError,
+			"The stored file list of this torrent is damaged or exceeds the supported limits.")
+	default:
+		h.log.Error("request failed", "request_id", rid, "torrent_id", id, "error_type", fmt.Sprintf("%T", err))
+		jsonProblem(w, problem.InternalError, "Internal error", http.StatusInternalServerError, "Something went wrong on our side.")
 	}
-	entries := res.Index.Page(d, from, PageRows, make([]filetree.Entry, 0, PageRows))
-	for _, e := range entries {
-		row := fileRow{Name: pathfmt.Component(e.Name, maxNameDisplay), Dir: e.Dir, Dup: e.Dup}
-		if e.Dir {
-			row.Href = filesHref(id, dir+e.Name+"/", 0)
-			row.Files = e.Files
-		}
-		row.Size = formatSizeShort(e.Size)
-		pg.Rows = append(pg.Rows, row)
-	}
-	if len(entries) > 0 {
-		pg.First, pg.Last = from+1, from+len(entries)
-	}
-	if from > 0 {
-		pg.Prev = filesHref(id, dir, max(0, from-PageRows))
-	}
-	if from+len(entries) < total {
-		pg.Next = filesHref(id, dir, from+len(entries))
-	}
-	h.render(w, r, http.StatusOK, "files", pg)
 }
 
 // ---- error mapping ----------------------------------------------------------

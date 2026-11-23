@@ -562,13 +562,11 @@ func (d *driver) get(path string, cancelAfter time.Duration) (code int, body []b
 	return resp.StatusCode, body, time.Since(t0), err
 }
 
-var dirHref = regexp.MustCompile(`href="(/torrents/\d+/files\?dir=[^"&]*)"`)
-
-// crawlDirs collects directory links up to a limit (breadth first).
+// crawlDirs collects directory-page URLs up to a limit (breadth first),
+// following the positional "path" of every directory entry.
 func (d *driver) crawlDirs(t *testing.T, id int, limit int) []string {
 	t.Helper()
 	root := fmt.Sprintf("/torrents/%d/files", id)
-	seen := map[string]bool{root: true}
 	queue := []string{root}
 	var all []string
 	for len(queue) > 0 && len(all) < limit {
@@ -579,11 +577,18 @@ func (d *driver) crawlDirs(t *testing.T, id int, limit int) []string {
 			t.Fatalf("crawl %s: %d %v", p, code, err)
 		}
 		all = append(all, p)
-		for _, m := range dirHref.FindAllStringSubmatch(string(body), -1) {
-			l := strings.ReplaceAll(m[1], "&amp;", "&")
-			if !seen[l] {
-				seen[l] = true
-				queue = append(queue, l)
+		var page struct {
+			Entries []struct {
+				Type string `json:"type"`
+				Path string `json:"path"`
+			} `json:"entries"`
+		}
+		if err := json.Unmarshal(body, &page); err != nil {
+			t.Fatalf("crawl %s: %v", p, err)
+		}
+		for _, e := range page.Entries {
+			if e.Type == "dir" {
+				queue = append(queue, root+"?dir="+e.Path)
 			}
 		}
 	}

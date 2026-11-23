@@ -1,0 +1,348 @@
+[
+ {
+  "bytes_base64": "",
+  "segments": []
+ },
+ {
+  "bytes_base64": "cGxhaW4udHh0",
+  "segments": [
+   {
+    "text": "plain.txt"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "dGFiCWhlcmU=",
+  "segments": [
+   {
+    "text": "tab"
+   },
+   {
+    "text": "\\u{0009}",
+    "marker": true
+   },
+   {
+    "text": "here"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "bnVsAGJ5dGU=",
+  "segments": [
+   {
+    "text": "nul"
+   },
+   {
+    "text": "\\u{0000}",
+    "marker": true
+   },
+   {
+    "text": "byte"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "YmVsbAc=",
+  "segments": [
+   {
+    "text": "bell"
+   },
+   {
+    "text": "\\u{0007}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "ZGVsfw==",
+  "segments": [
+   {
+    "text": "del"
+   },
+   {
+    "text": "\\u{007F}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "YzHChQ==",
+  "segments": [
+   {
+    "text": "c1"
+   },
+   {
+    "text": "\\u{0085}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "YzHCnw==",
+  "segments": [
+   {
+    "text": "c1"
+   },
+   {
+    "text": "\\u{009F}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "/w==",
+  "segments": [
+   {
+    "text": "\\xff",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "//4=",
+  "segments": [
+   {
+    "text": "\\xff",
+    "marker": true
+   },
+   {
+    "text": "\\xfe",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "YeOB",
+  "segments": [
+   {
+    "text": "a"
+   },
+   {
+    "text": "\\xe3",
+    "marker": true
+   },
+   {
+    "text": "\\x81",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "dmFsaWTDqf8=",
+  "segments": [
+   {
+    "text": "validé"
+   },
+   {
+    "text": "\\xff",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "5pel5pys6KqeL8O8bsOv",
+  "segments": [
+   {
+    "text": "日本語/ünï"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "8J+YgCBlbW9qaQ==",
+  "segments": [
+   {
+    "text": "😀 emoji"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "4oCo4oCp",
+  "segments": [
+   {
+    "text": "\\u{2028}",
+    "marker": true
+   },
+   {
+    "text": "\\u{2029}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "4oCuZXZpbOKArA==",
+  "segments": [
+   {
+    "text": "\\u{202E}",
+    "marker": true
+   },
+   {
+    "text": "evil"
+   },
+   {
+    "text": "\\u{202C}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "4oCObHRy4oCP",
+  "segments": [
+   {
+    "text": "\\u{200E}",
+    "marker": true
+   },
+   {
+    "text": "ltr"
+   },
+   {
+    "text": "\\u{200F}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "2JxtYXJr",
+  "segments": [
+   {
+    "text": "\\u{061C}",
+    "marker": true
+   },
+   {
+    "text": "mark"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "4oGmaXNv4oGp",
+  "segments": [
+   {
+    "text": "\\u{2066}",
+    "marker": true
+   },
+   {
+    "text": "iso"
+   },
+   {
+    "text": "\\u{2069}",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "cmVhbO+/vWZmZmQ=",
+  "segments": [
+   {
+    "text": "real"
+   },
+   {
+    "text": "\\u{FFFD}",
+    "marker": true
+   },
+   {
+    "text": "fffd"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "XHg0MSBsaXRlcmFsIGJhY2tzbGFzaA==",
+  "segments": [
+   {
+    "text": "\\x41 literal backslash"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "XHV7MDA0MX0=",
+  "segments": [
+   {
+    "text": "\\u{0041}"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "YQABAmI=",
+  "segments": [
+   {
+    "text": "a"
+   },
+   {
+    "text": "\\u{0000}",
+    "marker": true
+   },
+   {
+    "text": "\\u{0001}",
+    "marker": true
+   },
+   {
+    "text": "\\u{0002}",
+    "marker": true
+   },
+   {
+    "text": "b"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "8J+Y",
+  "segments": [
+   {
+    "text": "\\xf0",
+    "marker": true
+   },
+   {
+    "text": "\\x9f",
+    "marker": true
+   },
+   {
+    "text": "\\x98",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "7aCA",
+  "segments": [
+   {
+    "text": "\\xed",
+    "marker": true
+   },
+   {
+    "text": "\\xa0",
+    "marker": true
+   },
+   {
+    "text": "\\x80",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "wK8=",
+  "segments": [
+   {
+    "text": "\\xc0",
+    "marker": true
+   },
+   {
+    "text": "\\xaf",
+    "marker": true
+   }
+  ]
+ },
+ {
+  "bytes_base64": "endq4oCNb2s=",
+  "segments": [
+   {
+    "text": "zwj‍ok"
+   }
+  ]
+ },
+ {
+  "bytes_base64": "dnPvuI9vaw==",
+  "segments": [
+   {
+    "text": "vs️ok"
+   }
+  ]
+ }
+]

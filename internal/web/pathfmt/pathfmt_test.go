@@ -1,7 +1,6 @@
 package pathfmt
 
 import (
-	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -142,46 +141,6 @@ func TestComponent(t *testing.T) {
 	}
 }
 
-func TestEncodeDirTable(t *testing.T) {
-	for _, d := range []string{
-		"a/", "a//b/", "/", "//", "/a/", "./", "../", "a/../b/", "..", ".",
-		"100%/", "a+b/", "a b/", "a&b=c/", "a#b/", "a?b/", "a;b/", "a\x00b/",
-		"\xff\xfe/", "日本/", "a‮b/", "%2f/", "%/", "\\/", strings.Repeat("x", 5000) + "/",
-	} {
-		enc := EncodeDir(d)
-		if strings.ContainsAny(enc, "/&#?;= \x00") {
-			t.Errorf("%q: encoding %q holds a reserved byte", d, enc)
-		}
-		got, err := DecodeDir(enc)
-		if err != nil || got != d {
-			t.Errorf("%q: DecodeDir -> %q, %v", d, got, err)
-		}
-		// Through a real query parser, as a handler would.
-		vals, err := url.ParseQuery(DirQuery(d))
-		if err != nil {
-			t.Errorf("%q: ParseQuery: %v", d, err)
-			continue
-		}
-		if d == "" {
-			continue
-		}
-		if vals.Get(DirParam) != d {
-			t.Errorf("%q: ParseQuery round trip gave %q", d, vals.Get(DirParam))
-		}
-		// And through a full URL parse.
-		u, err := url.Parse("/torrents/1/files?" + DirQuery(d))
-		if err != nil || u.Query().Get(DirParam) != d || u.Path != "/torrents/1/files" {
-			t.Errorf("%q: URL round trip failed: %v", d, err)
-		}
-	}
-	if DirQuery("") != "" {
-		t.Error("root must omit the parameter")
-	}
-	if _, err := DecodeDir("%zz"); err == nil {
-		t.Error("malformed escape must error")
-	}
-}
-
 func FuzzDisplayLossless(f *testing.F) {
 	for _, s := range []string{"", "a", "\xff", "a‮b", "\x00", "日本", "�", `\x41`, "a\xe3\x81"} {
 		f.Add(s)
@@ -197,29 +156,5 @@ func FuzzDisplayLossless(f *testing.F) {
 		}
 		// Truncated presentation stays safe.
 		checkSafe(t, Component(s, 3))
-	})
-}
-
-func FuzzDirRoundTrip(f *testing.F) {
-	for _, s := range []string{"", "a/", "\xff/", "%/", "+&#?/", "../"} {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, s string) {
-		enc := EncodeDir(s)
-		for i := 0; i < len(enc); i++ {
-			if c := enc[i]; c >= 0x80 || c < 0x20 || strings.IndexByte("/&#?;= \"<>\\", c) >= 0 {
-				t.Fatalf("encoding %q holds unsafe byte %#x", enc, c)
-			}
-		}
-		if got, err := DecodeDir(enc); err != nil || got != s {
-			t.Fatalf("%q -> %q (%v)", s, got, err)
-		}
-		if s == "" {
-			return
-		}
-		vals, err := url.ParseQuery(DirQuery(s))
-		if err != nil || vals.Get(DirParam) != s {
-			t.Fatalf("ParseQuery %q -> %q (%v)", s, vals.Get(DirParam), err)
-		}
 	})
 }

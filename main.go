@@ -32,6 +32,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
+	"github.com/skobkin/magnetico-web/internal/web/fileview"
 	"github.com/skobkin/magnetico-web/internal/web/password"
 	websearch "github.com/skobkin/magnetico-web/internal/web/search"
 	webserver "github.com/skobkin/magnetico-web/internal/web/server"
@@ -370,7 +371,12 @@ func runWeb(o *opflags.WebOptions) {
 			"replaced", st.Replaced, "oversize", st.Oversize, "retries", st.Retries, "entries", st.Entries, "bytes", st.Bytes)
 		return err
 	})
-	if _, err := webtorrents.Install(srv, webtorrents.Deps{Search: searchSvc, Details: reader, Files: fileCache}); err != nil {
+	viewSvc, err := fileview.New(fileCache, reader, fileview.Config{Logger: logger})
+	if err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+	if _, err := webtorrents.Install(srv, webtorrents.Deps{Search: searchSvc, Details: reader, View: viewSvc}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}

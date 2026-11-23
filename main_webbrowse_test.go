@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
-	"net/url"
 	"os/exec"
-	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -73,16 +71,6 @@ func webBinaryFixture(t *testing.T, extraEnv ...string) (*runningWeb, *webBrowse
 	return w, b, dsn
 }
 
-var hrefRe = regexp.MustCompile(`href="([^"]*)"`)
-
-func hrefs(body string) []string {
-	var out []string
-	for _, m := range hrefRe.FindAllStringSubmatch(body, -1) {
-		out = append(out, html.UnescapeString(m[1]))
-	}
-	return out
-}
-
 func TestWebBinaryBrowseSearchDetailsFiles(t *testing.T) {
 	w, b, dsn := webBinaryFixture(t)
 	files := []codec.File{
@@ -104,29 +92,52 @@ func TestWebBinaryBrowseSearchDetailsFiles(t *testing.T) {
 	if resp := b.get(detail); resp.StatusCode != 200 || !strings.Contains(b.body, "magnet:?xt=urn:btih:") {
 		t.Fatalf("details: %d", resp.StatusCode)
 	}
+	if !strings.Contains(b.body, `data-mode="tree"`) || !strings.Contains(b.body, "data-tree-url=") {
+		t.Fatalf("details lacks the file browser mode:\n%s", b.body)
+	}
 	base := detail + "/files"
-	if resp := b.get(base); resp.StatusCode != 200 || !strings.Contains(b.body, "BINSECRETPATH/") || !strings.Contains(b.body, `\xff`) {
-		t.Fatalf("files: %d\n%s", resp.StatusCode, b.body)
+	if resp := b.get(base + "/tree"); resp.StatusCode != 200 || !json.Valid([]byte(b.body)) {
+		t.Fatalf("tree: %d", resp.StatusCode)
 	}
-	var sub string
-	for _, l := range hrefs(b.body) {
-		if strings.Contains(l, "BINSECRETPATH") {
-			sub = l
-		}
+	var tree struct {
+		FileCount int `json:"file_count"`
+		Root      struct {
+			Dirs []struct {
+				Name  string `json:"name"`
+				Files []struct {
+					Name      string `json:"name"`
+					Duplicate bool   `json:"duplicate"`
+				} `json:"files"`
+			} `json:"dirs"`
+			Files []struct {
+				Name      string `json:"name"`
+				Duplicate bool   `json:"duplicate"`
+			} `json:"files"`
+		} `json:"root"`
 	}
-	if resp := b.get(sub); resp.StatusCode != 200 {
-		t.Fatalf("directory link %q: %d", sub, resp.StatusCode)
+	if err := json.Unmarshal([]byte(b.body), &tree); err != nil {
+		t.Fatal(err)
 	}
-	u, _ := url.Parse(sub)
-	if got := u.Query().Get("dir"); got != "BINSECRETPATH/" {
-		t.Fatalf("dir round trip: %q", got)
+	if tree.FileCount != 5 || len(tree.Root.Files) != 2 || !tree.Root.Files[1].Duplicate {
+		t.Fatalf("tree content: %+v", tree)
 	}
-	nested := base + "?dir=BINSECRETPATH%2Fsub%2F"
-	if resp := b.get(nested); resp.StatusCode != 200 || !strings.Contains(b.body, "b%2Fc") {
+	if resp := b.get(base); resp.StatusCode != 200 || !strings.Contains(b.body, `"name":"BINSECRETPATH"`) ||
+		!strings.Contains(b.body, `"name_base64":"YmFk/w=="`) {
+		t.Fatalf("directory page: %d\n%s", resp.StatusCode, b.body)
+	}
+	if resp := b.get(base + "?dir=0_0"); resp.StatusCode != 200 || !strings.Contains(b.body, `"name":"b%2Fc"`) {
 		t.Fatalf("nested: %d\n%s", resp.StatusCode, b.body)
 	}
-	if resp := b.get(base + "?dir=BINSECRETPATH%2Fsub%2Fnope%2F"); resp.StatusCode != 404 {
-		t.Fatalf("missing dir: %d", resp.StatusCode)
+	for q, want := range map[string]int{"?dir=0_9": 404, "?dir=x": 400, "?limit=0": 400, "?offset=-1": 400} {
+		if resp := b.get(base + q); resp.StatusCode != want {
+			t.Fatalf("%s: %d, want %d", q, resp.StatusCode, want)
+		}
+	}
+	anon := newBrowser(t, w.addr)
+	for _, p := range []string{base, base + "/tree"} {
+		if resp := anon.get(p); resp.StatusCode != 401 || resp.Header.Get("Content-Type") != "application/problem+json" {
+			t.Fatalf("anonymous %s: %d %q", p, resp.StatusCode, resp.Header.Get("Content-Type"))
+		}
 	}
 	if resp := b.get("/torrents/424242"); resp.StatusCode != 404 {
 		t.Fatalf("unknown torrent: %d", resp.StatusCode)
