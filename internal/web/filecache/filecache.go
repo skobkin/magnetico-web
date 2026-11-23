@@ -16,7 +16,11 @@
 //     (every Source call is its own short statement), and admission precedes
 //     the whole-blob read;
 //   - neither the compressed blob nor the decoded []File is retained;
-//   - errors and cancelled builds are never cached;
+//   - errors and cancelled builds are never cached, with one exception: the
+//     deterministic filetree.ErrIndexComplexity of an immutable blob version is
+//     remembered briefly (bounded count, finite lifetime, keyed by the same
+//     identity), so repeated requests do not repeat an expensive decode and
+//     scan. Transient, cancelled, storage and corruption errors are not;
 //   - a build's database phase is cancelled when every waiter has left before
 //     decoding starts; once decoding starts it finishes (the codec is not
 //     interruptible) and its result is cached for the next request;
@@ -54,6 +58,10 @@ const (
 	MaxWaiters = 32
 	// BuildTimeout bounds the database and queue phases of one build.
 	BuildTimeout = 30 * time.Second
+	// NegativeTTL and MaxNegative bound the remembered index-complexity
+	// refusals (finite lifetime, small fixed count).
+	NegativeTTL = 5 * time.Minute
+	MaxNegative = 1024
 
 	maxAttempts   = 3 // identity retries when the blob changes under a request
 	entryOverhead = 256
@@ -108,6 +116,8 @@ type Config struct {
 	QueueWait      time.Duration
 	MaxWaiters     int
 	BuildTimeout   time.Duration
+	NegativeTTL    time.Duration
+	MaxNegative    int
 	Logger         *slog.Logger
 	Now            func() time.Time // tests
 }
@@ -130,6 +140,8 @@ type Stats struct {
 	Oversize                int64 // built but too large to retain
 	Retries                 int64 // identity retries after ErrBlobChanged
 	Abandoned               int64 // builds cancelled because every waiter left (not errors)
+	NegativeHits            int64 // requests answered from a remembered index-complexity refusal
+	Negative                int   // remembered refusals currently held
 	Entries                 int
 	Bytes                   int64
 	Flights                 int
@@ -144,6 +156,12 @@ type key struct {
 
 func keyOf(fi persistence.FileIdentity) key {
 	return key{fi.ID, fi.FileCount, fi.TotalSize, fi.Version}
+}
+
+// negEntry remembers a deterministic complexity refusal of one blob version.
+type negEntry struct {
+	err     error
+	expires time.Time
 }
 
 type entry struct {
@@ -173,11 +191,12 @@ type Cache struct {
 	lru     *list.List // front = most recently used; of *entry
 	bytes   int64
 	flights map[key]*flight
+	neg     map[key]negEntry
 
 	onDecode func() // test hook: called when a decode is committed
 
 	hits, misses, coalesced, builds, buildErrs, evictions, expired,
-	replaced, oversize, retries, abandoned atomic.Int64
+	replaced, oversize, retries, abandoned, negHits atomic.Int64
 }
 
 // New returns a Cache. It fails if a blob valid under the source's limits
@@ -205,6 +224,12 @@ func New(src Source, cfg Config) (*Cache, error) {
 	if cfg.BuildTimeout <= 0 {
 		cfg.BuildTimeout = BuildTimeout
 	}
+	if cfg.NegativeTTL <= 0 {
+		cfg.NegativeTTL = NegativeTTL
+	}
+	if cfg.MaxNegative <= 0 {
+		cfg.MaxNegative = MaxNegative
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -220,7 +245,7 @@ func New(src Source, cfg Config) (*Cache, error) {
 		return nil, err
 	}
 	c := &Cache{src: src, gate: g, cfg: cfg, log: cfg.Logger, now: cfg.Now,
-		entries: map[int32]*entry{}, lru: list.New(), flights: map[key]*flight{}}
+		entries: map[int32]*entry{}, lru: list.New(), flights: map[key]*flight{}, neg: map[key]negEntry{}}
 	c.rootCtx, c.rootCancel = context.WithCancel(context.Background())
 	return c, nil
 }
@@ -236,7 +261,7 @@ func (c *Cache) Stats() Stats {
 		Hits: c.hits.Load(), Misses: c.misses.Load(), Coalesced: c.coalesced.Load(),
 		Builds: c.builds.Load(), BuildErrors: c.buildErrs.Load(),
 		Evictions: c.evictions.Load(), Expired: c.expired.Load(), Replaced: c.replaced.Load(),
-		Oversize: c.oversize.Load(), Retries: c.retries.Load(), Abandoned: c.abandoned.Load(),
+		Oversize: c.oversize.Load(), Retries: c.retries.Load(), Abandoned: c.abandoned.Load(), NegativeHits: c.negHits.Load(), Negative: len(c.neg),
 		Entries: len(c.entries), Bytes: c.bytes, Flights: len(c.flights),
 	}
 }
@@ -249,6 +274,7 @@ func (c *Cache) Stats() Stats {
 func (c *Cache) Close(ctx context.Context) error {
 	c.mu.Lock()
 	c.closed = true
+	clear(c.neg)
 	c.mu.Unlock()
 	c.rootCancel()
 	done := make(chan struct{})
@@ -322,6 +348,14 @@ func (c *Cache) get(ctx context.Context, id int32) (Result, error) {
 			return res, nil
 		}
 	}
+	if n, ok := c.neg[k]; ok {
+		if c.now().Before(n.expires) {
+			c.negHits.Add(1)
+			c.mu.Unlock()
+			return Result{}, n.err
+		}
+		delete(c.neg, k)
+	}
 	c.misses.Add(1)
 	f := c.flights[k]
 	joined := f != nil
@@ -391,6 +425,41 @@ func (c *Cache) insert(k key, t persistence.Torrent, idx filetree.Index) {
 		c.removeLocked(last.Value.(*entry))
 		c.evictions.Add(1)
 	}
+}
+
+// rememberComplexity stores a refusal for this exact blob version. Entries of
+// the same torrent with another identity are dropped; when the table is full
+// expired entries go first, then the one closest to expiry.
+func (c *Cache) rememberComplexity(k key, err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	now := c.now()
+	for ok := range c.neg {
+		if ok.id == k.id && ok != k {
+			delete(c.neg, ok)
+		}
+	}
+	if _, exists := c.neg[k]; !exists && len(c.neg) >= c.cfg.MaxNegative {
+		var oldest key
+		var oldestAt time.Time
+		first := true
+		for ok, n := range c.neg {
+			if !now.Before(n.expires) {
+				delete(c.neg, ok)
+				continue
+			}
+			if first || n.expires.Before(oldestAt) {
+				oldest, oldestAt, first = ok, n.expires, false
+			}
+		}
+		if len(c.neg) >= c.cfg.MaxNegative && !first {
+			delete(c.neg, oldest)
+		}
+	}
+	c.neg[k] = negEntry{err: err, expires: now.Add(c.cfg.NegativeTTL)}
 }
 
 // ---- single-flight -----------------------------------------------------------
@@ -473,6 +542,9 @@ func (f *flight) run() {
 		c.abandoned.Add(1) // every waiter left (or shutdown): not a failure
 	case f.err != nil:
 		c.buildErrs.Add(1)
+		if errors.Is(f.err, filetree.ErrIndexComplexity) {
+			c.rememberComplexity(f.k, f.err)
+		}
 	default:
 		c.insert(f.k, f.t, f.idx)
 	}

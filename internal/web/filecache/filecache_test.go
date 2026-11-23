@@ -873,8 +873,142 @@ func TestIndexComplexityIsTypedNotCorrupt(t *testing.T) {
 	if st := c.Stats(); st.Entries != 0 {
 		t.Fatalf("the error must not be cached: %+v", st)
 	}
-	// Not cached: the next request rebuilds (and fails the same way).
+	// No index is retained; the refusal itself is remembered (see below).
 	if _, err := c.Get(bg(), 1); !errors.Is(err, filetree.ErrIndexComplexity) {
 		t.Fatalf("second Get: %v", err)
+	}
+}
+
+func complexFiles() []codec.File {
+	return []codec.File{{Path: strings.Repeat("d/", 300) + "f", Size: 1}}
+}
+
+func TestComplexityRefusalIsRememberedBriefly(t *testing.T) {
+	t.Parallel()
+	src := newFake()
+	src.put(t, 1, complexFiles(), "v1")
+	src.put(t, 2, mkFiles("ok", 30), "v1")
+	now := time.Unix(2_000_000, 0)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	c := newCache(t, src, Config{Now: clock, NegativeTTL: time.Minute})
+
+	for i := 0; i < 500; i++ {
+		if _, err := c.Get(bg(), 1); !errors.Is(err, filetree.ErrIndexComplexity) {
+			t.Fatalf("Get %d: %v", i, err)
+		}
+	}
+	if b := src.blobs.Load(); b != 1 {
+		t.Fatalf("the blob was read %d times for 500 requests, want 1", b)
+	}
+	if st := c.Stats(); st.Builds != 1 || st.NegativeHits != 499 || st.Negative != 1 || st.BuildErrors != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+	// An unrelated torrent is not affected and caches normally.
+	if _, err := c.Get(bg(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := c.Get(bg(), 2); err != nil || !r.Hit {
+		t.Fatalf("unrelated torrent: hit=%v err=%v", r.Hit, err)
+	}
+	// The lifetime is finite: after the TTL the blob is examined once more.
+	advance(time.Minute + time.Second)
+	if _, err := c.Get(bg(), 1); !errors.Is(err, filetree.ErrIndexComplexity) {
+		t.Fatal(err)
+	}
+	if b := src.blobs.Load(); b != 3 { // torrent 1 twice, torrent 2 once
+		t.Fatalf("blob reads %d, want 3", b)
+	}
+	// A replaced blob has a new identity and is examined again, and a
+	// simple one is then served normally.
+	src.put(t, 1, mkFiles("fixed", 12), "v2")
+	if r, err := c.Get(bg(), 1); err != nil || r.Index == nil {
+		t.Fatalf("new version of a once-refused torrent: %v", err)
+	}
+	if c.Gate().InUse() != 0 {
+		t.Fatal("gate leaked")
+	}
+}
+
+func TestOnlyComplexityIsRemembered(t *testing.T) {
+	t.Parallel()
+	src := newFake()
+	src.put(t, 1, mkFiles("a", 20), "v1")
+	boom := errors.New("storage hiccup")
+	var fail atomic.Bool
+	fail.Store(true)
+	src.onBlob = func(context.Context, int32, string) error {
+		if fail.Load() {
+			return boom
+		}
+		return nil
+	}
+	c := newCache(t, src, Config{})
+	if _, err := c.Get(bg(), 1); !errors.Is(err, boom) {
+		t.Fatal(err)
+	}
+	// A cancelled request is not remembered either.
+	ctx, cancel := context.WithCancel(bg())
+	cancel()
+	if _, err := c.Get(ctx, 1); err == nil {
+		t.Fatal("cancelled request succeeded")
+	}
+	fail.Store(false)
+	if _, err := c.Get(bg(), 1); err != nil {
+		t.Fatalf("a transient error must not poison later requests: %v", err)
+	}
+	// Corruption is not remembered.
+	src2 := newFake()
+	src2.put(t, 5, mkFiles("c", 20), "v1")
+	src2.mu.Lock()
+	src2.rows[5].blob = []byte("garbage-garbage-garbage")
+	src2.mu.Unlock()
+	c2 := newCache(t, src2, Config{})
+	for i := 0; i < 3; i++ {
+		if _, err := c2.Get(bg(), 5); !errors.Is(err, persistence.ErrCorruptBlob) {
+			t.Fatalf("want corrupt, got %v", err)
+		}
+	}
+	if st := c2.Stats(); st.Negative != 0 || st.NegativeHits != 0 {
+		t.Fatalf("stats %+v", st)
+	}
+}
+
+func TestComplexityMemoryIsBounded(t *testing.T) {
+	t.Parallel()
+	src := newFake()
+	for id := int32(1); id <= 20; id++ {
+		src.put(t, id, complexFiles(), "v1")
+	}
+	c := newCache(t, src, Config{MaxNegative: 5})
+	for id := int32(1); id <= 20; id++ {
+		if _, err := c.Get(bg(), id); !errors.Is(err, filetree.ErrIndexComplexity) {
+			t.Fatal(err)
+		}
+		if n := c.Stats().Negative; n > 5 {
+			t.Fatalf("%d remembered refusals, cap 5", n)
+		}
+	}
+}
+
+func TestSimultaneousComplexRequestsStillSingleFlight(t *testing.T) {
+	t.Parallel()
+	src := newFake()
+	src.put(t, 1, complexFiles(), "v1")
+	c := newCache(t, src, Config{})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Get(bg(), 1); !errors.Is(err, filetree.ErrIndexComplexity) {
+				t.Errorf("got %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if b := src.blobs.Load(); b != 1 {
+		t.Fatalf("%d blob reads for simultaneous requests, want 1", b)
 	}
 }
