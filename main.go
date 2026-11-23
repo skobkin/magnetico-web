@@ -29,10 +29,12 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/progress"
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
+	webaccount "github.com/skobkin/magnetico-web/internal/web/account"
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
 	"github.com/skobkin/magnetico-web/internal/web/fileview"
+	webmail "github.com/skobkin/magnetico-web/internal/web/mail"
 	"github.com/skobkin/magnetico-web/internal/web/password"
 	websearch "github.com/skobkin/magnetico-web/internal/web/search"
 	webserver "github.com/skobkin/magnetico-web/internal/web/server"
@@ -337,13 +339,48 @@ func runWeb(o *opflags.WebOptions) {
 	// Authentication (W3): sessions, CSRF, login/logout, rate limits and the
 	// purger. password.Default is prepared by a startup hook before the
 	// listener opens.
-	if _, err := webauth.Install(srv, webauth.Config{
-		Store:    accounts.New(backend.Pool()),
+	accountStore := accounts.New(backend.Pool())
+	authSvc, err := webauth.Install(srv, webauth.Config{
+		Store:    accountStore,
 		Verifier: password.Default,
 		Lifetimes: accounts.SessionLifetimes{
 			Idle: o.SessionIdleTimeout, Absolute: o.SessionAbsoluteLifetime, Remember: o.SessionRememberLifetime,
 		},
-		DevMode: o.DevMode,
+		DevMode:      o.DevMode,
+		RecoveryLink: o.SMTPConfigured(),
+	})
+	if err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+
+	// Optional email (W6): a strict-TLS sender behind a bounded in-process queue
+	// whose workers are server background tasks. Without SMTP the queue is nil
+	// and every email-dependent control is unavailable.
+	var mailQueue *webmail.Queue
+	if o.SMTPConfigured() {
+		sender, err := webmail.NewSender(webmail.Config{
+			Host: o.SMTPHost, Port: o.SMTPPort, Security: o.SMTPSecurity,
+			Username: o.SMTPUsername, Password: o.SMTPPassword, From: o.SMTPFrom,
+		})
+		if err != nil {
+			backend.Close()
+			log.Fatalln("The web service could not start: " + err.Error())
+		}
+		mailQueue = webmail.NewQueue(sender, logger, webmail.Options{})
+		srv.AddBackground(mailQueue.Run)
+		srv.OnDrained(func(ctx context.Context) error {
+			if n := mailQueue.Drain(ctx); n != 0 {
+				return fmt.Errorf("mail queue abandoned %d jobs", n)
+			}
+			st := mailQueue.Stats()
+			logger.Info("mail queue stopped", "sent", st.Sent, "failed", st.Failed, "expired", st.Expired, "rejected", st.Rejected)
+			return nil
+		})
+	}
+	if _, err := webaccount.Install(srv, webaccount.Config{
+		Store: accountStore, Passwords: password.Default, Auth: authSvc, Mail: mailQueue,
+		PublicBase: o.PublicBaseURL, InviteQuota: o.InviteQuota,
 	}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())

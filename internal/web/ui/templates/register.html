@@ -1,0 +1,28 @@
+{{define "title"}}Create an account{{end}}
+{{define "content"}}
+<div class="auth">
+<div class="page-kicker">PRIVATE SEARCH</div>
+{{if not .Valid}}
+<h1>Invitation unavailable</h1>
+<section class="section-card"><div class="section-card-body">
+<div class="notice error" role="alert">{{template "icon" "alert"}}<span>This invitation is invalid or no longer available.</span></div>
+<div class="auth-foot"><span></span><a class="btn" href="/login">Go to sign in</a></div>
+</div></section>
+{{else}}
+<h1>Create your account</h1>
+<div class="subtext small">You were invited to this private torrent index.</div>
+<section class="section-card"><div class="section-card-body">
+{{if .Error}}<div class="notice error" role="alert">{{template "icon" "alert"}}<span>{{.Error}}</span></div>{{end}}
+<form method="post">
+{{template "csrf" .CSRFToken}}
+<label class="field">Username<input type="text" name="username" value="{{.Username}}" autocomplete="username" autocapitalize="none" required minlength="2" maxlength="25"></label>
+<label class="field">Password<input type="password" name="password" autocomplete="new-password" required minlength="8"><span class="field-hint">At least 8 characters.</span></label>
+<label class="field">Repeat password<input type="password" name="password2" autocomplete="new-password" required minlength="8"></label>
+<label class="field">Email (optional)<input type="email" name="email" value="{{.Email}}" autocomplete="email" maxlength="254">
+<span class="field-hint">{{if .EmailHint}}Used only for password recovery, and only after you confirm it from your account page.{{else}}Stored for your account. This server cannot send email, so recovery works through an administrator.{{end}}</span></label>
+<div class="auth-foot"><span></span><button type="submit" class="btn primary">Create account</button></div>
+</form>
+</div></section>
+{{end}}
+</div>
+{{end}}

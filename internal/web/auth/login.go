@@ -21,7 +21,16 @@ const (
 	busyRetryAfter  = "5"
 )
 
+// loginNotices are the fixed texts the sign-in page can show after another
+// flow redirected to /login?notice=<slug>. Unknown slugs show nothing.
+var loginNotices = map[string]string{
+	"registered":          "Your account was created. Sign in to continue.",
+	"registered-mailfail": "Your account was created, but the confirmation email could not be sent right now. Sign in and request it again from your account page.",
+	"password-set":        "Your password was set and every session, API token and RSS token of the account was revoked. Sign in, then create new API and RSS tokens and update your torrent clients.",
+}
+
 func (a *Auth) renderLogin(w http.ResponseWriter, status int, p ui.LoginPage) {
+	p.ForgotLink = a.cfg.RecoveryLink
 	_ = a.srv.Renderer().Render(w, status, "login", p)
 }
 
@@ -42,7 +51,7 @@ func (a *Auth) getLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	pre := a.ensurePre(w, r)
-	a.renderLogin(w, http.StatusOK, ui.LoginPage{CSRFToken: preCSRF(pre), Next: validNext(r.URL.Query().Get("next"))})
+	a.renderLogin(w, http.StatusOK, ui.LoginPage{CSRFToken: preCSRF(pre), Next: validNext(r.URL.Query().Get("next")), Notice: loginNotices[r.URL.Query().Get("notice")]})
 }
 
 type outcome int

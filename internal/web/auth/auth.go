@@ -72,11 +72,15 @@ type Config struct {
 	// Optional overrides (tests). Nil/zero means the documented defaults.
 	// RootHandler replaces the redirect from the exact root to /torrents.
 	RootHandler http.Handler
-	Now         func() time.Time // clock of the pre-session cookie
-	IPLimiter   *ratelimit.Limiter
-	UserLimiter *ratelimit.Limiter
-	PurgeFirst  time.Duration
-	PurgeEvery  time.Duration
+
+	// RecoveryLink shows the "Forgot password?" link on the sign-in page; set
+	// when email (and therefore /password/forgot) is available.
+	RecoveryLink bool
+	Now          func() time.Time // clock of the pre-session cookie
+	IPLimiter    *ratelimit.Limiter
+	UserLimiter  *ratelimit.Limiter
+	PurgeFirst   time.Duration
+	PurgeEvery   time.Duration
 }
 
 // Auth is the installed authentication layer.

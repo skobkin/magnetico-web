@@ -1,0 +1,14 @@
+{{define "title"}}Confirm email address{{end}}
+{{define "content"}}
+<div class="auth">
+<div class="page-kicker">PRIVATE SEARCH</div>
+<h1>Confirm your email address</h1>
+<section class="section-card"><div class="section-card-body">
+<p>Confirm that you want to use this address for your Magnetico account. A confirmed address can be used to recover your password.</p>
+<form method="post">
+{{template "csrf" .CSRFToken}}
+<div class="auth-foot"><span></span><button type="submit" class="btn primary">Confirm address</button></div>
+</form>
+</div></section>
+</div>
+{{end}}

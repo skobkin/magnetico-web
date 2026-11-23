@@ -166,6 +166,11 @@ type LoginPage struct {
 	Username  string // echoed after a failed attempt (escaped by the template); never the password
 	Remember  bool
 	Error     string // generic message, "" for none
+	// Notice is a fixed success text chosen from a whitelist by slug ("" for
+	// none); never user input.
+	Notice string
+	// ForgotLink offers /password/forgot (only when email is configured).
+	ForgotLink bool
 }
 
 // MessagePage is a plain notice (CSRF failure, temporary unavailability).

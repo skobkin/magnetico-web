@@ -1,0 +1,148 @@
+{{define "title"}}Account{{end}}
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "content"}}
+<div class="page-intro"><div class="page-title-wrap"><h1>Account</h1><p>{{.Username}} · Personal settings and credentials</p></div></div>
+<nav class="tabs" aria-label="Account sections">
+<a class="tab{{if eq .Tab "profile"}} active{{end}}" href="/account?tab=profile"{{if eq .Tab "profile"}} aria-current="page"{{end}}>Profile</a>
+<a class="tab{{if eq .Tab "invitations"}} active{{end}}" href="/account?tab=invitations"{{if eq .Tab "invitations"}} aria-current="page"{{end}}>Invitations</a>
+<a class="tab{{if eq .Tab "rss"}} active{{end}}" href="/account?tab=rss"{{if eq .Tab "rss"}} aria-current="page"{{end}}>RSS feeds</a>
+<a class="tab{{if eq .Tab "api"}} active{{end}}" href="/account?tab=api"{{if eq .Tab "api"}} aria-current="page"{{end}}>API access</a>
+</nav>
+{{if .Notice}}<div class="notice ok" role="status">{{template "icon" "check"}}<span>{{.Notice}}</span></div>{{end}}
+{{if .Error}}<div class="notice error" role="alert">{{template "icon" "alert"}}<span>{{.Error}}</span></div>{{end}}
+
+{{if eq .Tab "profile"}}
+<div class="profile-grid">
+<section class="section-card"><div class="section-card-head"><div><h2>Profile</h2></div></div><div class="section-card-body">
+<div class="kv"><span class="kv-label">Username</span><span>{{.Username}}</span></div>
+<div class="kv"><span class="kv-label">Role</span><span>{{.Role}}</span></div>
+<div class="kv"><span class="kv-label">Email</span><span>{{if .Email}}{{.Email}} {{if .EmailVerified}}<span class="status">{{template "icon" "check"}} Verified</span>{{else}}<span class="status pending">Not verified</span>{{end}}{{else}}<span class="subtext">None. Email is optional.</span>{{end}}</span></div>
+{{if .PendingEmail}}<div class="kv"><span class="kv-label">Pending</span><span>{{.PendingEmail}} <span class="status pending">awaiting confirmation</span></span></div>{{end}}
+{{if .MailEnabled}}
+{{if .EmailVerified}}<p class="small subtext">Your verified address can be used to recover your password.</p>{{end}}
+{{if or .PendingEmail (and .Email (not .EmailVerified))}}
+<form method="post" action="/account/email/resend" class="profile-actions">{{template "csrf" .CSRFToken}}<button type="submit" class="btn small">Send the verification email again</button></form>
+{{end}}
+<details class="inline-panel"><summary>{{if .Email}}Change email address{{else}}Add an email address{{end}}</summary>
+<form method="post" action="/account/email">
+{{template "csrf" .CSRFToken}}
+<label class="field">New email address<input type="email" name="email" autocomplete="email" required maxlength="254"></label>
+<label class="field">Current password<input type="password" name="current_password" autocomplete="current-password" required></label>
+<p class="small subtext">A confirmation link is sent to the new address. Your current verified address stays active until the new one is confirmed.</p>
+<div class="form-actions"><button type="submit" class="btn primary small">Send confirmation</button></div>
+</form></details>
+{{else}}
+<div class="notice">{{template "icon" "info"}}<span>This server cannot send email, so addresses cannot be confirmed here and password recovery works only through an administrator-issued link.</span></div>
+{{end}}
+</div></section>
+
+<section class="section-card"><div class="section-card-head"><div><h2>Password &amp; security</h2></div></div><div class="section-card-body">
+<details class="inline-panel"><summary>Change password</summary>
+<form method="post" action="/account/password">
+{{template "csrf" .CSRFToken}}
+<label class="field">Current password<input type="password" name="current_password" autocomplete="current-password" required></label>
+<label class="field">New password<input type="password" name="new_password" autocomplete="new-password" required minlength="8"><span class="field-hint">At least 8 characters.</span></label>
+<label class="field">Repeat new password<input type="password" name="new_password2" autocomplete="new-password" required minlength="8"></label>
+<p class="small subtext">Your other browser sessions are signed out and this one is renewed. Your API tokens and RSS tokens keep working unless you choose otherwise:</p>
+<label class="check-line"><input type="checkbox" name="revoke_api" value="1"> Revoke all API tokens too</label>
+<label class="check-line"><input type="checkbox" name="revoke_rss" value="1"> Revoke all RSS tokens too</label>
+<div class="form-actions"><button type="submit" class="btn primary small">Change password</button></div>
+</form></details>
+<p class="small subtext">A password <em>reset</em> by link or by an administrator is different: it signs you out everywhere and revokes every API token and RSS token.</p>
+</div></section>
+</div>
+{{end}}
+
+{{if eq .Tab "invitations"}}
+<section class="section-card invitations"><div class="section-card-head"><div><h2>Invitations <span class="pill">{{.InvitesAvailable}} available</span></h2><p>People you invite create their own account with the link.</p></div></div>
+<div class="account-list">
+{{range .Invites}}
+<div class="account-row"><div>
+<div class="row-title">{{.Status}}{{if .UsedBy}} <span class="badge">used by {{.UsedBy}}</span>{{end}}</div>
+{{if .Usable}}<div class="invitation-url mono">{{.URL}}</div>{{end}}
+<div class="row-sub">Created {{.Created}}</div></div>
+<div class="actions">{{if .Usable}}
+<button type="button" class="btn small" data-copy="{{.URL}}" data-copied="Invitation link copied" hidden>{{template "icon" "copy"}} Copy</button>
+<form method="post" action="/account/invites/{{.ID}}/revoke">{{template "csrf" $.CSRFToken}}<button type="submit" class="btn small danger">Revoke</button></form>
+{{end}}</div></div>
+{{else}}<div class="no-rows">You have no invitations.</div>{{end}}
+</div>
+<div class="warning-copy"><p>Anyone with an unused link can register, so share it only with the person you invite. Revoking a link cannot be undone.</p><p>You cannot create invitations yourself; ask the administrator if you need more.</p></div>
+</section>
+{{end}}
+
+{{if eq .Tab "rss"}}
+<section class="section-card"><div class="section-card-head"><div><h2>RSS feed tokens</h2><p>Credentials that only open the RSS feed, for torrent clients and feed readers.</p></div></div>
+{{if and .Secret (eq .Secret.Kind "rss")}}
+<div class="secret-reveal" role="region" aria-label="New RSS token">
+<div class="notice warning">{{template "icon" "alert"}}<span>This is the only time the token and feed URL are shown. Copy them now.</span></div>
+<span class="meta-label">RSS feed URL (recommended)</span><code>{{.Secret.URL}}</code>
+<button type="button" class="btn small" data-copy="{{.Secret.URL}}" data-copied="RSS URL copied" hidden>{{template "icon" "copy"}} Copy RSS URL</button>
+<span class="meta-label">Token</span><code>{{.Secret.Token}}</code>
+<div class="form-actions"><a class="btn small" href="/account?tab=rss">I have saved it</a></div>
+</div>
+{{end}}
+<form method="post" action="/account/rss-tokens" class="inline-panel token-form">
+{{template "csrf" .CSRFToken}}
+<div class="form-grid">
+<label class="field">Label<input type="text" name="label" maxlength="100" placeholder="e.g. qBittorrent"></label>
+<label class="field">Expires<select name="expires"><option value="">Never</option><option value="30">In 30 days</option><option value="90">In 90 days</option></select></label>
+</div>
+<div class="form-actions"><button type="submit" class="btn primary small">Create RSS token</button></div>
+</form>
+<div class="account-list">
+{{range .RSSTokens}}
+<div class="account-row"><div>
+<div class="row-title">{{if .Legacy}}Legacy RSS token{{else if .Label}}{{.Label}}{{else}}Unnamed token{{end}}{{if .Legacy}}<span class="badge">Legacy</span>{{end}}{{if .Expired}}<span class="badge">Expired</span>{{end}}</div>
+<div class="row-sub">{{if .Legacy}}Secret not available{{else}}Secret shown once at creation{{end}}{{if .Expires}} · Expires {{.Expires}}{{end}}</div>
+<div class="mobile-token-meta row-sub">Created {{.Created}} · Last used {{if .LastUsed}}{{.LastUsed}}{{else}}never{{end}}</div></div>
+<div class="date">Created {{.Created}}</div>
+<div class="date last-used">Last used {{if .LastUsed}}{{.LastUsed}}{{else}}never{{end}}</div>
+<div class="actions"><form method="post" action="/account/rss-tokens/{{.ID}}/revoke">{{template "csrf" $.CSRFToken}}<button type="submit" class="btn small danger">Revoke</button></form></div></div>
+{{else}}<div class="no-rows">You have no RSS tokens.</div>{{end}}
+</div>
+<div class="warning-copy">
+<p>Use the <strong>/api/v2/feeds/latest.rss?feed_token=…</strong> URL. The older <strong>/api/v1/feed/rss/last</strong> address is deprecated and may be removed in the future, but it still works, and existing legacy tokens keep working until you revoke them. You do not have to replace them right away.</p>
+<p>RSS tokens only open the feed. They cannot be used for the API, and API tokens cannot open the feed.</p>
+<p>Anyone who has a feed URL can read the feed: treat it like a password. Resetting your password revokes all RSS tokens.</p>
+</div>
+</section>
+{{end}}
+
+{{if eq .Tab "api"}}
+<section class="section-card"><div class="section-card-head"><div><h2>API tokens</h2><p>Credentials for the JSON API. Send them as <code>Authorization: Bearer &lt;token&gt;</code>.</p></div></div>
+{{if and .Secret (eq .Secret.Kind "api")}}
+<div class="secret-reveal" role="region" aria-label="New API token">
+<div class="notice warning">{{template "icon" "alert"}}<span>This is the only time the token is shown. Copy it now.</span></div>
+<span class="meta-label">Bearer token</span><code>{{.Secret.Token}}</code>
+<button type="button" class="btn small" data-copy="{{.Secret.Token}}" data-copied="Token copied" hidden>{{template "icon" "copy"}} Copy token</button>
+<div class="form-actions"><a class="btn small" href="/account?tab=api">I have saved it</a></div>
+</div>
+{{end}}
+<form method="post" action="/account/api-tokens" class="inline-panel token-form">
+{{template "csrf" .CSRFToken}}
+<div class="form-grid">
+<label class="field">Label<input type="text" name="label" maxlength="100" placeholder="e.g. Personal automation"></label>
+<label class="field">Expires<select name="expires"><option value="">Never</option><option value="30">In 30 days</option><option value="90">In 90 days</option></select></label>
+</div>
+<div class="form-actions"><button type="submit" class="btn primary small">Create API token</button></div>
+</form>
+<div class="account-list">
+{{range .APITokens}}
+<div class="account-row"><div>
+<div class="row-title">{{if .Label}}{{.Label}}{{else}}Unnamed token{{end}}{{if .Expired}}<span class="badge">Expired</span>{{end}}</div>
+<div class="row-sub">Secret shown once at creation{{if .Expires}} · Expires {{.Expires}}{{end}}</div>
+<div class="mobile-token-meta row-sub">Created {{.Created}} · Last used {{if .LastUsed}}{{.LastUsed}}{{else}}never{{end}}</div></div>
+<div class="date">Created {{.Created}}</div>
+<div class="date last-used">Last used {{if .LastUsed}}{{.LastUsed}}{{else}}never{{end}}</div>
+<div class="actions"><form method="post" action="/account/api-tokens/{{.ID}}/revoke">{{template "csrf" $.CSRFToken}}<button type="submit" class="btn small danger">Revoke</button></form></div></div>
+{{else}}<div class="no-rows">You have no API tokens.</div>{{end}}
+</div>
+<div class="warning-copy">
+<p>API tokens are never created automatically. They work only in the <code>Authorization</code> header, never in a URL or cookie.</p>
+<p>An RSS token cannot authenticate to the API, and an API token cannot open the RSS feed. Resetting your password revokes all API tokens.</p>
+</div>
+</section>
+{{end}}
+{{end}}
