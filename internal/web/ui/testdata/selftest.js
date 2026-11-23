@@ -273,7 +273,7 @@ window.runSelfTests = async function (vectors) {
   again.click();
   await sleep(200);
   check("dirs: a superseded request is cancelled and never overwrites newer state", !/f0/.test(rs2.textContent) && /top\.txt/.test(rs2.textContent), rs2.textContent);
-  var tmo = fakeFetch(function (url) { return url === "/t/files?limit=160" ? { status: 200, body: routes[url] } : new Promise(function () {}); });
+  var tmo = fakeFetch(function () { return new Promise(function () {}); });
   var env3 = fakeEnv("", "", null);
   var rm = mkRoot("dirs");
   UI.initFileBrowser(rm, { fetch: tmo, timeoutMs: 60, location: env3.location, history: env3.history });
@@ -296,6 +296,66 @@ window.runSelfTests = async function (vectors) {
   check("dirs: a stale location falls back to the top with a notice", fr3.calls.length === 2 && /no longer available/.test(rr3.textContent) && /docs/.test(rr3.textContent), fr3.calls);
   var loc = UI.readLocation({ search: "?dir=01&offset=abc" });
   check("dirs: malformed URL parameters are ignored", loc.path === "" && loc.offset === 0, JSON.stringify(loc));
+
+  // Root pagination restore and byte-limited pages of variable size.
+  var rl = UI.readLocation({ search: "?offset=120" });
+  check("dirs: the root offset survives readLocation", rl.path === "" && rl.offset === 120, JSON.stringify(rl));
+  var COUNTS = { 0: 50, 50: 70, 70: 60, 120: 80 }, TOTAL = 200;
+  function rootAt(off) {
+    var n = Math.min(COUNTS[off] || 40, TOTAL - off), es = [];
+    for (var i = off; i < off + n; i++) es.push(fileEntry("e" + i, i));
+    return page("", [], es, TOTAL, off + n < TOTAL ? off + n : null, off);
+  }
+  function rootFetch() {
+    var f = fakeFetch(function (url) {
+      var m = /^\/t\/files\?(?:offset=(\d+)&)?limit=160$/.exec(url);
+      if (!m) return problem(404, "not-found");
+      var off = m[1] ? Number(m[1]) : 0;
+      return off >= TOTAL ? { status: 200, body: page("", [], [], TOTAL, null, off) } : { status: 200, body: rootAt(off) };
+    });
+    return f;
+  }
+  var envR = fakeEnv("?offset=120", "", null);
+  var fR = rootFetch();
+  var rR = mkRoot("dirs");
+  UI.initFileBrowser(rR, { fetch: fR, location: envR.location, history: envR.history });
+  await sleep(60);
+  check("dirs: root page 2 reload restores the root offset", fR.calls[0] === "/t/files?offset=120&limit=160" && /Showing 121–200 of 200/.test(rR.textContent) && envR.location.search.indexOf("offset=120") >= 0, fR.calls.concat(envR.location.search));
+  q(rR, '[data-page="prev"]').click();
+  await sleep(100);
+  var seen = texts(rR, ".file-label");
+  check("dirs: Previous after reload reaches the page we left (no skipped entries)", fR.calls.length === 3 && fR.calls[1] === "/t/files?limit=160" && fR.calls[2] === "/t/files?offset=70&limit=160" && seen[0] === "e70" && seen[seen.length - 1] === "e129", fR.calls.concat(seen.slice(0, 1), seen.slice(-1)));
+  check("dirs: the restored back page is reflected in the URL", envR.location.search.indexOf("offset=70") >= 0, envR.location.search);
+  q(rR, '[data-page="next"]').click();
+  await sleep(60);
+  check("dirs: Next after a restored Previous continues from next_offset", /Showing 131–200/.test(rR.textContent) || fR.calls[3] === "/t/files?offset=130&limit=160", fR.calls);
+  // Offset restored from the URL, then forward and back inside one view uses the exact earlier pages.
+  var envS = fakeEnv("?offset=50", "", null);
+  var fS = rootFetch();
+  var rS = mkRoot("dirs");
+  UI.initFileBrowser(rS, { fetch: fS, location: envS.location, history: envS.history });
+  await sleep(60);
+  q(rS, '[data-page="next"]').click();
+  await sleep(60);
+  q(rS, '[data-page="prev"]').click();
+  await sleep(60);
+  check("dirs: navigation after restoring an offset returns to that exact page", fS.calls[fS.calls.length - 1] === "/t/files?offset=50&limit=160" && /Showing 51–120/.test(rS.textContent), fS.calls);
+  // Previous from the second page reaches the first page exactly.
+  var envT = fakeEnv("?offset=50", "", null);
+  var fT = rootFetch();
+  var rT = mkRoot("dirs");
+  UI.initFileBrowser(rT, { fetch: fT, location: envT.location, history: envT.history });
+  await sleep(60);
+  q(rT, '[data-page="prev"]').click();
+  await sleep(60);
+  check("dirs: Previous to the start needs no extra requests when the page already reaches", fT.calls.length === 2 && /Showing 1–50 of 200/.test(rT.textContent), fT.calls);
+  // A restored offset beyond the end falls back to the top with a notice.
+  var envU = fakeEnv("?offset=5000", "", null);
+  var fU = rootFetch();
+  var rU = mkRoot("dirs");
+  UI.initFileBrowser(rU, { fetch: fU, location: envU.location, history: envU.history });
+  await sleep(80);
+  check("dirs: a stale root offset falls back to the top with a notice", /no longer available/.test(rU.textContent) && /Showing 1–50/.test(rU.textContent), fU.calls);
 
   var failed = results.filter(function (r) { return !r.ok; });
   return { passed: results.length - failed.length, failed: failed.length, results: results };

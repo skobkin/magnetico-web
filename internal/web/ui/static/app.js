@@ -478,7 +478,7 @@
     var q = new URLSearchParams((loc || location).search), dir = q.get("dir") || "", off = q.get("offset") || "0";
     if (dir !== "" && (!PATH_RE.test(dir) || dir.split("_").length > MAX_DEPTH)) { dir = ""; off = "0"; }
     if (!OFFSET_RE.test(off)) off = "0";
-    return { path: dir, offset: dir === "" ? 0 : Number(off) };
+    return { path: dir, offset: Number(off) };
   }
 
   /* writeLocation edits only dir and offset: other parameters, the fragment
@@ -488,7 +488,7 @@
     try {
       var u = new URL(env.location.href);
       if (path) u.searchParams.set("dir", path); else u.searchParams.delete("dir");
-      if (path && offset > 0) u.searchParams.set("offset", String(offset)); else u.searchParams.delete("offset");
+      if (offset > 0) u.searchParams.set("offset", String(offset)); else u.searchParams.delete("offset");
       var hs = env.history, st = hs.state && typeof hs.state === "object" ? Object.assign({}, hs.state) : {};
       st[STATE_KEY] = { path: path, offset: offset };
       hs.replaceState(st, "", u.pathname + u.search + u.hash);
@@ -499,8 +499,8 @@
     var holder = {}, seq = 0;
     var loc = readLocation(ctx.env.location);
     var cur = { path: loc.path, offset: loc.offset, data: null, status: "loading", failure: null, requested: null };
-    var back = [];   // offsets of the earlier pages of the current directory
-    var restored = loc.path !== "";
+    var back = [];   // offsets of the earlier pages seen in this view; empty after a reload
+    var restored = loc.path !== "" || loc.offset > 0;
     var notice = "";
     var panel = h("div");
     root.appendChild(panel);
@@ -514,10 +514,14 @@
       return ctx.dirUrl + "?" + q.join("&");
     }
 
-    function go(path, offset) {
+    /* reach is set when stepping back: the page must extend to at least that
+     * offset, otherwise entries between its end and the page we left would be
+     * skipped. Pages are byte-limited, so a page can hold fewer entries than
+     * the limit; the start is then moved closer until the ranges meet. */
+    function go(path, offset, reach) {
       var mine = ++seq;
       cur.status = "loading"; cur.failure = null;
-      cur.requested = { path: path, offset: offset };
+      cur.requested = { path: path, offset: offset, reach: reach };
       draw(false);
       ctx.request(dirUrl(path, offset), holder).then(function (res) {
         if (mine !== seq) return;
@@ -532,6 +536,18 @@
           }
           cur.status = "error"; cur.failure = f;
           draw(false);
+          return;
+        }
+        var got = res.body.entries || [];
+        if (restored && offset > 0 && !got.length) {
+          restored = false;
+          notice = "That location is no longer available; showing the top level.";
+          back = [];
+          go("", 0);
+          return;
+        }
+        if (reach !== undefined && got.length && res.body.next_offset != null && res.body.next_offset < reach) {
+          go(path, reach - got.length, reach);
           return;
         }
         restored = false;
@@ -611,10 +627,11 @@
         go(cur.path, cur.data.next_offset);
       } else if (t.getAttribute("data-page") === "prev") {
         notice = "";
-        go(cur.path, back.length ? back.pop() : Math.max(0, cur.offset - PAGE_LIMIT));
+        if (back.length) go(cur.path, back.pop());
+        else go(cur.path, Math.max(0, cur.offset - PAGE_LIMIT), cur.offset);
       } else if (t.getAttribute("data-act") === "retry") {
         var r = cur.requested || { path: cur.path, offset: cur.offset };
-        go(r.path, r.offset);
+        go(r.path, r.offset, r.reach);
       }
     });
 
