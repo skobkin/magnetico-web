@@ -334,6 +334,7 @@ func runWeb(o *opflags.WebOptions) {
 		RequestTimeout:  o.RequestTimeout,
 		SearchTimeout:   o.SearchTimeout,
 		ShutdownTimeout: o.ShutdownTimeout,
+		SiteTitle:       o.SiteTitle,
 		Logger:          logger,
 	}, backend)
 	if err != nil {

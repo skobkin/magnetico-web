@@ -29,7 +29,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
-<title>{{template "title" .}} · Magnetico</title>
+<title>{{template "title" .}} · {{siteTitle}}</title>
 <link rel="stylesheet" href="{{asset "app.css"}}">
 <script src="{{asset "theme.js"}}"></script>
 <script src="{{asset "app.js"}}" defer></script>
@@ -38,7 +38,7 @@
 <a class="skip-link" href="#main">Skip to content</a>
 {{template "sprite"}}
 <header class="site-header"><div class="header-inner">
-<a class="brand" href="/" aria-label="Magnetico home"><span class="brand-icon">{{template "icon" "magnet"}}</span><span>magnetico</span></a>
+<a class="brand" href="/" aria-label="{{siteTitle}} home"><span class="brand-icon">{{template "icon" "magnet"}}</span><span>{{siteTitle}}</span></a>
 {{block "nav" .}}{{end}}
 <div class="header-end">
 <button type="button" class="header-action" id="theme-toggle" hidden aria-label="Theme: system" title="Theme: system">{{template "icon" "monitor"}}<span class="theme-label">System</span></button>
@@ -48,7 +48,7 @@
 <main id="main" class="container" tabindex="-1">
 {{template "content" .}}
 </main>
-<footer class="site-footer container"><span>Magnetico</span><span>Private torrent index</span></footer>
+<footer class="site-footer container"><span>{{siteTitle}}</span><span>Private torrent index</span></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>

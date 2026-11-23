@@ -64,6 +64,10 @@ type Config struct {
 	SearchTimeout   time.Duration
 	ShutdownTimeout time.Duration
 
+	// SiteTitle is the configured site name shown by every page; empty means
+	// the built-in default.
+	SiteTitle string
+
 	Logger *slog.Logger
 }
 
@@ -221,7 +225,7 @@ func New(cfg Config, backend Backend) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server: static assets: %w", err)
 	}
-	renderer, err := ui.NewRenderer(assets)
+	renderer, err := ui.NewRenderer(assets, cfg.SiteTitle)
 	if err != nil {
 		return nil, fmt.Errorf("server: templates: %w", err)
 	}

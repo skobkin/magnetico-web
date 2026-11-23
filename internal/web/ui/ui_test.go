@@ -42,7 +42,7 @@ func TestAssetsAreContentHashed(t *testing.T) {
 
 func TestRendererErrorPageEscapesAndBuffers(t *testing.T) {
 	a, _ := NewAssets()
-	r, err := NewRenderer(a)
+	r, err := NewRenderer(a, "")
 	if err != nil {
 		t.Fatal(err)
 	}

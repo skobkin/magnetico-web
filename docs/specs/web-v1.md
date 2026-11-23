@@ -32,6 +32,7 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 | `MAGNETICO_WEB_DATABASE` | as ingest | PostgreSQL URL |
 | `MAGNETICO_WEB_LISTEN` | `127.0.0.1:8081` | host:port |
 | `MAGNETICO_WEB_PUBLIC_URL` | **required** | absolute `https://` URL, or loopback `http://` (dev mode, §4.4.3) |
+| `MAGNETICO_WEB_SITE_TITLE` | `Magnetico` | 1 to 40 characters, no control characters; the site name in the header, page titles and footer |
 | `MAGNETICO_WEB_TRUSTED_PROXIES` | empty | CIDR list |
 | `MAGNETICO_WEB_SESSION_IDLE_TIMEOUT` | `12h` **[APPROVED]** | ≥ `5m`; ≤ absolute lifetime |
 | `MAGNETICO_WEB_SESSION_ABSOLUTE_LIFETIME` | `168h` (7 d) **[APPROVED]** | ≥ idle timeout; ≤ remember lifetime |

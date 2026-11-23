@@ -10,6 +10,7 @@ Precedence: **command line > `MAGNETICO_WEB_*` environment > YAML file > default
 |---|---|---|
 | `MAGNETICO_WEB_PUBLIC_URL` | `publicURL` | **required** (`https://…`, or loopback `http://` for development) |
 | `MAGNETICO_WEB_LISTEN` | `listen` | `127.0.0.1:8081` |
+| `MAGNETICO_WEB_SITE_TITLE` | `siteTitle` | `Magnetico` (site name in the header, page titles and footer; 1–40 characters) |
 | `MAGNETICO_WEB_DATABASE` | `databaseURL` | development default as `ingest` |
 | `MAGNETICO_WEB_POOL_MAX_CONNS` | `poolMaxConns` | `10` |
 | `MAGNETICO_WEB_TRUSTED_PROXIES` | `trustedProxies` (string or list) | empty |

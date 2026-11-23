@@ -297,6 +297,23 @@ func TestWebDatabasePasswordNotAcceptedOnCommandLine(t *testing.T) {
 	}
 }
 
+func TestWebSiteTitle(t *testing.T) {
+	webEnvClean(t)
+	o, err := parseWeb(t, "--public-url", webPublic)
+	if err != nil || o.Web.SiteTitle != "Magnetico" {
+		t.Fatalf("default: %q, %v", o.Web.SiteTitle, err)
+	}
+	t.Setenv("MAGNETICO_WEB_SITE_TITLE", "  Torrent Hoard ")
+	o, err = parseWeb(t, "--public-url", webPublic)
+	if err != nil || o.Web.SiteTitle != "Torrent Hoard" {
+		t.Fatalf("env: %q, %v", o.Web.SiteTitle, err)
+	}
+	o, err = parseWeb(t, "--public-url", webPublic, "--site-title", "DHT Search")
+	if err != nil || o.Web.SiteTitle != "DHT Search" {
+		t.Fatalf("CLI must beat ENV: %q, %v", o.Web.SiteTitle, err)
+	}
+}
+
 func TestWebLimitValidation(t *testing.T) {
 	webEnvClean(t)
 	cases := map[string][]string{
@@ -316,6 +333,9 @@ func TestWebLimitValidation(t *testing.T) {
 		"tracker ttl high":        {"--tracker-cache-ttl", "2h"},
 		"bad log level":           {"--log-level", "trace"},
 		"bad log format":          {"--log-format", "xml"},
+		"empty site title":        {"--site-title", "   "},
+		"long site title":         {"--site-title", strings.Repeat("x", 41)},
+		"control in site title":   {"--site-title", "a\tb"},
 		"bad listen":              {"--listen", "nonsense"},
 		"bad listen port":         {"--listen", "127.0.0.1:99999"},
 	}

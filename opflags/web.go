@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -38,6 +40,7 @@ type WebOptions struct {
 	PublicURL      string `long:"public-url" description:"Public base URL of the service: https://, or http:// to a loopback host (development mode). All absolute URLs are built from it, never from the Host header." default:""`
 	DatabaseURL    string `long:"database" description:"URL of the PostgreSQL database. A URL containing a password must be given through MAGNETICO_WEB_DATABASE, not here." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable"`
 	PoolMaxConns   int    `long:"pool-max-conns" description:"Maximum PostgreSQL connections of the web service (4-200)." default:"10"`
+	SiteTitle      string `long:"site-title" description:"Site name shown in the page header, titles and footer (1-40 characters)." default:"Magnetico"`
 	TrustedProxies string `long:"trusted-proxies" description:"Comma-separated CIDRs (or addresses) of reverse proxies whose X-Forwarded-For is trusted. Empty: forwarding headers are ignored." default:""`
 
 	SessionIdleTimeout      time.Duration `long:"session-idle-timeout" description:"Session idle timeout (5m or more; not above the absolute lifetime)." default:"12h"`
@@ -109,6 +112,7 @@ func envDuration(dst func(o *WebOptions) *time.Duration) func(*WebOptions, strin
 var webEnvs = []webEnv{
 	{webEnvPrefix + "LISTEN", "listen", "listen", envString(func(o *WebOptions) *string { return &o.Listen })},
 	{webEnvPrefix + "PUBLIC_URL", "public-url", "publicURL", envString(func(o *WebOptions) *string { return &o.PublicURL })},
+	{webEnvPrefix + "SITE_TITLE", "site-title", "siteTitle", envString(func(o *WebOptions) *string { return &o.SiteTitle })},
 	{webEnvPrefix + "DATABASE", "database", "databaseURL", envString(func(o *WebOptions) *string { return &o.DatabaseURL })},
 	{webEnvPrefix + "POOL_MAX_CONNS", "pool-max-conns", "poolMaxConns", envInt(func(o *WebOptions) *int { return &o.PoolMaxConns })},
 	{webEnvPrefix + "TRUSTED_PROXIES", "trusted-proxies", "trustedProxies", envString(func(o *WebOptions) *string { return &o.TrustedProxies })},
@@ -363,6 +367,10 @@ func (o *WebOptions) checkLimits() error {
 	}
 	if !within(o.TrackerCacheTTL, 5*time.Second, time.Hour) {
 		return errors.New("tracker-cache-ttl must be between 5s and 1h")
+	}
+	o.SiteTitle = strings.TrimSpace(o.SiteTitle)
+	if n := utf8.RuneCountInString(o.SiteTitle); n < 1 || n > 40 || strings.ContainsFunc(o.SiteTitle, unicode.IsControl) || !utf8.ValidString(o.SiteTitle) {
+		return errors.New("site-title must be 1 to 40 characters without control characters")
 	}
 	return nil
 }

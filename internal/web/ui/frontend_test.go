@@ -112,7 +112,7 @@ func TestEveryIconUsedExistsInTheSprite(t *testing.T) {
 func TestPagesRenderWithAutoescapingAndNoJSFallback(t *testing.T) {
 	t.Parallel()
 	a, _ := NewAssets()
-	r, err := NewRenderer(a)
+	r, err := NewRenderer(a, "")
 	if err != nil {
 		t.Fatal(err)
 	}

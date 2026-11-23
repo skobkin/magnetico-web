@@ -119,9 +119,16 @@ type ErrorPage struct {
 	RequestID string
 }
 
+// DefaultSiteTitle is the site name when none is configured.
+const DefaultSiteTitle = "Magnetico"
+
 // NewRenderer parses every page template against the layout.
-func NewRenderer(assets *Assets) (*Renderer, error) {
-	funcs := template.FuncMap{"asset": assets.URL}
+// siteTitle is the site name templates print (empty selects DefaultSiteTitle).
+func NewRenderer(assets *Assets, siteTitle string) (*Renderer, error) {
+	if siteTitle == "" {
+		siteTitle = DefaultSiteTitle
+	}
+	funcs := template.FuncMap{"asset": assets.URL, "siteTitle": func() string { return siteTitle }}
 	entries, err := fs.ReadDir(embedded, "templates")
 	if err != nil {
 		return nil, err
