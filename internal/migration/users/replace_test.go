@@ -289,3 +289,72 @@ func TestSourceChangeDuringTheRunRollsBack(t *testing.T) {
 		t.Fatal("source drift left changes in the target (rows or sequences)")
 	}
 }
+
+// A target with the right rows but an identity behind its maximum id is not
+// "already migrated": the next insert would collide.
+func TestIdentityBehindItsMaximumIsNotIdentical(t *testing.T) {
+	for _, tbl := range []string{"users", "invites", "rss_tokens"} {
+		t.Run(tbl, func(t *testing.T) {
+			src, _ := seeded(t)
+			tgt := targetDB(t)
+			mustRun(t, cfgFor(src, tgt))
+			execSQL(t, tgt, `ALTER TABLE magnetico_web.`+tbl+` ALTER COLUMN id RESTART WITH 1`)
+			before := userState(t, tgt) + seqState(t, tgt)
+
+			for _, dry := range []bool{true, false} {
+				cfg := cfgFor(src, tgt)
+				cfg.DryRun = dry
+				rep, err := Run(tctx(t), cfg)
+				wantClass(t, err, ClassTargetNotEmpty)
+				if rep != nil && (rep.Result == "already-migrated" || rep.TargetState == "identical") {
+					t.Fatalf("dry=%v: reported %q/%q", dry, rep.Result, rep.TargetState)
+				}
+			}
+			if userState(t, tgt)+seqState(t, tgt) != before {
+				t.Fatal("a refused run changed the target")
+			}
+
+			// --replace-users repairs it and leaves a usable identity.
+			prev := cfgFor(src, tgt)
+			prev.DryRun, prev.ReplaceUsers = true, true
+			real := cfgFor(src, tgt)
+			real.ReplaceUsers = true
+			real.ConfirmPlan = mustRun(t, prev).PlanDigest
+			mustRun(t, real)
+			if rep := mustRun(t, cfgFor(src, tgt)); rep.Result != "already-migrated" {
+				t.Fatalf("after the replace: %+v", rep)
+			}
+		})
+	}
+}
+
+// The identities' current next values are part of the plan: moving one
+// between the preview and the real run invalidates the confirmation even
+// though no row changed.
+func TestConfirmationIsInvalidatedByIdentityChanges(t *testing.T) {
+	for _, tbl := range []string{"users", "invites", "rss_tokens"} {
+		t.Run(tbl, func(t *testing.T) {
+			src, _ := seeded(t)
+			tgt := targetDB(t)
+			mustRun(t, cfgFor(src, tgt))
+			populate(t, tgt)
+			prev := cfgFor(src, tgt)
+			prev.DryRun, prev.ReplaceUsers = true, true
+			digest := mustRun(t, prev).PlanDigest
+
+			execSQL(t, tgt, `ALTER TABLE magnetico_web.`+tbl+` ALTER COLUMN id RESTART WITH 5000`)
+			rows := userState(t, tgt)
+
+			real := prev
+			real.DryRun, real.ConfirmPlan = false, digest
+			_, err := Run(tctx(t), real)
+			wantClass(t, err, ClassPlanMismatch)
+			if userState(t, tgt) != rows {
+				t.Fatal("a refused run changed the rows")
+			}
+			if again := mustRun(t, withDry(prev)).PlanDigest; again == digest {
+				t.Fatal("the plan digest ignores the identity next value")
+			}
+		})
+	}
+}

@@ -13,7 +13,9 @@
 -- internal/migration/users CategorizeHash and is tested against it.
 --
 -- category:
---   verified     exact parameters with independently generated PHP vectors
+--   verified     a hash the Go verifier accepts in full (every field
+--                structurally valid) AND whose exact parameters have
+--                independently generated PHP vectors
 --                (internal/web/password/testdata/php/fixtures.json):
 --                argon2i m=16384,t=2,p=4 | argon2id m=65536 with t=4,p=1,
 --                t=2,p=1 or t=3,p=2 | $2y$ cost 10 or 13
@@ -50,23 +52,45 @@ WITH parsed AS (
          CASE family WHEN 'argon2' THEN substring(split_part(h, '$', 4) FROM 't=([0-9]+)')::numeric END AS t,
          CASE family WHEN 'argon2' THEN substring(split_part(h, '$', 4) FROM 'p=([0-9]+)')::numeric END AS p
   FROM parsed
+), s AS (
+  -- structurally_ok mirrors password.Classify's parser exactly: a hash is only
+  -- "verified" or "unvetted" when the Go verifier would accept the WHOLE
+  -- string, not merely when its parameters look right.
+  --   argon2: total length <= 256; variant argon2i|argon2id; v=19; m,t,p
+  --   canonical decimals (no sign, no leading zero, <= 10 digits) within
+  --   p 1-16, t 1-10, 8p <= m <= 65536; salt and key strict unpadded Base64
+  --   (length % 4 <> 1, zero trailing bits) decoding to 8-64 and 16-64 bytes.
+  --   bcrypt: exactly "$2y$" + cost 04-16 + "$" + 53 characters of ./A-Za-z0-9.
+  SELECT *,
+         COALESCE(CASE family
+           WHEN 'argon2' THEN
+                length(h) <= 256
+                AND variant IN ('argon2i', 'argon2id') AND version = 'v=19'
+                AND params ~ '^m=(0|[1-9][0-9]{0,9}),t=(0|[1-9][0-9]{0,9}),p=(0|[1-9][0-9]{0,9})$'
+                AND p BETWEEN 1 AND 16 AND t BETWEEN 1 AND 10 AND m BETWEEN 8 * p AND 65536
+                AND salt_b64_len BETWEEN 11 AND 86
+                AND (salt_b64_len % 4 = 0
+                     OR (salt_b64_len % 4 = 2 AND right(split_part(h, '$', 5), 1) ~ '^[AQgw]$')
+                     OR (salt_b64_len % 4 = 3 AND right(split_part(h, '$', 5), 1) ~ '^[AEIMQUYcgkosw048]$'))
+                AND key_b64_len BETWEEN 22 AND 86
+                AND (key_b64_len % 4 = 0
+                     OR (key_b64_len % 4 = 2 AND right(split_part(h, '$', 6), 1) ~ '^[AQgw]$')
+                     OR (key_b64_len % 4 = 3 AND right(split_part(h, '$', 6), 1) ~ '^[AEIMQUYcgkosw048]$'))
+           WHEN 'bcrypt' THEN h ~ '^\$2y\$(0[4-9]|1[0-6])\$[./A-Za-z0-9]{53}$'
+         END, false) AS structurally_ok
+  FROM f
 ), c AS (
   SELECT *,
          CASE
            WHEN family = 'empty' THEN 'empty'
-           WHEN family IN ('argon2', 'bcrypt')
-                AND (variant || '/' || COALESCE(version || '/', '') || params) IN (
+           WHEN NOT structurally_ok THEN 'unsupported'
+           WHEN (variant || '/' || COALESCE(version || '/', '') || params) IN (
                   'argon2i/v=19/m=16384,t=2,p=4',
                   'argon2id/v=19/m=65536,t=4,p=1', 'argon2id/v=19/m=65536,t=2,p=1', 'argon2id/v=19/m=65536,t=3,p=2',
                   '2y/cost=10', '2y/cost=13') THEN 'verified'
-           WHEN family = 'argon2' AND variant IN ('argon2i', 'argon2id') AND version = 'v=19'
-                AND p BETWEEN 1 AND 16 AND t BETWEEN 1 AND 10 AND m BETWEEN 8 * p AND 65536
-                AND salt_b64_len BETWEEN 11 AND 86 AND salt_b64_len % 4 <> 1
-                AND key_b64_len BETWEEN 22 AND 86 AND key_b64_len % 4 <> 1 THEN 'unvetted'
-           WHEN family = 'bcrypt' AND variant = '2y' AND substr(h, 5, 2)::int BETWEEN 4 AND 16 THEN 'unvetted'
-           ELSE 'unsupported'
+           ELSE 'unvetted'
          END AS category
-  FROM f
+  FROM s
 )
 SELECT category, family, variant, version, params, salt_b64_len, key_b64_len,
        CASE family WHEN 'unrecognized' THEN (h LIKE '$%') END AS starts_with_dollar,

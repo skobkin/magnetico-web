@@ -474,7 +474,9 @@ func classify(ts *TargetState, exp *Expected, replace bool) Class {
 	switch {
 	case ts.empty():
 		return ClassEmpty
-	case reconcile(ts, exp).total == 0:
+	case reconcile(ts, exp).total == 0 && sequencesAhead(ts).total == 0:
+		// Correct rows with an identity behind its maximum id are not
+		// "already migrated": the next insert would collide.
 		return ClassIdentical
 	case replace:
 		return ClassReplace

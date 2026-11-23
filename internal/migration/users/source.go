@@ -110,9 +110,18 @@ var knownDoctrineVersions = []string{
 // expectedConstraints are the PK/unique/FK counts the legacy schema carries;
 // a shortfall is a warning only (the data checks re-establish the invariants).
 var expectedConstraints = map[string]map[string]int{
-	"users":      {"p": 1, "u": 2},
-	"invites":    {"p": 1, "u": 1, "f": 2},
+	"users":      {"p": 1},
+	"invites":    {"p": 1, "f": 2},
 	"api_tokens": {"p": 1, "f": 1},
+}
+
+// expectedUniqueIndexes are the single-column uniqueness guarantees of the
+// legacy schema. Doctrine creates them with CREATE UNIQUE INDEX, which leaves
+// no pg_constraint row, so they are looked up in pg_index.
+var expectedUniqueIndexes = []struct{ table, column string }{
+	{"users", "username"},
+	{"users", "email"},
+	{"invites", "code"},
 }
 
 // fingerprint refuses any source that is not exactly the known legacy schema.
@@ -250,6 +259,22 @@ func fingerprint(ctx context.Context, tx pgx.Tx) (notes []string, err *Error) {
 			if got < n {
 				notes = append(notes, fmt.Sprintf("source-constraint-missing: users.%s has %d of %d %s constraints", t, got, n, typ))
 			}
+		}
+	}
+	for _, u := range expectedUniqueIndexes {
+		var ok bool
+		// A valid, non-partial, non-expression unique index over exactly
+		// this one column (a unique constraint creates one too).
+		if e := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+            WHERE i.indrelid = to_regclass('users.' || quote_ident($1))
+              AND i.indisunique AND i.indisvalid AND i.indislive
+              AND i.indnkeyatts = 1 AND i.indpred IS NULL AND i.indexprs IS NULL
+              AND a.attname = $2)`, u.table, u.column).Scan(&ok); e != nil {
+			return nil, storageErr("source fingerprint", e)
+		}
+		if !ok {
+			notes = append(notes, fmt.Sprintf("source-constraint-missing: users.%s has no valid unique index on one column (%s)", u.table, u.column))
 		}
 	}
 	var writeGrant bool

@@ -150,3 +150,84 @@ func TestAuditShapeCounts(t *testing.T) {
 		}
 	}
 }
+
+// malformedHashes returns hashes that carry an exact vetted parameter family
+// (or are one edit away from one) but that the Go verifier rejects as a whole.
+func malformedHashes(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	argon := func(base string, mutate func(p []string)) {
+		p := strings.Split(base, "$") // "", alg, v, params, salt, key
+		mutate(p)
+		out = append(out, strings.Join(p, "$"))
+	}
+	for _, fam := range []string{famSodium, famArgon2i, famArgonT2, famArgonT3P2} {
+		base := hashFor(t, fam)
+		argon(base, func(p []string) { p[4] = p[4][:10] })                              // salt below 8 bytes
+		argon(base, func(p []string) { p[4] = p[4][:len(p[4])-1] })                     // impossible Base64 length (1 mod 4)
+		argon(base, func(p []string) { p[4] = p[4][:len(p[4])-1] + "B" })               // non-zero trailing bits in the salt
+		argon(base, func(p []string) { p[4] = strings.Repeat("A", 100) })               // salt above 64 bytes
+		argon(base, func(p []string) { p[5] = p[5][:len(p[5])-2] })                     // truncated key (length 1 mod 4)
+		argon(base, func(p []string) { p[5] = p[5][:20] })                              // key below 16 bytes
+		argon(base, func(p []string) { p[5] = p[5][:len(p[5])-1] + "B" })               // non-zero trailing bits in the key
+		argon(base, func(p []string) { p[5] += "=" })                                   // padded Base64
+		argon(base, func(p []string) { p[5] = "!" + p[5][1:] })                         // invalid Base64 character
+		argon(base, func(p []string) { p[3] = strings.Replace(p[3], "m=", "m=0", 1) })  // leading zero in m
+		argon(base, func(p []string) { p[3] = strings.Replace(p[3], "p=", "p=0", 1) })  // leading zero in p
+		argon(base, func(p []string) { p[3] = strings.Replace(p[3], "t=", "t=00", 1) }) // leading zeros in t
+		argon(base, func(p []string) { p[3] = strings.Replace(p[3], "m=", "m=+", 1) })  // signed m
+		argon(base, func(p []string) { p[3] += ",x=1" })                                // extra parameter
+	}
+	for _, fam := range []string{famBcrypt10, famBcrypt13} {
+		b := hashFor(t, fam)
+		out = append(out,
+			b[:len(b)-1],      // truncated hash
+			b+"a",             // too long
+			b[:10]+"+"+b[11:], // character outside ./A-Za-z0-9
+			"$2y$03$"+b[7:],   // cost below 4
+			"$2y$17$"+b[7:],   // cost above 16
+		)
+	}
+	return out
+}
+
+// TestAuditNeverCallsAMalformedHashVerified is the regression for exact
+// parameter families whose complete hash the verifier would reject.
+func TestAuditNeverCallsAMalformedHashVerified(t *testing.T) {
+	src := legacyDB(t)
+	bad := malformedHashes(t)
+	for i, h := range bad {
+		if got := CategorizeHash(h); got != HashUnsupported {
+			t.Fatalf("malformed case %d: the Go classifier says %d, want unsupported (fix the case)", i, got)
+		}
+	}
+	fixtures := fixtureCases(t)
+	var values []string
+	add := func(h string) {
+		id := strconv.Itoa(len(values) + 1)
+		values = append(values, `(`+id+`, 'u`+id+`', '`+h+`', 'u`+id+`@example.org', '["ROLE_USER"]', now())`)
+	}
+	for _, c := range fixtures {
+		add(c.Hash)
+	}
+	for _, h := range bad {
+		add(h)
+	}
+	execSQL(t, src, `INSERT INTO users.users (id, username, password, email, roles, created_at) VALUES `+strings.Join(values, ","))
+	formats, _, header := runAudit(t, src)
+	col := map[string]int{}
+	for i, h := range header {
+		col[h] = i
+	}
+	got := map[string]int{}
+	for _, row := range formats {
+		n, err := strconv.Atoi(row[col["accounts"]])
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[row[col["category"]]] += n
+	}
+	if got["verified"] != len(fixtures) || got["unsupported"] != len(bad) || got["unvetted"] != 0 {
+		t.Fatalf("audit categories %v; want verified=%d unsupported=%d unvetted=0", got, len(fixtures), len(bad))
+	}
+}

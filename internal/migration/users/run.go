@@ -314,6 +314,12 @@ func (r *runCtx) evaluateScope(ts *TargetState) scope {
 	}
 	h.i64(int64(r.cfg.AcceptNeedsReset))
 	h.str(idsString(authorised))
+	// The identities' current next values decide the ids a run assigns and
+	// where each identity ends, so they are part of the plan.
+	for _, t := range []string{"users", "invites", "rss_tokens"} {
+		h.str(t)
+		h.i64(ts.Next[t])
+	}
 	if r.cfg.ReplaceUsers {
 		matched := []int64{}
 		un := map[int64]bool{}

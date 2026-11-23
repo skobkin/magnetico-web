@@ -259,3 +259,55 @@ func TestEveryTargetConstraintHasADryRunReplica(t *testing.T) {
 		}
 	}
 }
+
+// Doctrine creates the legacy uniqueness guarantees with CREATE UNIQUE INDEX,
+// which leaves no pg_constraint row. The genuine schema must not be warned
+// about; losing (or weakening) an index must be.
+func TestSourceUniqueIndexesAreInspectedNotConstraintCounts(t *testing.T) {
+	constraintNotes := func(src string) string {
+		s, err := openSource(tctx(t), src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.close()
+		snap, e := s.snapshot(tctx(t))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var n []string
+		for _, x := range snap.Notes {
+			if strings.HasPrefix(x, "source-constraint-missing") {
+				n = append(n, x)
+			}
+		}
+		return strings.Join(n, "\n")
+	}
+	if got := constraintNotes(legacyDB(t)); got != "" {
+		t.Fatalf("the genuine legacy schema produced warnings:\n%s", got)
+	}
+	cases := []struct{ name, ddl, mention string }{
+		{"dropped username index", `DROP INDEX users.uniq_338adfc4f85e0677`, "(username)"},
+		{"dropped email index", `DROP INDEX users.uniq_338adfc4e7927c74`, "(email)"},
+		{"dropped invite code index", `DROP INDEX users.uniq_93848fa877153098`, "(code)"},
+		{"non-unique replacement", `DROP INDEX users.uniq_338adfc4f85e0677; CREATE INDEX ON users.users (username)`, "(username)"},
+		{"partial unique index", `DROP INDEX users.uniq_338adfc4e7927c74; CREATE UNIQUE INDEX ON users.users (email) WHERE id > 0`, "(email)"},
+		{"expression unique index", `DROP INDEX users.uniq_93848fa877153098; CREATE UNIQUE INDEX ON users.invites (lower(code))`, "(code)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := legacyDB(t)
+			execSQL(t, src, c.ddl)
+			got := constraintNotes(src)
+			if !strings.Contains(got, c.mention) || strings.Count(got, "\n") != 0 {
+				t.Fatalf("want exactly one warning mentioning %s, got:\n%s", c.mention, got)
+			}
+		})
+	}
+	t.Run("a unique constraint instead of an index is accepted", func(t *testing.T) {
+		src := legacyDB(t)
+		execSQL(t, src, `ALTER TABLE users.users DROP CONSTRAINT IF EXISTS uniq_338adfc4f85e0677; DROP INDEX users.uniq_338adfc4f85e0677; ALTER TABLE users.users ADD CONSTRAINT users_username_key UNIQUE (username)`)
+		if got := constraintNotes(src); got != "" {
+			t.Fatalf("unexpected warnings:\n%s", got)
+		}
+	})
+}
