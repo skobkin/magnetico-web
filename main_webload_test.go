@@ -862,6 +862,21 @@ func TestWebLoad(t *testing.T) {
 		})
 		return res, map[string]any{"tree_clients": 16, "dir_clients": 16, "duration": dur.String()}
 	})
+	// Details page latency with and without the mode-decision header peek:
+	// tree-pool torrents (peek: ≤ 12,000 files) versus a 250,000-file torrent
+	// (decided from the file count alone, no blob access).
+	run("details", func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {
+		res := d.drive(dur/2, []workload{{name: "peek", workers: 1, acc: newAcc(), pick: func(r *rand.Rand) string {
+			return fmt.Sprintf("/torrents/%d", data.treePool[r.IntN(len(data.treePool))])
+		}}})
+		more := d.drive(dur/2, []workload{{name: "nopeek", workers: 1, acc: newAcc(), pick: func(r *rand.Rand) string {
+			return fmt.Sprintf("/torrents/%d", typical)
+		}}})
+		for k, v := range more {
+			res[k] = v
+		}
+		return res, map[string]any{"duration": dur.String()}
+	})
 	// A hierarchy beyond the index limits answers 422 quickly and does not
 	// disturb the other classes.
 	run("complex", func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {

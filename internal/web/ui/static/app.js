@@ -551,7 +551,7 @@
     function draw(focusCrumbs) {
       var d = cur.data, ready = cur.status === "ready";
       clear(panel);
-      panel.appendChild(statusLine("On-demand browsing", "Folders are loaded as you open them"));
+      panel.appendChild(statusLine("On-demand browsing", (ctx.files ? countText(ctx.files) + " · " : "") + "Folders are loaded as you open them"));
       if (notice) panel.appendChild(h("div", { class: "file-warning", role: "status" }, [icon("info"), h("div", {}, [h("p", { text: notice })])]));
       var ancestors = d ? d.ancestors || [] : [];
       var crumbs = [h("button", { type: "button", "data-path": "", "aria-current": ready && !ancestors.length ? "location" : false }, ["Root"])];
@@ -629,6 +629,7 @@
     var request = makeRequester(opts);
     var ctx = {
       treeUrl: root.getAttribute("data-tree-url"), dirUrl: root.getAttribute("data-dir-url"), request: request,
+      files: Number(root.getAttribute("data-files")) || 0,
       env: { location: opts.location || location, history: opts.history || history },
       switchToDirs: function () { current && current.destroy(); clear(root); current = runDirs(root, ctx); }
     };

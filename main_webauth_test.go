@@ -290,7 +290,7 @@ func TestWebBinaryLoginFlow(t *testing.T) {
 	if resp.StatusCode != 303 || resp.Header.Get("Location") != "/" {
 		t.Fatalf("login: %d %q\n%s", resp.StatusCode, resp.Header.Get("Location"), b.body)
 	}
-	if resp := b.get("/torrents"); resp.StatusCode != 200 || !strings.Contains(b.body, "Signed in as alice") {
+	if resp := b.get("/torrents"); resp.StatusCode != 200 || !strings.Contains(b.body, `<span class="header-user">alice</span>`) {
 		t.Fatalf("home: %d\n%s", resp.StatusCode, b.body)
 	}
 	if n := sqlCount(t, dsn, `SELECT count(*) FROM magnetico_web.sessions`); n != 1 {
@@ -453,7 +453,7 @@ func TestWebBinaryProductionCookieAttributes(t *testing.T) {
 	}
 	req, _ = http.NewRequest("GET", base+"/torrents", nil)
 	req.Header.Set("Cookie", strings.SplitN(sess, ";", 2)[0])
-	if resp, body = do(req); resp.StatusCode != 200 || !strings.Contains(body, "Signed in as pia") {
+	if resp, body = do(req); resp.StatusCode != 200 || !strings.Contains(body, `<span class="header-user">pia</span>`) {
 		t.Fatalf("home with the production cookie: %d", resp.StatusCode)
 	}
 	if resp.Header.Get("Strict-Transport-Security") == "" || resp.Header.Get("Cache-Control") != "no-store" {
