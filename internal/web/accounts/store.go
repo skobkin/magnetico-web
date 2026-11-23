@@ -111,6 +111,12 @@ func hashToken(presented string) []byte {
 	return sum[:]
 }
 
+// TokenDigest is hashToken for callers outside the package that must store a
+// credential exactly as the authentication path looks it up (the W8 user
+// migration stores legacy API keys as rss_tokens digests). It is deliberately
+// the same function, never a re-implementation.
+func TokenDigest(presented string) []byte { return hashToken(presented) }
+
 // lockedUser is the result of locking a user row.
 type lockedUser struct {
 	id          int64
