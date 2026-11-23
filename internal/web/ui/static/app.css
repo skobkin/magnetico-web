@@ -763,6 +763,10 @@ main {
 .notice .icon {
   margin-top:1px;
 }
+.auth {
+  max-width:420px;
+  margin:48px auto 0;
+}
 .auth h1 {
   margin-bottom:5px;
 }
