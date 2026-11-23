@@ -9,6 +9,7 @@
     <link>https://magnet.example.org/</link>
     <language>en-US</language>
     <atom:link href="https://magnet.example.org{SELF}" rel="self" type="application/rss+xml"/>
+    <author>Magnetico Web</author>
     <dc:creator>Magnetico Web</dc:creator>
     <item>
       <title>Third &amp; last &lt;one&gt;</title>

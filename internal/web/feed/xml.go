@@ -15,10 +15,11 @@ import (
 // (docs/specs/web-v1.md §8.2.1): guid and description are the info hash, title
 // is the name, link and enclosure are the magnet URI (with the configured
 // trackers and dn), comments is the details page, pubDate is the discovery
-// time. The channel carries the legacy author as Dublin Core metadata,
-// <dc:creator>Magnetico Web</dc:creator> (Laminas Feed Writer renders a feed
-// author in RSS 2.0 through its Dublin Core extension); the legacy item
-// setDateModified() has no RSS 2.0 element, so nothing else is needed.
+// time. The channel carries the legacy feed author twice, as laminas-feed
+// 2.26.3 renders it: <author>Magnetico Web</author> (Writer/Renderer/Feed/Rss
+// _setAuthors) and <dc:creator>Magnetico Web</dc:creator> (DublinCore
+// extension). The legacy item setDateModified() is rendered by the RSS entry
+// renderer as <pubDate>, which is the item pubDate emitted here.
 // XML 1.0 cannot carry control characters, so encoding/xml writes U+FFFD for a name that contains one; that is the only normalisation.
 
 const (
@@ -46,6 +47,7 @@ type channel struct {
 	Link          string   `xml:"link"`
 	Language      string   `xml:"language"`
 	AtomLink      atomLink `xml:"atom:link"`
+	Author        string   `xml:"author"`
 	Creator       string   `xml:"dc:creator"`
 	Items         []item   `xml:"item"`
 }
@@ -87,6 +89,7 @@ func render(rows []persistence.Torrent, urls []string, base *url.URL, selfPath s
 		Title: feedTitle, Description: "Last Last torrents", PubDate: date, LastBuildDate: date,
 		Generator: "Magnetico", Link: root + "/", Language: "en-US",
 		AtomLink: atomLink{Href: root + selfPath, Rel: "self", Type: "application/rss+xml"},
+		Author:   feedOwner,
 		Creator:  feedOwner,
 		Items:    make([]item, 0, len(rows)),
 	}}
