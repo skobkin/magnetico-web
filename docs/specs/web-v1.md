@@ -123,7 +123,7 @@ There is no `pending_setup` state.
 
 4.3.3 Legacy hashes are verified directly (they cannot be converted offline). A legacy format is **supported only if** it has independently verified PHP-generated test vectors (§12.2). Recognising a prefix is not support. A stored hash in an unsupported format makes the account "needs reset": it cannot log in and `web user list` flags it.
 
-4.3.4 On successful login with a legacy or outdated hash, the hash MUST be replaced with a current-parameter argon2id hash in the same transaction that records the login.
+4.3.4 On successful login with a legacy or outdated hash, the hash MUST be replaced with a current-parameter argon2id hash in the same transaction that records the login, **conditionally**: the update applies only if the stored hash is still exactly the one that was verified and the account is still active, so a concurrent password change or reset is never overwritten. Hashing happens outside the transaction. **[APPROVED, W3 review] Exception:** if the limiter refuses the rehash computation (`ErrBusy`) after a successful verification, the login completes without rehash and the hash is upgraded at a later login; verification itself is never skipped.
 
 4.3.5 **Bounded concurrency.** All hash and verify operations pass through one process-wide limiter **[PROPOSAL]** default `max(1, min(GOMAXPROCS, 2))`, a bounded queue wait (a few seconds); on expiry the request fails with a generic 503 and `Retry-After`, and a counter is incremented.
 
@@ -146,19 +146,23 @@ There is no `pending_setup` state.
 - Validation (startup error otherwise): all durations positive; `idle ≥ 5m`; `idle ≤ absolute ≤ remember ≤ 8760h`. There is no "0 means unlimited".
 - `last_seen_at` writes are throttled **[PROPOSAL]** to at most once per `min(5m, idle/10)`. A background purge deletes expired sessions.
 
+4.4.4a **[APPROVED, W3 review]** Session rows are created only inside the login transaction; lookups and activity updates use the database clock. Because `last_seen_at` writes are throttled, an ordinary session's effective idle window is between `idle − throttle` and `idle` (the throttle is at most 10 % of the idle timeout). Roles are resolved on every lookup, so a role change needs no session rotation; rotation happens at login, password change and password reset only.
+
 4.4.5 Logout is a `POST`, deletes the server-side session, and clears the cookie.
 
 ### 4.5 CSRF
 
 4.5.1 Every state-changing browser action MUST be a `POST` (or other non-safe method) and MUST be protected, including actions that need no existing session: login, registration, password reset request, password reset, password setup, email verification confirmation, and every account and invitation action. No state change on `GET`; in particular legacy state-changing GET URLs are not carried over (§6.1).
 
-4.5.2 Two layers: the standard library's cross-origin protection (Fetch-metadata/`Origin` based) and a synchronizer token in every form. For forms shown before a session exists, the token is bound to a short-lived pre-session cookie.
+4.5.2 Two layers: the standard library's cross-origin protection (Fetch-metadata/`Origin` based) and a synchronizer token in every form. For forms shown before a session exists, the token is bound to a short-lived pre-session cookie. **[APPROVED, W3 review]** The token is a stateless, cookie-bound construction (a domain-separated SHA-256 of the high-entropy HttpOnly cookie secret), not a server-stored value; it relies on the `__Host-` cookie prefix against cookie injection. Pre-session cookie lifetime is 1 h. After login, a validated local `next` path may be honoured; absolute URLs, `//`, `/\\` and encoded variants are rejected.
 
 4.5.3 Bearer-token API endpoints are not subject to cookie CSRF and MUST NOT accept the session cookie as authentication.
 
 ### 4.6 Rate limiting
 
 4.6.1 Throttling (not account lockout) with bounded in-memory state: login per client IP and per normalised username; reset and verification requests per IP and per account/email; registration per IP; failed token authentications per IP; v1 RSS and v2 per token.
+
+4.6.1a **[APPROVED, W3 review]** Initial login limits (constants): per client IP burst 20, refill 1 per 30 s; per normalised (case-folded, hashed) username burst 5, refill 1 per 60 s; a successful login refunds the username unit; at most 10,000 keys per limiter, least-recently-used eviction.
 
 4.6.2 Responses: `429` with `Retry-After`; error text generic. State is per process: the initial deployment is **one web instance [APPROVED]** and in-memory limiting is acceptable. Coordinating limits across several instances is a future consideration, not a 0.8.0 blocker.
 
@@ -183,7 +187,7 @@ There is no `pending_setup` state.
 
 4.7.4 The registration page MUST show one generic message for every non-usable invitation (unknown, used, revoked, expired, owner disabled): *"This invitation is invalid or no longer available."* It MUST NOT reveal that the owner is disabled.
 
-4.7.5 A request authorised before a revocation commits may complete; the next request MUST observe the revocation. No authentication result is cached.
+4.7.4a A request authorised before a revocation commits may complete; the next request MUST observe the revocation. No authentication result is cached.
 
 4.7.5 **Per-request credential checks [APPROVED, revision 4].** Every authenticated API and RSS request MUST, in one server-side lookup, verify: (1) the credential exists (by SHA-256 digest); (2) it is not expired; (3) `revoked_at` is null; (4) its owner is currently `active`. There is no authentication cache that could outlive a disable; if one is ever proposed its lifetime must be bounded and approved separately. `disable` takes effect for requests authorized after its transaction commits; a request authorized before the commit may complete (§4.2.2). Tests: §12.3, §12.4b.
 
@@ -289,7 +293,7 @@ Commands MUST NOT print secrets other than the single link or token they were as
 
 | Method and path | Auth | Purpose |
 |---|---|---|
-| `GET /` | public | Homepage and entry point: redirect to `/torrents` when signed in, otherwise to `/login` |
+| `GET /{$}` | session | Homepage and entry point: redirect to `/torrents` when signed in, otherwise to `/login`. Exact root only; unknown paths are 404. **Interim (W3, until W4):** a signed-in user sees a minimal page with the logout form |
 | `GET, POST /login`; `POST /logout` | public / session | Sign in / out |
 | `GET /torrents` | session | Search and listing |
 | `GET /torrents/{id}` | session | Details |
