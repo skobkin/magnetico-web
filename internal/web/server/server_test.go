@@ -486,6 +486,16 @@ func TestHandlerContextExpires(t *testing.T) {
 	}
 }
 
+// noKeepAliveClient returns a client with its own transport that never keeps a
+// connection alive. The shared http.DefaultTransport can dial a second,
+// speculative connection while it reuses an idle one; that extra connection
+// never carries a request, stays in net/http's StateNew (which Shutdown
+// treats as busy for five seconds, longer than the test grace periods) and
+// made shutdown tests flaky. One request is exactly one connection here.
+func noKeepAliveClient() *http.Client {
+	return &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
+}
+
 func startServer(t *testing.T, f *fixture) (addr string, done chan error, cancel context.CancelFunc) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -499,7 +509,7 @@ func startServer(t *testing.T, f *fixture) (addr string, done chan error, cancel
 	// Wait until it serves.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
+		resp, err := noKeepAliveClient().Get("http://" + ln.Addr().String() + "/healthz")
 		if err == nil {
 			resp.Body.Close()
 			break
@@ -593,9 +603,10 @@ func TestRunListenFailureClosesBackend(t *testing.T) {
 func TestGracefulShutdownLetsInFlightFinish(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.ShutdownTimeout = 3 * time.Second })
 	started := make(chan struct{})
+	release := make(chan struct{})
 	f.srv.Router().Handle("GET /work", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
-		time.Sleep(300 * time.Millisecond)
+		<-release // finishes only when the test says shutdown is under way
 		_, _ = io.WriteString(w, "finished")
 	}))
 	addr, done, cancel := startServer(t, f)
@@ -606,7 +617,7 @@ func TestGracefulShutdownLetsInFlightFinish(t *testing.T) {
 	}
 	res := make(chan result, 1)
 	go func() {
-		resp, err := http.Get("http://" + addr + "/work")
+		resp, err := noKeepAliveClient().Get("http://" + addr + "/work")
 		if err != nil {
 			res <- result{err: err}
 			return
@@ -617,6 +628,23 @@ func TestGracefulShutdownLetsInFlightFinish(t *testing.T) {
 	}()
 	<-started
 	cancel() // SIGTERM equivalent
+
+	// Shutdown has begun while the request is still in flight: the handler
+	// is held until the server reports draining, so "finished" can only be
+	// delivered by a graceful drain, never by the request racing ahead.
+	deadline := time.Now().Add(5 * time.Second)
+	for !f.srv.draining.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("server never started draining")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned %v while a request was still in flight", err)
+	default:
+	}
+	close(release)
 
 	if err := <-done; err != nil {
 		t.Fatalf("Run = %v, want clean shutdown", err)
