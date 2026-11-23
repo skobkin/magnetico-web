@@ -20,7 +20,7 @@ Branch `refactor/0.8.0-unify-and-new-storage`, continuing from C1 (`aeb3454b`). 
 | `d605f904` | `feat(web): torrent search, details and file browser` (handlers, templates, `Server.OnDrained`, `auth.SessionFormToken`, `/` redirect, `main` wiring) |
 | see `git log` | real-binary W4 tests and W3 test updates; docs (final values, C1 decisions) with leak/allocation tests; load harness, `Stats.Abandoned`, measurements, deployment notes, this report |
 
-(`git log aeb3454b..HEAD` is authoritative.)
+(`git log aeb3454b..HEAD` is authoritative. The table lists the pre-rewrite hashes; after the S2 follow-up history clean-up only the last two changed, see §13.)
 
 ## 3. Design as implemented
 
@@ -127,7 +127,8 @@ Unconstrained process (no cgroup): VmHWM 681–706 MiB (conc32/mixed32). GC: 470
 - The mixed workload is synthetic and cold-heavy; the synthetic name alphabet is random, so stored sizes and search selectivity are not realistic. Search was measured only on 300k rows; no 1M/5M run; no plan analysis (deferred by the owner).
 - The login figure includes Argon2id at production parameters under CPU contention; the 429s are the rate limiter reacting to the test's login loop.
 - Goroutine counts were verified only in-process (`TestNoGoroutineLeakAfterChurnAndClose`); externally FDs, threads and PostgreSQL connections were sampled every 0.5 s.
-- A pre-existing flake: `TestGracefulShutdownLetsInFlightFinish` (server package) fails about 1 run in 40 on the base commit as well (verified with the W4 changes stashed); not caused by W4 and not fixed here.
+- **Resolved in the S2 follow-up:** the pre-existing flake `TestGracefulShutdownLetsInFlightFinish` (about 4 runs in 300 under `-race`, also on the base commit) was a test-harness defect, not a server bug. See §13.
+- **Long directory URLs:** the file browser addresses a directory by the exact path in the `dir` query parameter, and the server bounds the request line plus headers at 16 KiB (`maxHeaderBytes`). Paths up to `MaxPathBytes` (64 KiB) are codec-valid and percent-escaping can triple their length, so some directories have a link no request can carry (the server answers 431). The link is still generated losslessly. This is a documented limitation; the file-browser UX is being reconsidered for W5. Covered by `server.TestRequestLineLimitBoundary` and `torrents.TestLongDirectoryLinkLimitation`.
 - The weight model remains an estimate; see §7.
 
 ## 10. Commands, durations and validation
@@ -162,4 +163,20 @@ Test-created resources: Docker container `magnetico-w4-bench-pg` (label `magneti
 2. **RSS target 640 MiB missed** (≈ 740 MiB worst case, 1 GiB limit OK). Accept, or lower the cache/gate.
 3. **Allocation target (≤ 3×)** stays a documented miss (codec).
 4. 1M/5M search measurements and index tuning remain deferred to after 0.8.0.
-5. The pre-existing flaky shutdown test (§9) needs a separate fix.
+5. ~~Flaky shutdown test~~ fixed, see §13.
+6. Long-directory URL limitation (§9); redesign is a W5 decision.
+
+## 13. S2 follow-up: repository hygiene and the shutdown test
+
+**Accidental binary.** Commit `c3eecd98` tracked the 38 MB root build output `magnetico-web` (`.gitignore` only had `magnetico`). The local branch `refactor/0.8.0-clean` removes it from that commit and its descendant; the tree is otherwise identical (verified by diff) and authorship and author dates are preserved. `/magnetico-web` is now ignored.
+
+| Old | New | Subject |
+|---|---|---|
+| `5d9242fd` | `5d9242fd` | file index cache |
+| `d605f904` | `d605f904` | handlers, templates, wiring |
+| `769cf812` | `769cf812` | real-binary W4 tests |
+| `c3eecd98` | `fb887b81` | final W4 values, leak and allocation tests (binary removed, `.gitignore` rule added) |
+| `458dfdde` | `fce841fe` | load harness, measurements, deployment notes, report |
+| new | follow-up commits | shutdown-test fix, long-URL test and docs (`git log fce841fe..HEAD`) |
+
+**Shutdown flake: root cause.** The readiness probe left an idle keep-alive connection in `http.DefaultTransport`; the transport sometimes also dialled a second connection that never carried a request. `net/http` treats a connection in `StateNew` as busy for five seconds (`Server.closeIdleConns`), longer than the test's 3 s grace, so `Shutdown` timed out and the server correctly reported `ErrShutdownIncomplete`. Evidence: counting accepted connections, all 11 failing runs had two, passing runs had one. The fix uses keep-alive-free clients and replaces the 300 ms sleep with an explicit release signal sent after the server reports draining. Result: 0 failures in 600 `-race` runs (previously about 4 per 300) and 30 `-race` runs of the whole package.
