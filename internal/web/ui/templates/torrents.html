@@ -1,36 +1,57 @@
 {{define "nav"}}{{template "navbar" .}}{{end}}
-{{define "title"}}Torrents{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "title"}}Search{{end}}
 {{define "content"}}
-<h1>Torrents</h1>
-<form method="get" action="/torrents">
-<p>
-<input type="search" name="q" value="{{.Q}}" maxlength="512" aria-label="Search">
-<select name="sort" aria-label="Sort by">
-{{range .SortOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-</select>
-<select name="order" aria-label="Direction">
-{{range .OrderOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-</select>
-<select name="size" aria-label="Page size">
-{{range .SizeOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
-</select>
-<button type="submit">Search</button>
-</p>
+<div class="page-intro"><div class="page-title-wrap"><h1>Search torrents</h1><p>Search your private torrent index.</p></div></div>
+<form class="searchbox" method="get" action="/torrents" role="search">
+<div class="search-input-wrap">{{template "icon" "search"}}<input type="search" name="q" value="{{.Q}}" maxlength="512" aria-label="Search torrents" placeholder="Torrent title or 40-character info hash" autocomplete="off"></div>
+<button type="submit" class="btn primary">Search</button>
 </form>
-{{if .Ignored}}<p class="meta">{{.Ignored}} word(s) shorter than 3 characters were ignored.</p>{{end}}
-{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+<details class="help-toggle"><summary>{{template "icon" "info"}} Search rules</summary><div class="help-text">
+<p>Words with fewer than three Unicode characters are ignored. Remaining words must all appear in the torrent name, regardless of case or order.</p>
+<p>A 40-character hexadecimal string finds an exact info hash. An empty search shows the newest torrents. The characters <code>%</code> and <code>_</code> are literal.</p>
+<p>Searching never scans individual file paths.</p>
+</div></details>
+{{if .Ignored}}<p class="muted small">{{.Ignored}} word(s) shorter than 3 characters were ignored.</p>{{end}}
+{{if .Error}}<div class="notice error" role="alert">{{template "icon" "alert"}}<span>{{.Error}}</span></div>{{end}}
 {{if .Rows}}
-<table>
-<thead><tr><th>Name</th><th>Size</th><th>Files</th><th>Discovered</th></tr></thead>
+<div class="section-bar">
+<div><h2>{{if .Query}}Search results{{else if .Lookup}}Info hash lookup{{else}}Latest torrents{{end}}</h2></div>
+<form class="view-options" method="get" action="/torrents">
+{{if .Q}}<input type="hidden" name="q" value="{{.Q}}">{{end}}
+<label class="field-inline sort-mobile hidden">Sort <select name="by" aria-label="Sort results" data-autosubmit>{{range .ByOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<label class="field-inline">Rows <select name="size" aria-label="Rows per page" data-autosubmit>{{range .SizeOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+<noscript><button type="submit" class="btn small">Apply</button></noscript>
+</form>
+</div>
+<div class="table-shell desktop-table"><table class="data-table">
+<caption class="sr-only">Torrent results</caption>
+<thead><tr>
+<th class="col-magnet" scope="col"><span class="sr-only">Magnet link</span></th>
+{{range .Heads}}<th class="{{.Class}}" scope="col"{{if .AriaSort}} aria-sort="{{.AriaSort}}"{{end}}>{{if .Href}}<a class="table-sort" href="{{.Href}}">{{.Label}}{{if .Arrow}}<span class="sort-indicator" aria-hidden="true">{{.Arrow}}</span>{{end}}</a>{{else}}{{.Label}}{{end}}</th>
+{{end}}</tr></thead>
 <tbody>
 {{range .Rows}}<tr>
-<td class="name"><a href="{{.Href}}"><bdi>{{template "segs" .Name}}</bdi></a></td>
-<td class="num">{{.Size}}</td><td class="num">{{.Files}}</td><td class="num"><time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></td>
-</tr>{{end}}
-</tbody>
-</table>
-<p>{{if .Prev}}<a href="{{.Prev}}" rel="prev">Previous</a>{{end}} {{if .Next}}<a href="{{.Next}}" rel="next">Next</a>{{end}}</p>
+<td class="col-magnet"><a class="icon-button" href="{{.Magnet}}" title="Open magnet link" aria-label="Open magnet link">{{template "icon" "magnet"}}</a></td>
+<td class="col-name"><a class="name-link" href="{{.Href}}"><bdi>{{template "segs" .Name}}</bdi></a></td>
+<td class="col-size numbers">{{.Size}}</td><td class="col-files numbers">{{.Files}}</td><td class="col-discovered numbers"><time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></td>
+</tr>
+{{end}}</tbody>
+</table></div>
+<div class="results-mobile">
+{{range .Rows}}<article class="result-card">
+<div class="title-row"><a class="name-link" href="{{.Href}}"><bdi>{{template "segs" .Name}}</bdi></a></div>
+<div class="meta-row"><span class="meta-text">{{.Size}} · {{.Files}} files · <time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></span><a class="icon-button" href="{{.Magnet}}" title="Open magnet link" aria-label="Open magnet link">{{template "icon" "magnet"}}</a></div>
+</article>
+{{end}}</div>
+<div class="results-footer"><span>Showing {{len .Rows}} {{if eq (len .Rows) 1}}torrent{{else}}torrents{{end}}</span>
+<div class="pagination">
+{{if .Prev}}<a class="btn small" href="{{.Prev}}" rel="prev">{{template "icon" "left"}} Previous</a>{{else}}<span class="btn small" aria-disabled="true">{{template "icon" "left"}} Previous</span>{{end}}
+{{if .Next}}<a class="btn small" href="{{.Next}}" rel="next">Next {{template "icon" "right"}}</a>{{else}}<span class="btn small" aria-disabled="true">Next {{template "icon" "right"}}</span>{{end}}
+</div></div>
 {{else if not .Error}}
+<div class="empty-state"><h2>No torrents found</h2>
 <p>{{if .Lookup}}No torrent has that info hash.{{else if .Query}}No torrents match your search.{{else}}There are no torrents yet.{{end}}</p>
+{{if .Q}}<a class="btn small" href="/torrents">Show latest torrents</a>{{end}}</div>
 {{end}}
 {{end}}

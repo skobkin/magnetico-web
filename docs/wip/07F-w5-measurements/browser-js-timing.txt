@@ -1,0 +1,13 @@
+# File-browser client cost, JavaScript only (no layout/paint)
+# Engine: the "obscura" headless host available to the agent (not Chromium), run
+# 2026-11-23 on the development VM. Synthetic tree: 25 files per folder, 10 folders
+# per group, ~44-byte names. Times are wall clock in milliseconds.
+files   json KiB  JSON.parse  buildTree  load→first render  filter(100 ms debounce incl.)  expand
+ 4000       394         0          2            6                    30                        2
+12000      1186         3          2           11                    32                        4
+25000      2482         5          5           24                    31                        7
+50000      4976        16         10           37                    31                        8
+# Reading: client-side CPU is not the limiting factor even at 50,000 files on this
+# engine; transfer size and low-end-phone memory are, and neither was measured on
+# real devices (owner review item). The server thresholds therefore stay at the
+# candidate values (12,000 files / 3 MiB estimate / 4 MiB hard cap).

@@ -671,3 +671,51 @@ func TestNoPublicAPIv2RoutesYet(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchPageUiMarkupSortingAndMagnets(t *testing.T) {
+	e := newEnv(t)
+	small := e.seed("alpha <b>release</b>", 100, 3, nil)
+	big := e.seed("alpha huge release", 5000, 2, nil)
+	e.seed("alpha middle release", 900, 1, nil)
+	c := e.signedIn()
+
+	c.get("/torrents?q=alpha")
+	for _, want := range []string{
+		`aria-sort="descending"`, `class="table-sort" href="/torrents?order=asc&amp;q=alpha&amp;size=50&amp;sort=discovered"`,
+		`href="/torrents?order=desc&amp;q=alpha&amp;size=50&amp;sort=size"`, `href="/torrents?order=asc&amp;q=alpha&amp;size=50&amp;sort=name"`,
+		`class="results-mobile"`, `class="table-shell desktop-table"`, `<caption class="sr-only">`, `name="by"`, `value="size:desc"`,
+		"alpha &lt;b&gt;release&lt;/b&gt;", `href="magnet:?xt=urn:btih:`, `class="skip-link"`, "<noscript>",
+	} {
+		if !strings.Contains(c.body, want) {
+			t.Errorf("search page lacks %q", want)
+		}
+	}
+	if strings.Contains(c.body, "<b>release") || strings.Contains(c.body, "&tr=") {
+		t.Error("names must be escaped and magnets tracker-less")
+	}
+	if ids := c.rowIDs(); len(ids) != 3 || ids[0] != small {
+		t.Fatalf("default order (newest first): %v", ids)
+	}
+	// The mobile "by" selector is a plain GET parameter.
+	c.get("/torrents?q=alpha&by=size:desc")
+	if ids := c.rowIDs(); ids[0] != big || !strings.Contains(c.body, `aria-sort="descending"`) {
+		t.Fatalf("by=size:desc: %v", ids)
+	}
+	c.get("/torrents?q=alpha&by=size:asc")
+	if ids := c.rowIDs(); ids[0] != small || !strings.Contains(c.body, `aria-sort="ascending"`) {
+		t.Fatalf("by=size:asc: %v", ids)
+	}
+	// Name sorting needs a query; without one the header is plain text.
+	c.get("/torrents")
+	if strings.Contains(c.body, "sort=name") {
+		t.Error("name sort must not be offered without a query")
+	}
+	// An info-hash lookup offers no sorting at all.
+	c.get("/torrents?q=" + strings.Repeat("a", 40))
+	if strings.Contains(c.body, `class="table-sort"`) {
+		t.Error("a lookup must not offer sorting")
+	}
+	if res := c.get("/torrents?by=garbage"); res.StatusCode != 200 {
+		t.Errorf("malformed by must be ignored: %d", res.StatusCode)
+	}
+}

@@ -1,27 +1,55 @@
 {{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.}}">{{end}}
-{{define "navbar"}}<nav>
-<a href="/torrents">Torrents</a>
-<span class="meta">Signed in as {{.Username}}</span>
-<form method="post" action="/logout" class="inline">
-{{template "csrf" .CSRFToken}}
-<button type="submit">Sign out</button>
-</form>
-</nav>{{end}}
+{{define "icon"}}<svg class="icon" aria-hidden="true" focusable="false"><use href="#i-{{.}}"></use></svg>{{end}}
+{{define "navbar"}}<nav class="main-nav" aria-label="Main"><a href="/torrents">Search</a></nav>{{end}}
+{{define "userbox"}}<span class="header-user">{{.Username}}</span>
+<form method="post" action="/logout">{{template "csrf" .CSRFToken}}<button type="submit" class="header-action logout-link" title="Sign out" aria-label="Sign out">{{template "icon" "logout"}}</button></form>{{end}}
 {{define "segs"}}{{range .}}{{if .Marker}}<span class="marker">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{end}}{{end}}
+{{define "sprite"}}<svg class="icon-store" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-magnet" viewBox="0 0 24 24"><path d="M6 3v9a6 6 0 0 0 12 0V3h-4v9a2 2 0 1 1-4 0V3H6Z"/><path d="M6 7h4M14 7h4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20.5 14A8.7 8.7 0 0 1 10 3.5 9 9 0 1 0 20.5 14Z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="15" rx="2"/><path d="M8 22h8m-4-4v4"/></symbol>
+    <symbol id="i-folder-open" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v3H7l-4 8V7Z"/><path d="M3 20 7 12h15l-4 8H3Z"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v6h5"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5m4-4 4-4-4-4m4 4H9"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 11v6m0-10h.01"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Zm0 6v5m0 3h.01"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+</svg>{{end}}
 {{define "layout"}}<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
 <meta name="robots" content="noindex, nofollow">
 <title>{{template "title" .}} · Magnetico</title>
 <link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "theme.js"}}"></script>
+<script src="{{asset "app.js"}}" defer></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
+{{template "sprite"}}
+<header class="site-header"><div class="header-inner">
+<a class="brand" href="/" aria-label="Magnetico home"><span class="brand-icon">{{template "icon" "magnet"}}</span><span>magnetico</span></a>
 {{block "nav" .}}{{end}}
-<main>
+<div class="header-end">
+<button type="button" class="header-action" id="theme-toggle" hidden aria-label="Theme: system" title="Theme: system">{{template "icon" "monitor"}}<span class="theme-label">System</span></button>
+{{block "user" .}}{{end}}
+</div>
+</div></header>
+<main id="main" class="container" tabindex="-1">
 {{template "content" .}}
 </main>
+<footer class="site-footer container"><span>Magnetico</span><span>Private torrent index</span></footer>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
 {{end}}

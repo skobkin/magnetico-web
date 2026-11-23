@@ -1,6 +1,6 @@
 {{define "title"}}{{.Heading}}{{end}}
 {{define "content"}}
-<h1>{{.Heading}}</h1>
+<div class="empty-state"><h1>{{.Heading}}</h1>
 <p>{{.Message}}</p>
-{{if .LinkHref}}<p><a href="{{.LinkHref}}">{{.LinkText}}</a></p>{{end}}
+{{if .LinkHref}}<a class="btn small" href="{{.LinkHref}}">{{.LinkText}}</a>{{end}}</div>
 {{end}}

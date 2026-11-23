@@ -1,0 +1,36 @@
+dark
+  text       on bg        15.63 
+  text       on surface   14.37 
+  subtext    on surface    8.97 
+  subtext    on raised     8.12 
+  muted      on surface    5.80 
+  muted      on raised     5.25 
+  muted      on bg         6.30 
+  accent     on surface    8.67 
+  accent     on bg         9.43 
+  accent     on accentbg   6.82 
+  accent     on hover      7.19 
+  danger     on dangerbg   7.22 
+  text       on dangerbg  12.55 
+  primaryfg  on accent     8.53 
+  focus      on bg        12.22 
+  focus      on surface   11.24 
+  border     on surface    3.65 (non-text >=3 ok)
+light
+  text       on bg        13.71 
+  text       on surface   14.62 
+  subtext    on surface    5.66 
+  subtext    on raised     5.07 
+  muted      on surface    5.18 
+  muted      on raised     4.64 
+  muted      on bg         4.85 
+  accent     on surface    5.23 
+  accent     on bg         4.91 
+  accent     on accentbg   4.66 
+  accent     on hover      4.78 
+  danger     on dangerbg   5.19 
+  text       on dangerbg  13.20 
+  primaryfg  on accent     5.23 
+  focus      on bg         5.64 
+  focus      on surface    6.02 
+  border     on surface    3.72 (non-text >=3 ok)

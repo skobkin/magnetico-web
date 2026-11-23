@@ -1,17 +1,29 @@
 {{define "nav"}}{{template "navbar" .}}{{end}}
-{{define "title"}}Torrent{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "title"}}Torrent details{{end}}
 {{define "content"}}
-<p><a href="/torrents">&larr; Torrents</a></p>
-<h1><bdi>{{template "segs" .Name}}</bdi></h1>
-<dl>
-<dt>Size</dt><dd>{{.Size}}</dd>
-<dt>Files</dt><dd>{{.Files}}</dd>
-<dt>Discovered</dt><dd><time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></dd>
-<dt>Info hash</dt><dd><code>{{.InfoHash}}</code></dd>
-<dt>Magnet (no trackers)</dt><dd><a href="{{.Magnet}}">Open magnet link</a></dd>
-</dl>
-<section id="file-browser" data-mode="{{.Mode}}" data-tree-url="{{.TreeURL}}" data-dir-url="{{.DirURL}}">
-<h2>Files</h2>
-<noscript><p>The file browser needs JavaScript. Everything else on this page works without it.</p></noscript>
+<div class="detail-search"><form class="searchbox" method="get" action="/torrents" role="search">
+<div class="search-input-wrap">{{template "icon" "search"}}<input type="search" name="q" maxlength="512" aria-label="Search torrents" placeholder="Torrent title or 40-character info hash" autocomplete="off"></div>
+<button type="submit" class="btn primary">Search</button>
+</form></div>
+<nav class="breadcrumbs" aria-label="Breadcrumbs"><a href="/torrents">Search</a>{{template "icon" "right"}}<span class="crumb-current" aria-current="page">Torrent details</span></nav>
+<div class="page-intro detail-title">
+<div class="page-title-wrap"><h1><bdi>{{template "segs" .Name}}</bdi></h1><p>Torrent metadata</p></div>
+<div class="page-actions">
+<button type="button" class="btn primary" data-copy="{{.Magnet}}" data-copied="Magnet link copied" hidden>{{template "icon" "copy"}} Copy magnet</button>
+<a class="btn" href="{{.Magnet}}">{{template "icon" "magnet"}} Open magnet</a>
+</div></div>
+<div class="metadata-grid">
+<div class="meta-item"><span class="meta-label">Size</span><span class="meta-value">{{.Size}}</span></div>
+<div class="meta-item"><span class="meta-label">Files</span><span class="meta-value">{{.Files}}</span></div>
+<div class="meta-item"><span class="meta-label">Discovered</span><span class="meta-value"><time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></span></div>
+</div>
+<div class="infohash"><div><span class="meta-label">Info hash (SHA-1)</span><code>{{.InfoHash}}</code></div>
+<div class="hash-copy"><button type="button" class="btn small" data-copy="{{.InfoHash}}" data-copied="Info hash copied" hidden>{{template "icon" "copy"}} Copy hash</button></div></div>
+<section class="section-card contents-card" aria-labelledby="contents-heading">
+<div class="section-card-head"><div><h2 id="contents-heading">Contents</h2><p>Browse this torrent without leaving the page</p></div><span class="subtext small">{{.Files}} {{if eq .Files 1}}file{{else}}files{{end}}</span></div>
+<div id="file-browser" class="file-browser-root" data-mode="{{.Mode}}" data-tree-url="{{.TreeURL}}" data-dir-url="{{.DirURL}}" data-files="{{.Files}}">
+<noscript><div class="file-nojs"><strong>The file browser needs JavaScript.</strong><p class="subtext small">Turn JavaScript on to browse this torrent's files. Search, details and everything else on this page work without it.</p></div></noscript>
+</div>
 </section>
 {{end}}

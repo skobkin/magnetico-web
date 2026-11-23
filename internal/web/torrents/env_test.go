@@ -283,7 +283,7 @@ func (c *client) link(rel string) string {
 	return ""
 }
 
-var rowIDRe = regexp.MustCompile(`<td class="name"><a href="/torrents/(\d+)"`)
+var rowIDRe = regexp.MustCompile(`<td class="col-name"><a class="name-link" href="/torrents/(\d+)"`)
 
 func (c *client) rowIDs() []int32 {
 	var out []int32

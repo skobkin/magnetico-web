@@ -1,6 +1,7 @@
 {{define "title"}}{{.Status}} {{.Heading}}{{end}}
 {{define "content"}}
-<h1>{{.Heading}}</h1>
+<div class="empty-state"><h1>{{.Heading}}</h1>
 <p>{{.Message}}</p>
-{{if .RequestID}}<p class="meta">Request ID: <code>{{.RequestID}}</code></p>{{end}}
+{{if .RequestID}}<p class="muted small">Request ID: <code>{{.RequestID}}</code></p>{{end}}
+<a class="btn small" href="/">Back to search</a></div>
 {{end}}

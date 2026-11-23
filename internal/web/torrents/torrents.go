@@ -162,6 +162,7 @@ type option struct {
 
 type listRow struct {
 	Href                      string
+	Magnet                    template.URL // tracker-less magnet link: hex hash and query-escaped name only
 	Name                      []pathfmt.Segment
 	Size                      string
 	Files                     int32
@@ -170,14 +171,24 @@ type listRow struct {
 
 type listPage struct {
 	chrome
-	Q                                      string
-	Query                                  bool // a usable query is active
-	Lookup                                 bool
-	Ignored                                int
-	Error                                  string
-	Rows                                   []listRow
-	Prev, Next                             string
-	SortOptions, OrderOptions, SizeOptions []option
+	Q                      string
+	Query                  bool // a usable query is active
+	Lookup                 bool
+	Ignored                int
+	Error                  string
+	Rows                   []listRow
+	Prev, Next             string
+	ByOptions, SizeOptions []option
+	Heads                  []head
+}
+
+// head is one column header of the results table. Sortable columns are plain
+// links (so sorting works without JavaScript); the link flips the direction
+// of the active column and starts the others in their natural direction.
+type head struct {
+	Label, Class    string
+	Href            string // "" for a column that cannot be sorted now
+	AriaSort, Arrow string
 }
 
 func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +196,13 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	page := listPage{chrome: h.chrome(r), Q: truncate(q.Get("q"), search.MaxQueryBytes)}
 
-	p, err := search.ParseParams(q.Get("q"), q.Get("sort"), q.Get("order"), q.Get("size"), q.Get("cursor"))
+	sortParam, orderParam := q.Get("sort"), q.Get("order")
+	if by := q.Get("by"); by != "" { // the view-options form sends "sort:order"
+		if sp, op, found := strings.Cut(by, ":"); found {
+			sortParam, orderParam = sp, op
+		}
+	}
+	p, err := search.ParseParams(q.Get("q"), sortParam, orderParam, q.Get("size"), q.Get("cursor"))
 	var res search.Result
 	if err == nil {
 		page.Query = !p.Query.Empty()
@@ -239,9 +256,11 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 	page.Lookup = res.Lookup
 	for _, t := range res.Items {
 		hd, iso := when(t.DiscoveredOn)
+		hash := fmt.Sprintf("%x", t.InfoHash)
 		page.Rows = append(page.Rows, listRow{
-			Href: "/torrents/" + strconv.FormatInt(int64(t.ID), 10),
-			Name: pathfmt.Display(t.Name), Size: formatSizeShort(t.TotalSize), Files: t.FileCount,
+			Href:   "/torrents/" + strconv.FormatInt(int64(t.ID), 10),
+			Magnet: template.URL("magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(t.Name)), // #nosec: hex and escaped text only
+			Name:   pathfmt.Display(t.Name), Size: formatSizeShort(t.TotalSize), Files: t.FileCount,
 			Discovered: hd, DiscoveredISO: iso,
 		})
 	}
@@ -288,13 +307,54 @@ func listLink(p search.Params, rawQ, cursor string) string {
 }
 
 func (pg *listPage) setOptions(p search.Params) {
-	for _, s := range []search.Sort{search.SortDiscovered, search.SortSize, search.SortName} {
-		pg.SortOptions = append(pg.SortOptions, option{s.String(), map[search.Sort]string{
-			search.SortDiscovered: "Newest", search.SortSize: "Size", search.SortName: "Name"}[s], s == p.Sort})
+	type by struct {
+		sort  search.Sort
+		desc  bool
+		label string
 	}
-	pg.OrderOptions = []option{{"desc", "Descending", p.Desc}, {"asc", "Ascending", !p.Desc}}
+	opts := []by{
+		{search.SortDiscovered, true, "Newest first"}, {search.SortDiscovered, false, "Oldest first"},
+		{search.SortSize, true, "Largest first"}, {search.SortSize, false, "Smallest first"},
+	}
+	if len(p.Query.Terms) > 0 {
+		opts = append(opts, by{search.SortName, false, "Name A–Z"}, by{search.SortName, true, "Name Z–A"})
+	}
+	for _, o := range opts {
+		pg.ByOptions = append(pg.ByOptions, option{o.sort.String() + ":" + map[bool]string{true: "desc", false: "asc"}[o.desc], o.label,
+			o.sort == p.Sort && o.desc == p.Desc})
+	}
 	for _, n := range search.PageSizes {
 		pg.SizeOptions = append(pg.SizeOptions, option{strconv.Itoa(n), strconv.Itoa(n) + " per page", n == p.PageSize})
+	}
+	pg.Heads = columnHeads(p, pg.Q)
+}
+
+func columnHeads(p search.Params, rawQ string) []head {
+	lookup := p.Query.InfoHash != nil
+	col := func(label, class string, sort search.Sort, enabled bool) head {
+		h := head{Label: label, Class: class}
+		if lookup || !enabled {
+			return h
+		}
+		desc := sort != search.SortName // natural direction of a column that is not active
+		if p.Sort == sort {
+			h.AriaSort = map[bool]string{true: "descending", false: "ascending"}[p.Desc]
+			h.Arrow = map[bool]string{true: "↓", false: "↑"}[p.Desc]
+			desc = !p.Desc
+		}
+		v := url.Values{"sort": {sort.String()}, "order": {map[bool]string{true: "desc", false: "asc"}[desc]},
+			"size": {strconv.Itoa(p.PageSize)}}
+		if rawQ != "" {
+			v.Set("q", rawQ)
+		}
+		h.Href = "/torrents?" + v.Encode()
+		return h
+	}
+	return []head{
+		col("Name", "col-name", search.SortName, len(p.Query.Terms) > 0),
+		col("Size", "col-size", search.SortSize, true),
+		{Label: "Files", Class: "col-files"},
+		col("Discovered", "col-discovered", search.SortDiscovered, true),
 	}
 }
 

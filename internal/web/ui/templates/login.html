@@ -1,13 +1,19 @@
 {{define "title"}}Sign in{{end}}
 {{define "content"}}
-<h1>Sign in</h1>
-{{if .Error}}<p role="alert">{{.Error}}</p>{{end}}
+<div class="auth">
+<div class="page-kicker">PRIVATE SEARCH</div>
+<h1>Sign in to Magnetico</h1>
+<div class="subtext small">Access to this torrent index is restricted to registered users.</div>
+<section class="section-card"><div class="section-card-body">
+{{if .Error}}<div class="notice error" role="alert">{{template "icon" "alert"}}<span>{{.Error}}</span></div>{{end}}
 <form method="post" action="/login">
 {{template "csrf" .CSRFToken}}
 {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
-<p><label>Username<br><input type="text" name="username" value="{{.Username}}" autocomplete="username" autocapitalize="none" required maxlength="100"></label></p>
-<p><label>Password<br><input type="password" name="password" autocomplete="current-password" required></label></p>
-<p><label><input type="checkbox" name="remember" value="1"{{if .Remember}} checked{{end}}> Keep me signed in on this device</label></p>
-<p><button type="submit">Sign in</button></p>
+<label class="field">Username<input type="text" name="username" value="{{.Username}}" autocomplete="username" autocapitalize="none" required maxlength="100"></label>
+<label class="field">Password<input type="password" name="password" autocomplete="current-password" required></label>
+<label class="check-line"><input type="checkbox" name="remember" value="1"{{if .Remember}} checked{{end}}> Keep me signed in on this device</label>
+<div class="auth-foot"><span></span><button type="submit" class="btn primary">Sign in</button></div>
 </form>
+</div></section>
+</div>
 {{end}}
