@@ -6,6 +6,15 @@ before upgrading.
 
 ## Unreleased 0.8.0 (development branch)
 
+> [!WARNING]
+> **0.8.0 is a major, partially manual, backward-incompatible migration.** It replaces the PHP/Symfony
+> application and the old crawler, stores torrents in a **new database in a new format**, and imports
+> accounts with a separate tool. There is no in-place upgrade, the cutover cannot be fully undone, and
+> several steps need operator decisions (password-hash audit, time zone, administrator accounts,
+> maintenance window). **Do not deploy it over an existing installation.** Follow the step-by-step guide
+> in [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md) and keep the old databases and backups until
+> you have validated the new system.
+
 ### The crawler no longer connects to PostgreSQL (distributed crawler/ingest)
 
 `magnetico crawl` now delivers metadata to a separate **`magnetico ingest`** service over

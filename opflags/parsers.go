@@ -28,7 +28,7 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 
 	active := parser.Active
 	if active == nil {
-		return "", errors.New("no command given; expected one of: crawl, ingest, web, migrate (see --help)")
+		return "", errors.New("no command given; expected one of: crawl, ingest, web, migrate, dev (see --help)")
 	}
 	command := active.Name
 
@@ -80,6 +80,23 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 			return command, nil
 		}
 		if err := o.Web.check(explicit["database"]); err != nil {
+			return "", err
+		}
+	case "dev":
+		if active.Active == nil {
+			return "", errors.New("dev: expected a subcommand; expected: seed-torrents (see --help)")
+		}
+		if len(rest) > 0 {
+			return "", errors.New("dev: unexpected extra argument (see --help)")
+		}
+		// The dev target takes the flag, then its own environment variable;
+		// no configuration file layer and no inheritance from migrate settings.
+		if !explicitInCommand(active.Active)["database"] {
+			if v := os.Getenv(DevDatabaseEnvName); v != "" {
+				o.Dev.SeedTorrents.DatabaseURL = v
+			}
+		}
+		if err := o.Dev.SeedTorrents.check(); err != nil {
 			return "", err
 		}
 	case "migrate":

@@ -1,0 +1,248 @@
+# Running the crawler on a separate machine
+
+`magnetico crawl` discovers torrents on the BitTorrent DHT and has **no database access**. It queues what it finds in a local SQLite file and delivers it over authenticated HTTPS to `magnetico ingest`, which runs next to the main PostgreSQL server. This guide deploys that split: one crawler machine (or several) in a place with a good, DHT-reachable network connection, and the ingest service on the main server behind Traefik.
+
+Normative design: [`docs/specs/crawler-ingest-delivery-v1.md`](specs/crawler-ingest-delivery-v1.md). Release notes and the full option tables: [`UPGRADE.md`](../UPGRADE.md) (0.8.0). Everything below was checked against the implementation (`opflags/`, `internal/crawler`, `internal/ingest/server`, `dht/`, `metadata/`). The two services were run together against local test data and a disposable PostgreSQL; **a live-DHT run was not part of this documentation task** (the live-DHT acceptance is deferred to the release-candidate phase), so the port notes in §5 come from the code, not from observing a live crawler.
+
+> **The ingest token is a shared secret, not an account credential.** It is one environment-only string that you generate yourself and configure identically on the ingest service and on every crawler. It is **not** a user, API or RSS token and cannot be issued, listed or revoked in the web UI. There is no per-crawler identity: rotating it means changing it everywhere (§3).
+
+## 1. Architecture and network flow
+
+```
+ crawler machine                                              main server
+┌─────────────────────────────┐                      ┌──────────────────────────────────────┐
+│ magnetico crawl             │   HTTPS (443)        │ Traefik (TLS termination)            │
+│  DHT ◄── UDP ──► Internet   │ ───────────────────► │   │ plain HTTP, private network      │
+│  peers ◄─ TCP ─► Internet   │  POST /api/ingest/   │   ▼                                  │
+│  SQLite queue (volume)      │       v1/torrents[/exists]  magnetico ingest (:8080)         │
+└─────────────────────────────┘  Authorization:      │   │ SQL                              │
+                                 Bearer <token>      │   ▼                                  │
+                                                     │ PostgreSQL (magneticod + magnetico_ingest)
+                                                     └──────────────────────────────────────┘
+```
+
+- The crawler **initiates every connection to the main server**; the main server never connects to the crawler, and PostgreSQL is **never** exposed to the crawler machine.
+- Delivery is at-least-once and idempotent by infohash. A `202` means the batch is durably committed in the PostgreSQL *queue*; a single consumer inside `ingest` then stores it with the production persistence code.
+- If ingest, Traefik or the network is down, records stay in the crawler's SQLite queue (up to `--queue-max-bytes`) and are sent when delivery works again.
+- The ingest API has exactly two routes, both `POST`, both requiring `Authorization: Bearer <token>`: `/api/ingest/v1/torrents/exists` (existence pre-check, at most 1,024 hashes, 64 KiB body) and `/api/ingest/v1/torrents` (at most 256 records, **17 MiB** body). There is no health endpoint (§7 shows how to check the service).
+
+## 2. Prepare the main server
+
+All of this happens on the main server, with a database you have already initialized.
+
+1. **Schemas.** The torrent schema must exist and, if you are migrating from the legacy version, the torrent import must be complete (`ingest` refuses to start while an import is running or incomplete). Then create the queue schema (idempotent, non-destructive):
+
+   ```bash
+   export MAGNETICO_MIGRATE_DATABASE='postgres://USER:PASSWORD@DB_HOST:5432/DB_NAME?sslmode=require'
+   magnetico migrate schema-init          # only on a fresh database
+   magnetico migrate ingest-schema-init
+   ```
+
+   If the database is the result of a legacy migration, finish the torrent verification and decide about `magnetico migrate cleanup` **before** ingest stores its first torrent: afterwards the tool can no longer remove the migration state (see [`docs/migration_0.8.0.md`](migration_0.8.0.md) §8.3).
+
+2. **PostgreSQL must run with `fsync = on`**; ingest refuses to start otherwise (`MAGNETICO_INGEST_ALLOW_NON_DURABLE_DB=true` exists for development only).
+3. **Run ingest** (`magnetico ingest`). Its settings are environment variables (no config-file layer; flags `--listen`, `--database`, … also exist, see `magnetico ingest --help`):
+
+   | Variable | Meaning | Default |
+   |---|---|---|
+   | `MAGNETICO_INGEST_TOKEN` | the shared secret, **required, at least 32 bytes** | — |
+   | `MAGNETICO_INGEST_DATABASE` | PostgreSQL URL (contains a password: keep it in the environment) | development default |
+   | `MAGNETICO_INGEST_QUEUE_DATABASE` | optional second URL for the `magnetico_ingest` queue (a role with DML on that schema only) | the main URL |
+   | `MAGNETICO_INGEST_LISTEN` | listen address, **plain HTTP** | `127.0.0.1:8080` |
+   | `MAGNETICO_INGEST_QUEUE_MAX_BYTES` | quota of queued + quarantined payload bytes; above it admissions get `503 queue_full` | `2147483648` |
+   | `MAGNETICO_INGEST_CACHE_MAX_BYTES` / `_CACHE_DISABLED` | existence cache | 8 MiB / off |
+
+   Set `GOMEMLIMIT=256MiB` and give the container a 1 GiB memory limit (the measured staging recommendation in `UPGRADE.md`). When ingest runs in a container behind Traefik, listen on `0.0.0.0:8080` **inside the container network only** and publish no host port. Any variable starting with `MAGNETICO_INGEST_` that is not in the table above is rejected at startup.
+
+## 3. Generate and distribute the shared secret
+
+Generate a random value of at least 32 bytes. This produces 64 URL-safe characters (48 random bytes):
+
+```bash
+openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n'
+```
+
+- Store it in a secret manager or in root-only files (`chmod 600`) on the two machines. **Do not** commit it, put it in `docker-compose.yml` literally, pass it as a command-line argument (it would show in process listings; there is no flag for it anyway) or paste it into tickets and logs.
+- Configure the **identical** value as `MAGNETICO_INGEST_TOKEN` on the ingest service and as `MAGNETICO_CRAWL_INGEST_TOKEN` on each crawler. The two names differ; the value is the same. The crawler ignores `MAGNETICO_INGEST_*` variables, so setting `MAGNETICO_INGEST_TOKEN` on the crawler machine does nothing (and the crawler still fails without `MAGNETICO_CRAWL_INGEST_TOKEN`); it rejects any unknown `MAGNETICO_CRAWL_*` variable, and a stray `MAGNETICO_CRAWL_DATABASE` is refused outright (the crawler no longer has a database).
+- No stray whitespace: a trailing newline or space is part of the value and makes the two sides differ. With Docker, use an `--env-file`/`.env` entry `NAME=value` with no quotes, or Docker secrets exported into the environment by your entrypoint.
+- **Rotation:** generate a new value, update the ingest service and restart it, then update and restart each crawler. In the gap the crawler gets `401`, keeps everything queued and retries slowly (§9); nothing is lost. Anyone holding the old value can submit records until ingest is restarted with the new one, so rotate immediately if it leaks.
+
+## 4. Traefik on the main server
+
+The ingest service speaks plain HTTP; Traefik terminates TLS. The crawler accepts only an `https://` ingest URL (plain `http://` only to a loopback host) and **never follows redirects**: a redirect (for example an HTTP→HTTPS redirect hit by a wrong URL) is treated as an unexpected status and the records stay queued.
+
+Recommendations:
+
+- Use a **dedicated hostname** for ingest (`ingest.example.org`), separate from the web UI, with a valid public certificate (for example from Let's Encrypt via Traefik's ACME resolver). The crawler verifies the certificate against the system roots with the host name from the URL; there is no option to skip verification. For a private CA, mount the CA bundle into the crawler container and point `SSL_CERT_FILE` at it (this replaces the system roots for the whole process).
+- Route only the ingest API: `Host(ingest.example.org) && PathPrefix(/api/ingest/v1)`. If the crawler URL carries a path prefix (`https://example.org/ingest`), the crawler appends `/api/ingest/v1/...` to it, so your router must strip or map that prefix accordingly; a dedicated host avoids this.
+- **Allow request bodies of at least 17 MiB** on `/api/ingest/v1/torrents` (the largest permitted batch). Do not add a smaller body-size middleware, and watch any WAF or CDN in front of Traefik.
+- The crawler gives a submit 60 s and an existence lookup 10 s. Traefik's entry point `respondingTimeouts` (`readTimeout`, `writeTimeout`, `idleTimeout`) must not cut a 17 MiB upload from a slow link earlier than that. The option names and your Traefik version's defaults **were not verified here**: check the documentation of your version and set them explicitly (`web-deployment.md` §3 has the same caveat).
+- Restrict who can reach it if you can: the crawler's public IP(s) via Traefik's IP allow-list middleware (the name depends on the version: `ipAllowList` in v3, `ipWhiteList` in v2), or a private network or VPN between the machines. The token is the authentication; network restriction is defence in depth. Keep access logs free of the `Authorization` header (Traefik does not log it by default).
+
+<details>
+<summary>Example: ingest and Traefik labels on the main server (Docker Compose, placeholders)</summary>
+
+```yaml
+# docker-compose.ingest.yml — main server. PLACEHOLDER image: no release image has been published yet.
+services:
+  ingest:
+    image: registry.example.org/magnetico:0.8.0     # PLACEHOLDER: pin the release version (or a digest)
+    entrypoint: ["magnetico"]                        # adjust to the published image's entrypoint
+    command: ["ingest"]
+    restart: unless-stopped
+    environment:
+      GOMEMLIMIT: 256MiB
+      MAGNETICO_INGEST_LISTEN: 0.0.0.0:8080
+    env_file:
+      - ./ingest.env          # MAGNETICO_INGEST_TOKEN=..., MAGNETICO_INGEST_DATABASE=... (chmod 600, never committed)
+    mem_limit: 1g
+    stop_grace_period: 60s
+    networks: [traefik, db]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.magnetico-ingest.rule=Host(`ingest.example.org`) && PathPrefix(`/api/ingest/v1`)
+      - traefik.http.routers.magnetico-ingest.entrypoints=websecure
+      - traefik.http.routers.magnetico-ingest.tls.certresolver=letsencrypt   # your resolver's name
+      - traefik.http.services.magnetico-ingest.loadbalancer.server.port=8080
+networks:
+  traefik:
+    external: true
+  db:
+    external: true            # a network that can reach PostgreSQL
+```
+
+</details>
+
+## 5. Network exposure: ports, NAT and firewall (crawler machine)
+
+| Direction | Protocol / port | Purpose | Notes |
+|---|---|---|---|
+| **Outbound** | TCP 443 to the ingest host | HTTPS delivery and existence checks | The only connection to the main server. Honours `HTTPS_PROXY`/`NO_PROXY` from the environment. |
+| **Outbound** | UDP to the bootstrap nodes: `dht.tgragnato.it` ports 80, 443, 1337, 6969, 6881, 25401 (the defaults of `--bootstrap-node`) | DHT bootstrap | Plus DNS. Override with `MAGNETICO_CRAWL_BOOTSTRAP_NODE` (comma separated `host:port`). |
+| **Outbound** | UDP to arbitrary DHT nodes | DHT traffic | Rate-limited by `--max-rps` (default 500 requests per second). |
+| **Outbound** | TCP to arbitrary peers and ports | fetching torrent metadata from peers | Bounded by `--leech-max-active` (default 32 concurrent metadata downloads); `--leech-max-n` (default 1000) caps the peers tried per infohash. Do not restrict outbound TCP to a port list. |
+| **Inbound** | **UDP on the indexer port** | DHT queries and replies (including `announce_peer`, which is how infohashes reach the crawler) | See below. |
+
+**There is no inbound TCP listener and no HTTP port on the crawler.** The crawler opens one UDP socket per `--indexer-addr` entry (`MAGNETICO_CRAWL_INDEXER_ADDR`, comma separated). The default is `0.0.0.0:0`: the operating system picks a **random UDP port at every start**, which cannot be opened or forwarded in advance. Behind a firewall or NAT, give it a fixed port and allow/forward that UDP port:
+
+- `MAGNETICO_CRAWL_INDEXER_ADDR=0.0.0.0:6881` (any free UDP port works; 6881 is only an example), and allow inbound UDP on that port from anywhere.
+- **Docker** (default bridge network): publish it, `ports: ["6881:6881/udp"]`. Outbound traffic works through Docker's NAT, but nothing reaches an unpublished UDP port. `network_mode: host` is the alternative.
+- **Home or office NAT:** forward UDP 6881 (the same port externally) to the crawler machine, and give that machine a fixed LAN address.
+- A host firewall: allow UDP 6881 in, established/related traffic back, and all the outbound traffic above.
+- Without inbound reachability the crawler can still send queries, but you should expect far fewer discoveries; check the counters (§7) after the first hour.
+- For several crawlers on one IP, give each its own port; each crawler needs its **own queue directory** (it is locked: one crawler per queue).
+- The bootstrap hosts and the DHT depend on outbound UDP; some VPS providers filter it, and many residential connections cap UDP flows. If `leech started` stays at 0 while the process is healthy, suspect the network first.
+
+The main server needs inbound TCP 443 (Traefik) only; PostgreSQL stays on the private network.
+
+## 6. The crawler container and its persistent queue
+
+Image: **no release image has been published yet** (the repository has no Dockerfile and the CI publish step is disabled), so every image reference in this guide is a **placeholder**. When the release exists, pin the exact release (`…/magnetico:0.8.0`, or better its digest `@sha256:…`) and pull it explicitly:
+
+```bash
+docker pull registry.example.org/magnetico:0.8.0          # PLACEHOLDER reference
+docker image inspect --format '{{index .RepoDigests 0}}' registry.example.org/magnetico:0.8.0   # record the digest
+```
+
+Never use `latest`. Check the published image's entrypoint and user, and adapt the Compose example (`entrypoint`, the user the volume must be writable by) to it.
+
+Settings (environment, which is the recommended way in containers; every setting except the token also has a flag and a YAML key; see `UPGRADE.md`):
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `MAGNETICO_CRAWL_INGEST_URL` | `https://ingest.example.org` | required |
+| `MAGNETICO_CRAWL_INGEST_TOKEN` | the shared secret, **at least 32 bytes, environment only** | required |
+| `MAGNETICO_CRAWL_QUEUE_DIR` | directory of the SQLite queue | `magnetico-crawl-queue` (relative to the working directory: set an absolute path, e.g. `/data`) |
+| `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` | limit of queued + quarantined payload bytes; at the limit new metadata is dropped and counted | `1073741824` |
+| `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE` | concurrent metadata downloads | `32` |
+| `MAGNETICO_CRAWL_INDEXER_ADDR` | UDP bind address(es), see §5 | `0.0.0.0:0` |
+
+**The queue volume.** Mount a persistent volume at the queue directory (`/data` below). It must be a **local filesystem that honours `fsync`** (ext4 or xfs; not NFS or SMB). The directory is created `0700`, holds `queue.db` (+ WAL) and a `LOCK` file, and must be writable by the container's user. Provision disk beyond the byte limit: the limit counts payload bytes only, not WAL or index overhead. The crawler's memory use is small (about 30 MiB RSS measured); it needs no `GOMEMLIMIT`.
+
+<details>
+<summary>Example: Docker Compose for the remote crawler (placeholders)</summary>
+
+```yaml
+# docker-compose.crawler.yml — crawler machine. PLACEHOLDER image: no release image has been published yet.
+services:
+  crawler:
+    image: registry.example.org/magnetico:0.8.0     # PLACEHOLDER: pin the release version (or a digest)
+    entrypoint: ["magnetico"]                        # adjust to the published image's entrypoint
+    command: ["crawl"]
+    restart: unless-stopped
+    environment:
+      MAGNETICO_CRAWL_INGEST_URL: https://ingest.example.org
+      MAGNETICO_CRAWL_QUEUE_DIR: /data
+      MAGNETICO_CRAWL_INDEXER_ADDR: 0.0.0.0:6881
+    env_file:
+      - ./crawler.env           # MAGNETICO_CRAWL_INGEST_TOKEN=<the shared secret>  (chmod 600, never committed)
+    ports:
+      - "6881:6881/udp"         # the DHT socket; allow/forward the same UDP port on your firewall/NAT
+    volumes:
+      - crawler-queue:/data     # persistent, local, fsync-honouring storage
+    stop_grace_period: 60s      # a clean shutdown needs up to ~45 s (see §8)
+    init: true
+volumes:
+  crawler-queue:
+```
+
+</details>
+
+Keep `crawler.env` out of version control (it contains only `MAGNETICO_CRAWL_INGEST_TOKEN=…`). Do **not** add a `MAGNETICO_CRAWL_DATABASE` line or any other `MAGNETICO_CRAWL_*` name that is not a crawler setting: unknown names stop the crawler at startup with a list of the known ones (the table above lists the common ones; `magnetico crawl --help` has all flags).
+
+## 7. Start, verify and operate
+
+**Order:** (1) PostgreSQL and the schemas (§2), (2) ingest and Traefik, (3) check the path from the crawler machine, (4) start the crawler.
+
+**Check the path before starting the crawler.** From the crawler machine, with the real token in `$TOKEN` (an empty hash list is a valid request):
+
+```bash
+curl -sS -i -X POST https://ingest.example.org/api/ingest/v1/torrents/exists \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"info_hashes":[]}'
+```
+
+`200` with `{"exists":[],"missing":[],"unknown":[]}` means DNS, TLS, Traefik, the token and ingest's database all work. `401` is a token mismatch, `405` means the request was not a `POST`, a TLS error means certificate or name trouble, `502/503/504` come from Traefik (ingest is down or unreachable) or are ingest's own `503` (`queue_full`, `storage_unavailable`, `busy`).
+
+**Start:** `docker compose -f docker-compose.crawler.yml up -d`. There is no health endpoint on the crawler either; use the logs.
+
+- At start the crawler logs `crawler started: delivering to https://ingest.example.org, local queue /data (limit … bytes), 32 active leeches at most` (credentials and query strings are never included).
+- Every 5 minutes it logs `crawl summary: …`. After the first hour look for `leech started` and `joined` growing, `enqueue appended` growing, `send acked` growing, **`send … unauthorized=0`**, and `queue records=` staying small (it grows while delivery is blocked and drains afterwards). `quarantine records=` should stay 0 (§9).
+- On the main server, ingest logs `ingest summary: …` (also every 5 minutes: `submit requests/accepted/rejected`, `auth_failures`, `consumer stored`) and the queue state. `SELECT count(*) FROM magneticod.torrents;` rises; `SELECT count(*) FROM magnetico_ingest.queue;` stays near 0 while the consumer keeps up.
+
+**Shutdown.** Stop with `docker compose stop` (SIGTERM; give it `stop_grace_period: 60s`). The crawler stops the DHT, cancels leeches, commits what is buffered (5 s), lets the sender finish its request (30 s) and closes the queue (10 s wait). Queued records are never discarded on shutdown. Exit status 3 means the SQLite writer was stuck in the operating system: the process exits and SQLite recovers the queue at the next start.
+
+**Queue recovery and diagnostics.**
+
+- After a crash, kill, power loss or exit 3, simply start the crawler again; committed records are on disk and are delivered (idempotently).
+- To check the queue file, **stop the crawler first** (the directory is locked), then run the diagnostic against the same volume, for example `docker compose -f docker-compose.crawler.yml run --rm --no-deps crawler crawl check-queue --queue-dir /data` (add `--full` for the slower `integrity_check`). Exit 0: healthy; exit 1: integrity check failed (committed data is never repaired automatically: keep a copy of the volume and see below); exit 2: it could not run (the directory is locked by a running crawler, or it holds no `queue.db`).
+- If the queue is corrupt, copy the volume somewhere safe before doing anything else. Starting with an empty volume loses only the records that were still queued: the DHT keeps announcing the same torrents, so they will be rediscovered over time. The crawler holds no other state.
+- Moving a crawler to another machine: stop it, copy the volume, start it there with the same token.
+
+## 8. Upgrades and token rotation
+
+Upgrade by pinning the next release in the image reference, `docker compose pull`, `docker compose up -d`. Deploy ingest first when a release changes the ingest API (check `UPGRADE.md`), then the crawlers; a newer crawler that the server rejects stops quarantining after a run of consecutive rejections and keeps the records (`guard_trips` in the summary). For token rotation see §3.
+
+## 9. Troubleshooting
+
+Log lines are quoted as the crawler prints them; the crawler's log lines never include the token, a URL query or record content.
+
+| Symptom | Likely cause and what to do |
+|---|---|
+| Crawler exits at start: `MAGNETICO_CRAWL_INGEST_TOKEN is required and must be at least 32 bytes long` | Token missing in the container's environment, too short, or not passed (`env_file` path). Check with `docker compose config` (careful: it prints values; do not paste its output anywhere). |
+| Crawler exits at start: `unknown environment variable MAGNETICO_CRAWL_…` | A misspelt or invented `MAGNETICO_CRAWL_*` name (the message lists the known ones). `MAGNETICO_CRAWL_DATABASE` is refused too, with a pointer to `UPGRADE.md`. |
+| `send: ingest answered HTTP 401: check the ingest token on both sides; records stay queued` (and `unauthorized=` rising) | The two tokens differ: whitespace, a quote character, a different value after rotation, or ingest was not restarted. Ingest counts them as `auth_failures`. Retried with a long backoff; nothing is lost. |
+| `send: ingest unavailable (status 0)` | Status 0 is a transport failure: DNS, connection refused/timeout, TLS handshake or certificate error. Run the §7 `curl` from the crawler machine (`curl -v` shows the certificate and the failing step). Check the system clock (certificate validity), the certificate chain (Traefik must serve the full chain), `HTTPS_PROXY` in the container, a custom CA (`SSL_CERT_FILE`). Records stay queued and are retried with a backoff of 1 s growing to 60 s. |
+| `send: ingest unavailable (status 502/503/504)` | Traefik cannot reach ingest (container down, wrong port or network label) or ingest answered `503` (`queue_full`: the PostgreSQL queue passed `MAGNETICO_INGEST_QUEUE_MAX_BYTES`, so check that the consumer is running and PostgreSQL is healthy; `storage_unavailable`; `busy`). |
+| `send: unexpected HTTP status 301/302/307/308 …` | A redirect: wrong scheme or host in the URL, or Traefik redirecting. The crawler does not follow redirects. Use the exact final `https://` URL. |
+| `send: a rejection that does not identify the record was received (HTTP 413 …)` or `HTTP 400 …` with a non-ingest body | A proxy or the server rejected a request the crawler considers valid: a body limit below 17 MiB in Traefik or in front of it, or a version mismatch. The record is kept. |
+| `send: … consecutive records were rejected as invalid … quarantining is suspended` | The server is rejecting everything: wrong ingest version or limits. Records are kept; fix the deployment. |
+| `quarantine records=` above 0 | A record was permanently rejected (`send: ingest rejected a record as …; it was moved to the local quarantine`). Nothing is deleted automatically; quarantined bytes count toward the quota. Inspect with `sqlite3 /data/queue.db 'SELECT reason_code, count(*) FROM quarantine GROUP BY 1'` while the crawler is stopped; the ingest-side quarantine is described in `UPGRADE.md`. |
+| `could not open the local queue in /data: …` | The directory is not writable by the container's user, the volume is missing, `queue.db` belongs to another schema version (refused to start), or another crawler holds the directory (`ErrLocked`: one crawler per queue; a second container or a `docker run` against the same volume). |
+| `enqueue: the local queue is full; new metadata is dropped until the sender frees space` | Delivery has been blocked long enough to fill `QUEUE_MAX_BYTES`. Fix the delivery problem; raise the limit only with matching disk headroom. Dropped records are rediscovered later. |
+| `the local queue failed (…); committed records stay on disk. Shutting down.` (exit 1) | A disk error (full disk, I/O error, a filesystem that does not honour `fsync`). Fix the storage, run `check-queue`, restart. |
+| `crawl summary:` shows `leech started=0` for hours, process healthy | No DHT traffic reaches the crawler or it cannot fetch metadata: inbound UDP port not published or forwarded (§5), outbound UDP/TCP filtered by the provider, bootstrap host not resolving. |
+| `precheck: the ingest existence lookup failed; continuing without it (fail-open…)` | The existence endpoint is unreachable or erroring; the crawler keeps working (more duplicate downloads) and retries. Same causes as `status 0` above. |
+| Ingest refuses to start (`import … incomplete`, `fsync`, schema missing) | Finish and verify the torrent import first (`docs/migration_0.8.0.md`), use PostgreSQL with `fsync=on`, run `magnetico migrate ingest-schema-init`. |
+| Torrents never appear although the queue is delivered | `SELECT count(*) FROM magnetico_ingest.queue` high: the single consumer is blocked or erroring (read ingest's log); `quarantine` on the ingest side non-empty: see `UPGRADE.md`. |

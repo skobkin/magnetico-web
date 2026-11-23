@@ -66,9 +66,18 @@ A single binary `magnetico` with the following subcommands:
   source drift and container restarts — finishing with a full
   source↔target equality pass; see
   [`docs/wip/04D-end-to-end-validation-report.md`](docs/wip/04D-end-to-end-validation-report.md).
-- `web` — explicit not-implemented placeholder that exits non-zero (the
-  authenticated web UI will be designed from the historical PHP application in
-  a later phase).
+- `migrate users` — the one-transaction import of the legacy PHP accounts,
+  invitations and API tokens (as legacy RSS tokens) into the `magnetico_web`
+  schema, with a read-only `--dry-run` and a `verify` subcommand; see
+  [`docs/web-deployment.md`](docs/web-deployment.md) §10.
+- `web` — the authenticated web UI and JSON API (search, details and file
+  browser, accounts, API v2, RSS, magnet links), plus the operator commands
+  `web user …` and `web tracker …`; see
+  [`docs/web-deployment.md`](docs/web-deployment.md).
+- `dev seed-torrents` — a development helper that adds a deterministic
+  synthetic torrent dataset (101 torrents, one with 10,000 files) to a
+  **disposable** 0.8.0 database for manual testing; see
+  [`docs/development-fixtures.md`](docs/development-fixtures.md).
 
 Removed compared to upstream (recoverable from Git history): the upstream Go
 web UI and Basic Auth, the JSONL export/import modes, and the SQLite,
@@ -78,14 +87,25 @@ file index), RabbitMQ, ZeroMQ and Bitmagnet backends.
 Crawler flags are unchanged from upstream; `--config-file-path` is now a
 global option that must precede the subcommand.
 
+## Documentation
+
+| Guide | Audience |
+|---|---|
+| [`UPGRADE.md`](UPGRADE.md) | Breaking changes per release; the 0.8.0 warning |
+| [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md) | Step-by-step migration from the legacy PHP/Symfony version |
+| [`docs/crawler.md`](docs/crawler.md) | Running `magnetico crawl` on a separate machine with `magnetico ingest` next to PostgreSQL |
+| [`docs/web-deployment.md`](docs/web-deployment.md) | Web service configuration, database roles, reverse proxy, administrator commands, user migration |
+| [`docs/development-fixtures.md`](docs/development-fixtures.md) | Synthetic torrents for manual testing |
+| [`docs/specs/`](docs/specs/) | Normative contracts |
+
 ## Development status and remaining work
 
-The storage layer (codec + PostgreSQL persistence), the crawler and the
-migration toolchain are implemented and validated. The remaining major
-workstreams for 0.8.0 are the replacement web UI, the application-level
-torrent and user data migration, CI integration, and production cutover
-planning — the task documents live in
-[`docs/wip/`](docs/wip/), each reviewed separately before code changes.
+The storage layer (codec + PostgreSQL persistence), the crawler/ingest delivery,
+the migration toolchain, the web UI and API (milestones W1–W7) and the user
+migration (W8) are implemented; reviews of the latest milestones are tracked in
+[`docs/wip/`](docs/wip/). Not done: milestone W9, CI and OCI image publishing,
+release-candidate testing (including live-DHT acceptance) and the production
+cutover. No 0.8.0 release exists yet.
 
 ## Build and test
 

@@ -20,6 +20,7 @@ type OpFlags struct {
 	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer)."`
 	Web     WebOptions     `command:"web" description:"Run the authenticated web UI service (health and robots routes so far; search, accounts and API arrive in later milestones). Subcommands user and tracker are the operator CLI." subcommands-optional:"true"`
 	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
+	Dev     DevOptions     `command:"dev" description:"Development helpers. NOT for production databases: seed-torrents writes synthetic torrents into an initialized 0.8.0 database." subcommands-optional:"true"`
 }
 
 // MigrateOptions carries the subcommands of `migrate`.
@@ -350,4 +351,35 @@ type UsersVerifyOptions struct {
 
 	// SourceDatabaseURL is the read-only legacy PHP database (schema "users").
 	SourceDatabaseURL string `yaml:"migrateUsersSourceDatabaseURL"`
+}
+
+// DevOptions carries the `dev` command group. SeedTorrents is its only
+// subcommand; bare `dev` is a usage error.
+type DevOptions struct {
+	SeedTorrents SeedTorrentsOptions `command:"seed-torrents" description:"Add the deterministic synthetic torrent dataset (101 torrents, one with 10,000 files) to an initialized 0.8.0 database, through the production persistence API. Refuses any database that holds other torrents; never updates or deletes anything; no network access. Development only (docs/development-fixtures.md)."`
+}
+
+// DevDatabaseEnvName is the environment variable of the dev target DSN.
+const DevDatabaseEnvName = "MAGNETICO_DEV_DATABASE"
+
+// SeedTorrentsOptions carries the options of `dev seed-torrents`. The target
+// is deliberately NOT inherited from the migrate settings and has no default:
+// it must be given explicitly (flag or MAGNETICO_DEV_DATABASE), and the
+// confirmation flag is CLI-only, so a configuration file or an environment
+// can never turn a production target into a seed target by accident.
+type SeedTorrentsOptions struct {
+	DatabaseURL string `long:"database" description:"URL of the DISPOSABLE development PostgreSQL database (required, no default; or MAGNETICO_DEV_DATABASE)."`
+	DryRun      bool   `long:"dry-run" description:"Run every check and report what would be written; write nothing."`
+	Confirm     bool   `long:"confirm-development-database" description:"Attest that the target is a disposable development database (required unless --dry-run)."`
+}
+
+// check validates the seed options after the DSN layers were applied.
+func (o *SeedTorrentsOptions) check() error {
+	if strings.TrimSpace(o.DatabaseURL) == "" {
+		return errors.New("dev seed-torrents: a target database is required (--database or " + DevDatabaseEnvName + "); there is no default")
+	}
+	if !o.DryRun && !o.Confirm {
+		return errors.New("dev seed-torrents: refusing to write without --confirm-development-database (use --dry-run to preview)")
+	}
+	return nil
 }
