@@ -541,7 +541,7 @@ main {
   text-align:right;
 }
 .data-table .col-discovered {
-  width:154px;
+  width:180px;
   text-align:right;
 }
 .data-table .name-link {
@@ -823,7 +823,7 @@ main {
     width:calc(100% - 30px);
   }
   .data-table .col-discovered {
-    width:125px;
+    width:172px;
   }
 }
 @media(max-width:680px) {
