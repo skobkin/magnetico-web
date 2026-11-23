@@ -39,6 +39,7 @@ import (
 	websearch "github.com/skobkin/magnetico-web/internal/web/search"
 	webserver "github.com/skobkin/magnetico-web/internal/web/server"
 	webtorrents "github.com/skobkin/magnetico-web/internal/web/torrents"
+	webtrackers "github.com/skobkin/magnetico-web/internal/web/trackers"
 	webdb "github.com/skobkin/magnetico-web/internal/web/webdb"
 	"github.com/skobkin/magnetico-web/internal/web/webschema"
 	"github.com/skobkin/magnetico-web/metadata"
@@ -413,7 +414,17 @@ func runWeb(o *opflags.WebOptions) {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}
-	if _, err := webtorrents.Install(srv, webtorrents.Deps{Search: searchSvc, Details: reader, View: viewSvc}); err != nil {
+	// Public tracker list (W7): loaded before the listener opens (startup fails
+	// when it cannot be read), refreshed in the background, shared by the
+	// pages, the API, the feeds and the public /magnet short link.
+	trackerCache := webtrackers.New(webtrackers.NewReader(backend.Pool()), o.TrackerCacheTTL, logger)
+	srv.OnStartup(trackerCache.Load)
+	srv.AddBackground(trackerCache.Run)
+	webtrackers.Install(srv, trackerCache)
+
+	if _, err := webtorrents.Install(srv, webtorrents.Deps{
+		Search: searchSvc, Details: reader, View: viewSvc, Trackers: trackerCache, PublicBase: o.PublicBaseURL,
+	}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}

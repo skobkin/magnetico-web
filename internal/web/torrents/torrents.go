@@ -31,6 +31,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/problem"
 	"github.com/skobkin/magnetico-web/internal/web/search"
 	"github.com/skobkin/magnetico-web/internal/web/server"
+	trackerspkg "github.com/skobkin/magnetico-web/internal/web/trackers"
 	"github.com/skobkin/magnetico-web/internal/web/ui"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -63,11 +64,20 @@ var (
 	_ View     = (*fileview.Service)(nil)
 )
 
+// TrackerList is the ordered public tracker list (the trackers snapshot
+// cache). It is optional: without it magnet links carry no trackers.
+type TrackerList interface{ URLs() []string }
+
 // Deps are the handlers' collaborators.
 type Deps struct {
 	Search  Searcher
 	Details Details
 	View    View
+	// Trackers, when set, adds the configured trackers to every magnet link.
+	Trackers TrackerList
+	// PublicBase is the configured PUBLIC_URL; the details page builds the
+	// public short link from it. Nil hides the short link.
+	PublicBase *url.URL
 }
 
 // Handlers serves the W4 routes.
@@ -259,7 +269,7 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 		hash := fmt.Sprintf("%x", t.InfoHash)
 		page.Rows = append(page.Rows, listRow{
 			Href:   "/torrents/" + strconv.FormatInt(int64(t.ID), 10),
-			Magnet: template.URL("magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(t.Name)), // #nosec: hex and escaped text only
+			Magnet: h.magnet(hash, t.Name),
 			Name:   pathfmt.Display(t.Name), Size: formatSizeShort(t.TotalSize), Files: t.FileCount,
 			Discovered: hd, DiscoveredISO: iso,
 		})
@@ -366,11 +376,30 @@ type detailPage struct {
 	Size, InfoHash            string
 	Files                     int32
 	Discovered, DiscoveredISO string
-	Magnet                    template.URL // built here from hex and a query-escaped name
+	Magnet                    template.URL // built here from hex, a query-escaped name and the tracker list
+	ShortLink                 string       // public /magnet/<hash> link; "" when no public URL is configured
 	// File browser: the backend picks the mode; the page only carries it.
 	Mode    fileview.Mode
 	TreeURL string
 	DirURL  string
+}
+
+// magnet builds the magnet link of a result: hash, name and the tracker list
+// of the snapshot, in their stored order.
+func (h *Handlers) magnet(hashHex, name string) template.URL {
+	var trackers []string
+	if h.d.Trackers != nil {
+		trackers = h.d.Trackers.URLs()
+	}
+	return template.URL(trackerspkg.MagnetURI(hashHex, &name, trackers)) // #nosec: hex and escaped text only
+}
+
+// shortLink is the public, lookup-free /magnet/<hash> URL.
+func (h *Handlers) shortLink(hashHex string) string {
+	if h.d.PublicBase == nil {
+		return ""
+	}
+	return strings.TrimRight(h.d.PublicBase.String(), "/") + "/magnet/" + hashHex
 }
 
 func torrentPath(id int32) string { return "/torrents/" + strconv.FormatInt(int64(id), 10) }
@@ -399,10 +428,11 @@ func (h *Handlers) details(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, http.StatusOK, "torrent", detailPage{
 		chrome: h.chrome(r), Name: pathfmt.Display(t.Name), Size: FormatSize(t.TotalSize), InfoHash: hash,
 		Files: t.FileCount, Discovered: hd, DiscoveredISO: iso,
-		Magnet:  template.URL("magnet:?xt=urn:btih:" + hash + "&dn=" + url.QueryEscape(t.Name)), // #nosec: hex and escaped text only
-		Mode:    dec.Mode,
-		TreeURL: torrentPath(id) + "/files/tree",
-		DirURL:  torrentPath(id) + "/files",
+		Magnet:    h.magnet(hash, t.Name),
+		ShortLink: h.shortLink(hash),
+		Mode:      dec.Mode,
+		TreeURL:   torrentPath(id) + "/files/tree",
+		DirURL:    torrentPath(id) + "/files",
 	})
 }
 

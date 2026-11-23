@@ -64,6 +64,8 @@ type envOpts struct {
 	cache      filecache.Config
 	view       fileview.Config
 	poolMax    int32
+	trackers   TrackerList
+	publicBase *url.URL
 }
 
 type env struct {
@@ -148,7 +150,7 @@ func newEnv(t *testing.T, mutate ...func(*envOpts)) *env {
 		t.Fatal(err)
 	}
 	e.srv = srv
-	if _, err := Install(srv, Deps{Search: e.search, Details: e.reader, View: e.view}); err != nil {
+	if _, err := Install(srv, Deps{Search: e.search, Details: e.reader, View: e.view, Trackers: o.trackers, PublicBase: o.publicBase}); err != nil {
 		t.Fatal(err)
 	}
 	e.h = srv.Handler()
