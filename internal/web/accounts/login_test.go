@@ -205,6 +205,13 @@ func TestCompleteLoginReplacesPresentedSession(t *testing.T) {
 // writerFirst: the writer is held at its commit (holding the user lock) while
 // the login blocks on it. Otherwise the login is held at its commit while the
 // writer blocks.
+//
+// It cannot hang: the release channel is closed on every exit path (deferred,
+// before the goroutines are joined), the hook itself gives up after blockWait,
+// the wait for the first operation to reach its commit point and the wait for
+// the second to block are both bounded and fail promptly if the expected state
+// never occurs, and the goroutines are always joined before returning, so the
+// connections they hold are back in the pool before the test's cleanup closes it.
 func raceLogin(t *testing.T, s *Store, pool *pgxpool.Pool, p LoginParams, writerOp string, writer func() error, writerFirst bool) (loginErr, writerErr error) {
 	t.Helper()
 	holdOp := "login"
@@ -212,15 +219,18 @@ func raceLogin(t *testing.T, s *Store, pool *pgxpool.Pool, p LoginParams, writer
 		holdOp = writerOp
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
+	var enterOnce, releaseOnce sync.Once
+	doRelease := func() { releaseOnce.Do(func() { close(release) }) }
 	s.beforeCommit = func(op string) error {
 		if op == holdOp {
-			once.Do(func() { close(entered) })
-			<-release
+			enterOnce.Do(func() { close(entered) })
+			select {
+			case <-release:
+			case <-time.After(blockWait + 10*time.Second):
+			}
 		}
 		return nil
 	}
-	defer func() { s.beforeCommit = nil }()
 
 	doLogin := func() error { _, err := s.CompleteLogin(tctx(t), p); return err }
 	first, second := doLogin, writer
@@ -228,13 +238,27 @@ func raceLogin(t *testing.T, s *Store, pool *pgxpool.Pool, p LoginParams, writer
 		first, second = writer, doLogin
 	}
 	var e1, e2 error
+	firstDone, secondDone := make(chan struct{}), make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() { defer wg.Done(); e1 = first() }()
-	<-entered
-	go func() { defer wg.Done(); e2 = second() }()
-	waitBlocked(t, pool)
-	close(release)
+	defer func() { // runs on every exit, including t.Fatal: release, then join, then unhook
+		doRelease()
+		wg.Wait()
+		s.beforeCommit = nil
+	}()
+
+	wg.Add(1)
+	go func() { defer wg.Done(); defer close(firstDone); e1 = first() }()
+	select {
+	case <-entered:
+	case <-firstDone:
+		t.Fatal("the first operation finished without reaching its commit point")
+	case <-time.After(blockWait):
+		t.Fatal("the first operation never reached its commit point")
+	}
+	wg.Add(1)
+	go func() { defer wg.Done(); defer close(secondDone); e2 = second() }()
+	waitBlockedOr(t, pool, secondDone)
+	doRelease()
 	wg.Wait()
 	if writerFirst {
 		return e2, e1
@@ -310,7 +334,12 @@ func TestLoginRacesWithPasswordWriters(t *testing.T) {
 	}
 }
 
-func TestTwoConcurrentLegacyLoginsBoundedRetry(t *testing.T) {
+// TestStaleLegacyLoginThenBoundedRetry covers the *sequential* stale/retry
+// sequence at store level: two logins verified against the same legacy hash,
+// the second commit going stale after the first one rehashed, then the
+// caller's single retry. The genuinely concurrent two-login behaviour is
+// covered by the HTTP integration tests (W3 steps 5–6).
+func TestStaleLegacyLoginThenBoundedRetry(t *testing.T) {
 	s, pool := newStore(t)
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "oli")

@@ -33,9 +33,19 @@ Time control: expiry tests **backdate** rows in the database (all three timestam
 
 **Mutation checks** (each reverted afterwards, code verified identical): dropping the `password_hash = $2` guard, dropping `AND active` in the login commit, ignoring `u.active` in the lookup, and removing the expiry conditions from touch each make at least one of the new tests fail.
 
+## S1 review corrections (owner review of `aa6f8d1e`, `4bbfe503`, `b5ba06d3`: accepted with two corrections)
+
+1. **Refund bound to its bucket instance.** `Reservation.Cancel` used to refund by key, so after the original bucket was evicted a recreated bucket under the same key would receive the refund. Each reservation now holds the `*entry` it charged, and `refund` is ignored unless the key still maps to that exact entry. GCRA and LRU are unchanged. Regression test `TestCancelIgnoresEvictedBucket` (`MaxKeys=1`): reserve A, evict A by reserving B, recreate and exhaust A, cancel the original reservation, and verify that the new A gains nothing; a refund of a live bucket still works.
+2. **Concurrency tests fail promptly.** The earlier 600 s timeout came from a failing test leaving a goroutine parked in the commit hook while holding a pooled connection, which then deadlocked `pool.Close` in cleanup. Now:
+   - `raceLogin` closes `release` in a deferred function on every exit path, then joins its goroutines, then removes the hook; the hook itself gives up after `blockWait + 10 s`.
+   - The wait for the first operation to reach its commit point is bounded (`blockWait` = 20 s) and fails at once if that operation finishes without reaching it.
+   - `waitBlockedOr` fails at once if the operation expected to block has already finished (no lock wait occurred), and otherwise after `blockWait`.
+   - `holdUserLock` registers an idempotent release as a `t.Cleanup`, so a `Fatal` while holding the lock cannot leave the transaction open (this also protects the W2 expiry tests that use it).
+   - Re-running the "drop the `password_hash = $2` guard" mutation now fails in about 14 s (4 tests fail) instead of reaching the 600 s timeout; the code was restored and verified.
+3. `TestTwoConcurrentLegacyLoginsBoundedRetry` was renamed `TestStaleLegacyLoginThenBoundedRetry`, and its comment now says what it covers: the *sequential* stale/retry sequence at store level. Genuinely concurrent two-login behaviour is covered by the HTTP integration tests of steps 5–6.
+
 ## Known limitations / notes
 
-- With the hash guard removed, the mutated run also hit the 600 s `go test` timeout (a race test waits for a blocked statement that no longer blocks). It fails loudly on a regression, but not quickly; the tests are correct on the real code.
 - Not run: `dht`, `crawler`, `e2e` and other untouched packages, and the full `go test ./...` and root-package binary tests (nothing in the root package changed in this stage).
 - The idle window of an ordinary session is up to `throttle` (≤ 10 %, ≤ 5 min) shorter than configured (R4, approved).
 - The sessions purge scans without an index (R6, documented in the plan).

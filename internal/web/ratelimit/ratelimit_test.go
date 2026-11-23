@@ -312,3 +312,36 @@ func TestRetryAfterSeconds(t *testing.T) {
 		}
 	}
 }
+
+// A refund belongs to the bucket instance that was charged. If that bucket was
+// evicted and the key recreated, cancelling the old reservation must not
+// credit the new bucket.
+func TestCancelIgnoresEvictedBucket(t *testing.T) {
+	c := newClock()
+	l := newLimiter(t, c, 1, time.Hour, 1) // MaxKeys = 1: every new key evicts the old one
+	a, b := UserKey("a"), UserKey("b")
+
+	original := l.Reserve(a) // 1. reserve A
+	if !original.OK {
+		t.Fatal("setup: first reservation refused")
+	}
+	if !l.Reserve(b).OK { // 2. evict A by reserving B
+		t.Fatal("setup: B refused")
+	}
+	if !l.Reserve(a).OK { // 3. recreate A and exhaust it
+		t.Fatal("setup: recreated A refused")
+	}
+	if l.Reserve(a).OK {
+		t.Fatal("setup: recreated A should be exhausted")
+	}
+	original.Cancel() // 4. cancel the reservation of the evicted A
+	if r := l.Reserve(a); r.OK {
+		t.Fatal("a refund of an evicted bucket credited the recreated bucket") // 5.
+	}
+	// A refund of a live bucket still works.
+	live := l.Reserve(UserKey("c")) // evicts a
+	live.Cancel()
+	if !l.Reserve(UserKey("c")).OK {
+		t.Fatal("refund of a live bucket no longer works")
+	}
+}

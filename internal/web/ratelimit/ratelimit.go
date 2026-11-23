@@ -132,6 +132,7 @@ type Reservation struct {
 
 	l    *Limiter
 	key  Key
+	e    *entry // the bucket instance charged; a refund goes to it alone
 	once sync.Once
 }
 
@@ -142,7 +143,7 @@ func (r *Reservation) Cancel() {
 	if r == nil || !r.OK || r.l == nil {
 		return
 	}
-	r.once.Do(func() { r.l.refund(r.key) })
+	r.once.Do(func() { r.l.refund(r.key, r.e) })
 }
 
 // evictionScan is how many least-recently-used entries are inspected for a
@@ -176,15 +177,18 @@ func (l *Limiter) Reserve(key Key) *Reservation {
 		return &Reservation{RetryAfter: over}
 	}
 	e.tat = newTAT
-	return &Reservation{OK: true, l: l, key: key}
+	return &Reservation{OK: true, l: l, key: key, e: e}
 }
 
-func (l *Limiter) refund(key Key) {
+// refund returns one unit to the bucket instance that was charged. If that
+// bucket has since been evicted, the key may now name a different bucket
+// (recreated and perhaps exhausted); crediting it would grant allowance that
+// was never paid for, so the refund is dropped.
+func (l *Limiter) refund(key Key, charged *entry) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if el, ok := l.m[key]; ok {
-		e := el.Value.(*entry)
-		e.tat = e.tat.Add(-l.interval)
+	if el, ok := l.m[key]; ok && el.Value.(*entry) == charged {
+		charged.tat = charged.tat.Add(-l.interval)
 	}
 }
 

@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,29 +11,46 @@ import (
 )
 
 // holdUserLock takes the user row FOR UPDATE in a separate transaction and
-// returns the function that releases it.
+// returns the function that releases it. The release is idempotent and is also
+// registered as a cleanup, so a test that fails (or is aborted by Fatal) while
+// holding the lock can never leave the transaction open: a blocked operation
+// would otherwise keep the pool busy and deadlock pool.Close at cleanup.
 func holdUserLock(t *testing.T, pool *pgxpool.Pool, userID int64) (release func()) {
 	t.Helper()
 	tx, err := pool.Begin(tctx(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	var once sync.Once
+	release = func() { once.Do(func() { tx.Rollback(context.Background()) }) }
+	t.Cleanup(release)
 	if _, err := tx.Exec(tctx(t), `SELECT 1 FROM magnetico_web.users WHERE id = $1 FOR UPDATE`, userID); err != nil {
 		t.Fatal(err)
 	}
-	var done bool
-	return func() {
-		if !done {
-			done = true
-			tx.Rollback(context.Background())
-		}
-	}
+	return release
 }
 
-// waitBlocked waits until some session of this database waits on a lock.
+// blockWait bounds every wait for an expected lock wait.
+const blockWait = 20 * time.Second
+
+// waitBlocked waits until some session of this database waits on a lock; it
+// fails the test after blockWait.
 func waitBlocked(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+	waitBlockedOr(t, pool, nil)
+}
+
+// waitBlockedOr is waitBlocked that also fails promptly when done is closed
+// first: the operation that was expected to block has already finished, so the
+// lock wait did not occur and waiting longer cannot help.
+func waitBlockedOr(t *testing.T, pool *pgxpool.Pool, done <-chan struct{}) {
+	t.Helper()
+	for deadline := time.Now().Add(blockWait); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		select {
+		case <-done:
+			t.Fatal("the operation finished without ever blocking on the lock")
+		default:
+		}
 		if count(t, pool, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`) > 0 {
 			return
 		}
