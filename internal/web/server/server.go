@@ -366,8 +366,13 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case err := <-serveErr:
 		// Serve returns only on failure here (Shutdown has not been called).
-		stopBackground()
+		stopped := stopBackground()
 		s.backend.Close()
+		if !stopped {
+			// Keep the Serve failure for diagnostics and report the incomplete
+			// shutdown too; errors.Is matches both.
+			return fmt.Errorf("serve: %w (%w)", err, ErrShutdownIncomplete)
+		}
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}

@@ -93,6 +93,16 @@ Real binary (`main_webauth_test.go`, as the **documented minimum runtime role**)
 
 **Mutation checks** (each reverted afterwards, files verified identical): removing the session CSRF check, removing the pre-session check, registering `GET /` instead of `GET /{$}`, making `validNext` accept everything, and skipping the dummy verification for an unsupported hash each make at least one test fail.
 
+## S2 review correction: incomplete shutdown on an unexpected `Serve` failure
+
+The S2 review found that on the unexpected `srv.Serve()` failure path `Server.Run` called `stopBackground()` but ignored its result. A background task that ignored cancellation was abandoned after `bgStopWait`, the backend was closed, and the returned error did not mention an incomplete shutdown.
+
+Fix (`internal/web/server/server.go`): the result is now checked. When the task did not stop in time the error is `serve: <original failure> (shutdown incomplete: …)`, built with two `%w`, so `errors.Is(err, ErrShutdownIncomplete)` holds and the original `Serve` error stays in the chain and the message. The bounded wait and the close order are unchanged (stop the task, bounded, then `backend.Close()`); no other lifecycle code and no new abstraction was touched.
+
+Regression test: `TestStuckBackgroundOnUnexpectedServeFailureReportsIncompleteShutdown` (listener closed under a running server, background task that ignores cancellation, `bgStopWait` 200 ms): asserts `ErrShutdownIncomplete`, that the `serve` failure is still reported, and that the backend is still closed once. Mutation check: reverting the fix makes this test fail (`Run: serve: accept tcp …: use of closed network connection, want ErrShutdownIncomplete`); the fix was restored and the file verified identical.
+
+Run after the fix: `go test -count=1 -race ./internal/web/server` and `go test -count=3 -race -run Background ./internal/web/server` pass; `go vet ./internal/web/server` and `gofmt -l` are clean.
+
 ## Not run / limitations
 
 - Not run: `dht`, `crawler`, `e2e` and other untouched packages; the full `go test ./...` was not run (as in W1/W2).

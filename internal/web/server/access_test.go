@@ -255,6 +255,45 @@ func TestBackgroundStopsBeforeCloseOnUnexpectedServeFailure(t *testing.T) {
 	}
 }
 
+func TestStuckBackgroundOnUnexpectedServeFailureReportsIncompleteShutdown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	be := &orderBackend{bgRunning: &atomic.Bool{}}
+	f := newFixture(t, func(c *Config) { c.Listener = ln })
+	s, err := New(f.srv.cfg, be)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.bgStopWait = 200 * time.Millisecond
+	release := make(chan struct{})
+	defer close(release)
+	entered := make(chan struct{})
+	s.SetBackground(func(context.Context) {
+		close(entered)
+		<-release // ignores cancellation
+	})
+	errc := make(chan error, 1)
+	go func() { errc <- s.Run(context.Background()) }()
+	<-entered
+	ln.Close() // Serve fails although nobody asked for a shutdown
+	select {
+	case err := <-errc:
+		if !errors.Is(err, ErrShutdownIncomplete) {
+			t.Fatalf("Run: %v, want ErrShutdownIncomplete", err)
+		}
+		if !strings.Contains(err.Error(), "serve") {
+			t.Fatalf("the Serve failure was lost: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after the listener failed")
+	}
+	if be.closed.Load() != 1 {
+		t.Fatal("the backend must still be closed after a bounded wait")
+	}
+}
+
 func TestBackgroundStopsOnForcedShutdown(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
