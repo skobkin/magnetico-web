@@ -162,6 +162,12 @@ Run: `go build ./...`, `go vet ./...`, `go test -race ./internal/web/accounts`, 
 `go test -race -run TestWebAdminBinary .`: all passed. Not re-run after this change: the rest of the suites listed under "Final
 validation", which this change does not touch.
 
-**Remaining limitations (honest list).** Those under "Residual risks" above still stand. In addition: the two lock-wait tests depend on
-`pg_stat_activity` showing the wait and on a ~2 s expiry window; they fail loudly ("test too slow") rather than pass vacuously if the
-machine stalls before the operation blocks.
+**Test robustness (follow-up to a review note).** The lock-wait tests no longer rely on a fixed 2 s window. Each attempt starts with a 2 s
+expiry window and, if the operation was not yet observed blocked before the credential expired (a slow or loaded machine), discards
+the attempt and retries with a doubled window up to 32 s, so a loaded CI retries instead of failing; only a machine slower than that
+fails, loudly. An earlier idea, editing the row's expiry after the operation blocked, was rejected because it does not reproduce the
+bug (the transaction-start `now()` is already later than the edited value). Mutation check performed: reverting the consuming
+statement to `now()`, or removing the post-lock invitation re-check, makes the respective test fail.
+
+**Remaining limitations (honest list).** Those under "Residual risks" above still stand. In addition, the lock-wait tests depend on
+`pg_stat_activity` showing the wait.

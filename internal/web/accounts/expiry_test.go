@@ -51,82 +51,107 @@ func sleepPast(t *testing.T, pool *pgxpool.Pool, ts string, table string, where 
 
 // A link that was valid when the completing transaction started, but expired
 // while it waited for the user row lock, must be refused and not consumed.
+// The expiry has to come from the clock (editing the row afterwards would not
+// reproduce the bug: now() would already be later than the edited value). The
+// window starts short and doubles whenever a slow machine lets the link expire
+// before the operation blocked, so a loaded CI retries instead of failing.
 func TestLinkExpiringDuringLockWaitIsRefused(t *testing.T) {
 	s, pool := newStore(t)
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "lena")
 	s.CreateAPIToken(ctx, u.ID, "", nil)
-	link, err := s.IssuePasswordLink(ctx, "lena")
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec(t, pool, `UPDATE magnetico_web.one_time_tokens SET expires_at = clock_timestamp() + interval '2 seconds' WHERE user_id = $1`, u.ID)
-	before := tableDump(t, pool, u.ID)
 
-	release := holdUserLock(t, pool, u.ID)
-	defer release()
-	res := make(chan error, 1)
-	go func() {
-		_, err := s.CompletePasswordLink(ctx, link.Token, PurposeReset, testHash(t))
-		res <- err
-	}()
-	waitBlocked(t, pool)
-	if count(t, pool, `SELECT count(*) FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND expires_at > clock_timestamp()`, u.ID) != 1 {
-		t.Fatal("test too slow: the link expired before the transaction was blocked")
-	}
-	sleepPast(t, pool, "the link", "one_time_tokens", `user_id = $1`, u.ID)
-	release()
+	for window := 2 * time.Second; window <= 32*time.Second; window *= 2 {
+		link, err := s.IssuePasswordLink(ctx, "lena")
+		if err != nil {
+			t.Fatal(err)
+		}
+		exec(t, pool, `UPDATE magnetico_web.one_time_tokens SET expires_at = clock_timestamp() + make_interval(secs => $2) WHERE user_id = $1`, u.ID, window.Seconds())
+		before := tableDump(t, pool, u.ID)
 
-	if err := <-res; !errors.Is(err, ErrLinkInvalid) {
-		t.Fatalf("expired-while-waiting link: err = %v, want ErrLinkInvalid", err)
+		release := holdUserLock(t, pool, u.ID)
+		res := make(chan error, 1)
+		go func() {
+			_, err := s.CompletePasswordLink(ctx, link.Token, PurposeReset, testHash(t))
+			res <- err
+		}()
+		waitBlocked(t, pool)
+		if count(t, pool, `SELECT count(*) FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND expires_at > clock_timestamp()`, u.ID) != 1 {
+			// Too slow for this window: widen it and try again.
+			release()
+			<-res
+			continue
+		}
+		sleepPast(t, pool, "the link", "one_time_tokens", `user_id = $1`, u.ID)
+		release()
+
+		if err := <-res; !errors.Is(err, ErrLinkInvalid) {
+			t.Fatalf("expired-while-waiting link: err = %v, want ErrLinkInvalid", err)
+		}
+		if got := tableDump(t, pool, u.ID); got != before {
+			t.Fatalf("the refused completion changed state:\n--- before\n%s--- after\n%s", before, got)
+		}
+		if count(t, pool, `SELECT count(*) FROM magnetico_web.api_tokens WHERE user_id = $1 AND revoked_at IS NULL`, u.ID) != 1 {
+			t.Fatal("tokens were revoked by a refused completion")
+		}
+		if linkCount(t, s, u.ID, `'setup','reset'`) != 1 {
+			t.Fatal("the link was consumed")
+		}
+		return
 	}
-	if got := tableDump(t, pool, u.ID); got != before {
-		t.Fatalf("the refused completion changed state:\n--- before\n%s--- after\n%s", before, got)
-	}
-	if count(t, pool, `SELECT count(*) FROM magnetico_web.api_tokens WHERE user_id = $1 AND revoked_at IS NULL`, u.ID) != 1 {
-		t.Fatal("tokens were revoked by a refused completion")
-	}
-	if linkCount(t, s, u.ID, `'setup','reset'`) != 1 {
-		t.Fatal("the link was consumed")
-	}
+	t.Fatal("the machine was too slow even for a 32 s window")
 }
 
 // An invitation that expired while the registration waited for the owner's
-// row lock must be refused, not consumed, and create no user.
+// row lock must be refused, not consumed, and create no user. The registration
+// holds the invitation row lock while it waits, so the invitation cannot be
+// edited meanwhile; the expiry must come from the clock. The window starts
+// short and doubles whenever a slow machine lets the invitation expire before
+// the registration blocked, so a loaded CI retries instead of failing.
 func TestInvitationExpiringDuringLockWaitIsRefused(t *testing.T) {
 	s, pool := newStore(t)
 	ctx := tctx(t)
 	owner := mkUser(t, s, pool, "omar")
-	codes, err := s.CreateInvites(ctx, "omar", 1, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec(t, pool, `UPDATE magnetico_web.invites SET expires_at = clock_timestamp() + interval '2 seconds' WHERE code = $1`, codes[0])
 	usersBefore := count(t, pool, `SELECT count(*) FROM magnetico_web.users`)
-	invitesBefore := count(t, pool, `SELECT count(*) FROM magnetico_web.invites`)
 
-	release := holdUserLock(t, pool, owner.ID)
-	defer release()
-	res := make(chan error, 1)
-	go func() {
-		_, err := s.RegisterWithInvite(ctx, RegisterParams{Code: codes[0], Username: "latecomer", Hash: testHash(t), Quota: 2})
-		res <- err
-	}()
-	waitBlocked(t, pool)
-	if count(t, pool, `SELECT count(*) FROM magnetico_web.invites WHERE code = $1 AND expires_at > clock_timestamp()`, codes[0]) != 1 {
-		t.Fatal("test too slow: the invitation expired before the transaction was blocked")
-	}
-	sleepPast(t, pool, "the invitation", "invites", `code = $1`, codes[0])
-	release()
+	for window := 2 * time.Second; window <= 32*time.Second; window *= 2 {
+		codes, err := s.CreateInvites(ctx, "omar", 1, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		code := codes[0]
+		exec(t, pool, `UPDATE magnetico_web.invites SET expires_at = clock_timestamp() + make_interval(secs => $2) WHERE code = $1`, code, window.Seconds())
+		invitesBefore := count(t, pool, `SELECT count(*) FROM magnetico_web.invites`)
 
-	if err := <-res; !errors.Is(err, ErrInvitationUnavailable) {
-		t.Fatalf("expired-while-waiting invitation: err = %v, want ErrInvitationUnavailable", err)
+		release := holdUserLock(t, pool, owner.ID)
+		res := make(chan error, 1)
+		go func() {
+			_, err := s.RegisterWithInvite(ctx, RegisterParams{Code: code, Username: "latecomer", Hash: testHash(t), Quota: 2})
+			res <- err
+		}()
+		waitBlocked(t, pool)
+		if count(t, pool, `SELECT count(*) FROM magnetico_web.invites WHERE code = $1 AND expires_at > clock_timestamp()`, code) != 1 {
+			// Too slow for this window: the registration may have started
+			// after expiry. Discard this attempt and widen the window.
+			release()
+			<-res
+			exec(t, pool, `DELETE FROM magnetico_web.invites WHERE code = $1`, code)
+			continue
+		}
+		sleepPast(t, pool, "the invitation", "invites", `code = $1`, code)
+		release()
+
+		if err := <-res; !errors.Is(err, ErrInvitationUnavailable) {
+			t.Fatalf("expired-while-waiting invitation: err = %v, want ErrInvitationUnavailable", err)
+		}
+		if count(t, pool, `SELECT count(*) FROM magnetico_web.invites WHERE code = $1 AND used_by IS NULL AND used_at IS NULL`, code) != 1 {
+			t.Fatal("the invitation was consumed")
+		}
+		if count(t, pool, `SELECT count(*) FROM magnetico_web.users`) != usersBefore ||
+			count(t, pool, `SELECT count(*) FROM magnetico_web.invites`) != invitesBefore {
+			t.Fatal("a refused registration left rows behind")
+		}
+		return
 	}
-	if count(t, pool, `SELECT count(*) FROM magnetico_web.invites WHERE code = $1 AND used_by IS NULL AND used_at IS NULL`, codes[0]) != 1 {
-		t.Fatal("the invitation was consumed")
-	}
-	if count(t, pool, `SELECT count(*) FROM magnetico_web.users`) != usersBefore ||
-		count(t, pool, `SELECT count(*) FROM magnetico_web.invites`) != invitesBefore {
-		t.Fatal("a refused registration left rows behind")
-	}
+	t.Fatal("the machine was too slow even for a 32 s window")
 }
