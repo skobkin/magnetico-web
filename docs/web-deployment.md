@@ -1,4 +1,4 @@
-# `magnetico web` — configuration, database and reverse-proxy notes (W1, W2)
+# `magnetico web` — configuration, database and reverse-proxy notes (W1–W3)
 
 Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Nothing here has been integration-tested against a real proxy yet (that belongs to a later milestone).
 
@@ -102,3 +102,23 @@ These statements are executed verbatim by the integration tests, which start the
 | `web user revoke-tokens <username>` | Permanently revokes all API and RSS tokens. |
 | `web user invite add <username> [--count N] [--expires-in D]` / `invite list <username>` / `invite revoke <id>` | Invitation links; revocation is by id so codes stay out of shell history. |
 | `web tracker list` / `add <url> [--position N]` / `remove <url\|id>` / `move <url\|id> <position>` | Edits the public tracker list (positions stay 1..n). Running services pick the change up within `tracker-cache-ttl`. |
+
+## 6. Sign-in, sessions and rate limits (W3)
+
+**Routes.** `GET/POST /login`, `POST /logout` and an interim page at the exact root `/` (replaced by the torrent pages in W4). Every other path, including legacy PHP routes, is 404. Sign-out is `POST` only.
+
+**Cookies.** Production (https public URL): `__Host-magnetico_session` (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`). An ordinary session is a browser-session cookie; a "keep me signed in" session carries `Expires`/`Max-Age` equal to the server-side absolute expiry and is never extended by activity. Before sign-in the login form is bound to a one-hour `__Host-magnetico_presession` cookie (`SameSite=Strict`). **Development mode** (loopback `http://` public URL only) uses the names `magnetico_session` / `magnetico_presession` without the prefix and without `Secure`, and logs a warning at startup. The `__Host-` prefix requires the browser to see `https://`, so the reverse proxy must terminate TLS for the public URL.
+
+**Session lifetimes** are `MAGNETICO_WEB_SESSION_IDLE_TIMEOUT` (12h), `…_ABSOLUTE_LIFETIME` (168h) and `…_REMEMBER_LIFETIME` (2160h), validated at startup. All expiry decisions use the **database clock**. To avoid a write per request, `last_seen_at` is updated at most every `min(5m, idle/10)`, so an ordinary session can expire up to that much earlier than the nominal idle timeout.
+
+**Revocation visibility.** There is no authentication cache: every request on a private route resolves its session, the owner's `active` flag and the role in one query. `web user disable` therefore takes effect on the next request; `enable` never brings sessions back (the user signs in again).
+
+**CSRF.** In addition to the standard library's cross-origin check, every POST carries a `csrf_token` form field derived from an HttpOnly cookie (the session cookie, or the pre-session cookie for forms shown before sign-in). A missing or wrong token is a 403 page.
+
+**Rate limiting (per process).** Failed or attempted sign-ins are limited per client address (burst 20, one more every 30 s; IPv6 per /64) and per case-folded username (burst 5, one more every 60 s; a successful sign-in refunds its unit). Exhaustion returns `429` with `Retry-After` and the same page whether or not the username exists; there is no lockout. The client address comes from `X-Forwarded-For` only when the TCP peer is inside `--trusted-proxies` (§2). With the default of one web instance this is sufficient; several instances would each keep their own counters.
+
+**Password hashing capacity.** Verification and hashing share the process-wide limiter (§W2). When it stays saturated beyond its wait, sign-in answers `503` with `Retry-After: 5` (never a wrong-password message). A correct legacy password whose upgrade hash cannot be computed because of that saturation still signs in; the hash is upgraded at a later sign-in.
+
+**Housekeeping.** A background task deletes expired sessions and expired one-time links about every 15 minutes (first run one minute after start). It is stopped, and awaited, before the database pool is closed at shutdown. Expired rows are ignored by every lookup whether or not they were purged yet.
+
+**Privileges.** The documented runtime role (§4) is sufficient; sign-in uses `UPDATE users`, `INSERT/DELETE sessions` and the purge uses `DELETE one_time_tokens`.

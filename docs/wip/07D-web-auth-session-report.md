@@ -1,6 +1,6 @@
-# Task 07D / W3 — status report (stage S1: store layer)
+# Task 07D / W3 — status report (S1: store layer, S2: HTTP layer)
 
-**Status:** steps 1–3 of [`07D-web-auth-session-plan.md`](07D-web-auth-session-plan.md) are implemented and committed locally; stopped at **S1** for owner review. Steps 4–6 (HTTP middleware, CSRF handlers, login/logout pages, binary tests) are **not started**. Nothing is pushed.
+**Status:** all six steps of [`07D-web-auth-session-plan.md`](07D-web-auth-session-plan.md) are implemented and committed locally. S1 (steps 1–3) was accepted with two corrections (recorded below, applied in `5a36c135`). **Stopped at S2 for the final W3 review.** W4 and later milestones are not started. Nothing is pushed.
 
 ## Delivered
 
@@ -50,3 +50,52 @@ Time control: expiry tests **backdate** rows in the database (all three timestam
 - The idle window of an ordinary session is up to `throttle` (≤ 10 %, ≤ 5 min) shorter than configured (R4, approved).
 - The sessions purge scans without an index (R6, documented in the plan).
 - A leftover `postgres:17` test container (`recursing_sinoussi`) from an earlier interrupted run was still running; stopping it was denied by the permission classifier, so it is left for the owner to stop.
+
+---
+
+# Stage S2 — HTTP authentication (steps 4–6)
+
+## Delivered
+
+| Area | Content |
+|---|---|
+| `internal/web/server` | Access classes on `Router.Handle(pattern, kind, access, handler)`: `Public` (GET/HEAD only, enforced by a panic at registration), `PublicForm`, `Session`. Guards are installed by `Router.SetGuards`; a guarded class without a guard panics at registration. `Router.Routes()` exposes the route table. The access log carries `user_id` (never the username) when authenticated. `Server.OnStartup` hooks run after verification and before `Listen`. `Server.SetBackground` is the single background task. |
+| Purger lifecycle (owner correction 2) | `Run` starts the background task only after verification, startup hooks and `Listen` succeeded, under its own context. Every exit path (startup/verification/listen failure: never started; unexpected `Serve` failure; SIGTERM; forced shutdown) calls one `stopBackground`, which cancels and waits (bounded by `bgStopWait`, 5 s) **before** `backend.Close()`. A task that does not stop in time makes the shutdown `ErrShutdownIncomplete` (exit 3) and the pool is still closed within its bound. No job framework. |
+| `internal/web/auth` | `Install(srv, cfg)`; cookies (session, pre-session; production `__Host-` names, dev names); cookie-bound CSRF tokens; the `PublicForm` and `Session` guards; `GET/POST /login`, `POST /logout`, `GET /{$}`; the login attempt logic including the single bounded retry after `ErrLoginStale`; the purger (`Background`). |
+| `internal/web/ui` | `login`, `home`, `message` templates, a shared `csrf` field template and the page types. |
+| `webdb`, `main.go` | `Backend.Pool()`; `runWeb` installs auth with the validated session lifetimes and `DevMode`; a fixed message for a `Prepare` failure. |
+| Docs | `docs/web-deployment.md` §6 (routes, cookies, lifetimes, revocation visibility, CSRF, rate limits, hashing capacity, housekeeping, privileges). |
+
+## Behaviour worth reviewing
+
+1. **Exact root** `GET /{$}` (owner correction 1): `/torrents`, legacy paths and anything else is 404 for anonymous and authenticated callers; `TestRoutingExactRootAndUnknownPaths`.
+2. **Login order:** rate limit → input shape → credential load → verification (outside any transaction) → optional rehash → `CompleteLogin`. Unknown, inactive, passwordless and unsupported-hash accounts each spend exactly one limiter-admitted verification (`DummyVerify`; an unsupported hash is refused without hashing and *then* followed by a dummy verification). An empty or over-4,096-byte password fails without hashing (account-independent). Invalid-UTF-8, NUL and over-long usernames never reach PostgreSQL (the store answers "unknown").
+3. **Rehash exception (D1):** `ErrBusy` from `Rehash` after a successful verification logs in without upgrading; any other rehash failure is a 503.
+4. **CSRF (D2):** stateless, cookie-bound, domain-separated SHA-256 of the HttpOnly cookie value. The session class and the pre-session class use different domains. Because the pre-session cookie is stateless, a *copied* pre-session cookie remains valid until its one-hour expiry; the browser deletes it at sign-in, so the old login form is dead for the browser, and a holder of a copied cookie would also have to know the password.
+5. **`next` (D4):** `validNext` accepts only a path with exactly one leading `/`, no backslash, no control characters, at most 2,048 bytes, and re-checks the percent-decoded path for a leading `//` or `/\`. Tested for `//host`, `/\host`, `%2F%2F`, `%5C`, `javascript:`, `http:host`, absolute URLs, control characters and over-length values, at unit level and through the form.
+6. **Database errors:** a failing lookup is 503 (never an anonymous redirect, never authenticated); a failing logout delete is 503 and keeps the cookie.
+
+## Tests actually run (all passed)
+
+```
+go build ./... && go vet ./...
+go test -count=1 -race ./internal/web/... ./opflags ./persistence ./internal/ingest/pgqueue
+go test -count=3 -race -run 'Concurrent|Parallel|Disable|Stale|Races|Stress' ./internal/web/auth ./internal/web/accounts
+go test -count=1 -race -run 'TestWeb|TestMigrateWebSchemaInit|TestSchemaDiagnostics' .
+go test -count=1 .                                   (whole root package, 77 s)
+```
+
+`internal/web/auth` (real PostgreSQL, handler level, production and dev cookie modes): login/logout flow and cookie attributes; remember-me `Expires` equals the row's `expires_at`; the generic-failure matrix (wrong password, unknown, inactive, passwordless, unsupported hash, case-sensitive name, invalid UTF-8, NUL, over-long): same status, message, structure and cookie behaviour, exactly one limiter-admitted verification each, and whole-body equality only for identical input; legacy argon2i / bcrypt `$2y$` / sodium argon2id fixtures log in and are upgraded; busy and database-failure 503s; fixation; session enforcement (malformed cookie never reaches the database, expired/absolute/idle, DB error); disabled-user sessions; CSRF in both classes (missing, empty, wrong, query-only, other session/pre-session, session token on a pre-session form, expired pre-session via a fake clock, replay after sign-in); cross-origin refusal even with a valid token; structural route classification; safe requests change no application state (documented `last_seen_at` throttling and pre-session cookies are asserted explicitly); rate limits (per IP, per username across IPs, identical 429 for known and unknown, refund on success, spoofed `X-Forwarded-For` ignored, trusted proxy honoured, CSRF rejections not counted); handler-level races (password reset or disable between verification and commit, two concurrent legacy logins both succeeding through the bounded retry — this is where the concurrent two-login behaviour requested in the S1 review is covered); 32 parallel logins; requests started after `Disable` never served; log redaction; purger and startup (Prepare failure fails closed before listening; dev warning).
+
+`internal/web/server`: access-class registration panics, guard application, route table, user ID logging, and the purger lifecycle (startup hook failure, verification and listen failure never start it, SIGTERM and unexpected-`Serve`-failure and forced-shutdown stop it before the backend closes, a stuck task is bounded and reported as incomplete).
+
+Real binary (`main_webauth_test.go`, as the **documented minimum runtime role**): sign-in, private page, wrong password, `web user disable`/`enable` through the CLI (the next request is anonymous; enable restores nothing), logout with CSRF and cross-site refusal, legacy bcrypt upgrade to `$argon2id$v=19$m=65536,t=3,p=4$`, dev-mode cookies and warning, a production-mode (https public URL) run with hand-sent cookies asserting the `__Host-` names and attributes and the headers, per-IP limit at attempt 20 despite a rotating spoofed `X-Forwarded-For`, clean SIGTERM, and no password, token or cookie value in the service output.
+
+**Mutation checks** (each reverted afterwards, files verified identical): removing the session CSRF check, removing the pre-session check, registering `GET /` instead of `GET /{$}`, making `validNext` accept everything, and skipping the dummy verification for an unsupported hash each make at least one test fail.
+
+## Not run / limitations
+
+- Not run: `dht`, `crawler`, `e2e` and other untouched packages; the full `go test ./...` was not run (as in W1/W2).
+- The pre-session cookie is stateless (item 4 above).
+- Sessions per user are unbounded (R8); the purge scans without an index (R6); effective idle window up to the throttle shorter (R4); rate limits are per process (R7).
+- Binary tests assume loopback ports and the disposable PostgreSQL harness; the `postgres:17` container `3e6f2a555b2a` left by an interrupted earlier run was not stopped (the permission was denied).
