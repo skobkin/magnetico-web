@@ -176,6 +176,41 @@ func (r *Reader) TorrentByInfoHash(ctx context.Context, infoHash []byte) (Torren
 	return t, found, err
 }
 
+// Bounds of LatestTorrents (the RSS feed: 1,000 items a page, ten pages).
+const (
+	MaxLatestLimit  = 1000
+	MaxLatestOffset = 9000
+)
+
+// LatestTorrents returns up to limit torrents, newest first by id (the legacy
+// feed order), skipping offset rows. It reads the torrents table only and
+// never touches blobs. The bounds are enforced here: limit 1..MaxLatestLimit,
+// offset 0..MaxLatestOffset (anything else is ErrInvalidSearch), so no caller
+// can ask for an unbounded scan.
+func (r *Reader) LatestTorrents(ctx context.Context, offset, limit int) ([]Torrent, error) {
+	if limit < 1 || limit > MaxLatestLimit || offset < 0 || offset > MaxLatestOffset {
+		return nil, ErrInvalidSearch
+	}
+	var out []Torrent
+	err := r.readTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+torrentColumns+` FROM magneticod.torrents ORDER BY id DESC LIMIT $1 OFFSET $2`, limit, offset)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		out = make([]Torrent, 0, min(limit, 1024))
+		for rows.Next() {
+			var t Torrent
+			if err := rows.Scan(&t.ID, &t.InfoHash, &t.Name, &t.TotalSize, &t.DiscoveredOn, &t.FileCount); err != nil {
+				return err
+			}
+			out = append(out, t)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // FileIdentity identifies the stored file list of a torrent without reading it.
 type FileIdentity struct {
 	Torrent

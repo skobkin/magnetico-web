@@ -22,6 +22,9 @@ func documentedOperations(t *testing.T) []string {
 	}
 	var ops []string
 	for path, item := range doc.Paths {
+		if path == "/feeds/latest.rss" {
+			continue // served by the feed package; the cross-package test in apidocs covers it
+		}
 		for method := range item {
 			switch method {
 			case "get", "put", "post", "delete", "patch", "head", "options", "trace":

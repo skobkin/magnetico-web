@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Last</title>
+    <description>Last Last torrents</description>
+    <pubDate>{DATE}</pubDate>
+    <lastBuildDate>{DATE}</lastBuildDate>
+    <generator>Magnetico</generator>
+    <link>https://magnet.example.org/</link>
+    <language>en-US</language>
+    <atom:link href="https://magnet.example.org{SELF}" rel="self" type="application/rss+xml"/>
+    <item>
+      <title>Third &amp; last &lt;one&gt;</title>
+      <description>cccccccccccccccccccccccccccccccccccccccc</description>
+      <pubDate>Tue, 14 Nov 2023 22:15:20 +0000</pubDate>
+      <link>magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc&amp;dn=Third+%26+last+%3Cone%3E&amp;tr=udp%3A%2F%2Ftracker.one%3A1337%2Fannounce&amp;tr=http%3A%2F%2Ftracker.two%3A80%2Fannounce</link>
+      <guid isPermaLink="false">cccccccccccccccccccccccccccccccccccccccc</guid>
+      <comments>https://magnet.example.org/torrents/{ID3}</comments>
+      <enclosure url="magnet:?xt=urn:btih:cccccccccccccccccccccccccccccccccccccccc&amp;dn=Third+%26+last+%3Cone%3E&amp;tr=udp%3A%2F%2Ftracker.one%3A1337%2Fannounce&amp;tr=http%3A%2F%2Ftracker.two%3A80%2Fannounce" length="3000" type="application/x-bittorrent"/>
+    </item>
+    <item>
+      <title>Второй торрент</title>
+      <description>bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</description>
+      <pubDate>Tue, 14 Nov 2023 22:14:20 +0000</pubDate>
+      <link>magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&amp;dn=%D0%92%D1%82%D0%BE%D1%80%D0%BE%D0%B9+%D1%82%D0%BE%D1%80%D1%80%D0%B5%D0%BD%D1%82&amp;tr=udp%3A%2F%2Ftracker.one%3A1337%2Fannounce&amp;tr=http%3A%2F%2Ftracker.two%3A80%2Fannounce</link>
+      <guid isPermaLink="false">bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb</guid>
+      <comments>https://magnet.example.org/torrents/{ID2}</comments>
+      <enclosure url="magnet:?xt=urn:btih:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb&amp;dn=%D0%92%D1%82%D0%BE%D1%80%D0%BE%D0%B9+%D1%82%D0%BE%D1%80%D1%80%D0%B5%D0%BD%D1%82&amp;tr=udp%3A%2F%2Ftracker.one%3A1337%2Fannounce&amp;tr=http%3A%2F%2Ftracker.two%3A80%2Fannounce" length="2000" type="application/x-bittorrent"/>
+    </item>
+    <item>
+      <title>First</title>
+      <description>aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</description>
+      <pubDate>Tue, 14 Nov 2023 22:13:20 +0000</pubDate>
+      <link>magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amp;dn=First&amp;tr=udp%3A%2F%2Ftracker.one%3A1337%2Fannounce&amp;tr=http%3A%2F%2Ftracker.two%3A80%2Fannounce</link>
+      <guid isPermaLink="false">aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa</guid>
+      <comments>https://magnet.example.org/torrents/{ID1}</comments>
+      <enclosure url="magnet:?xt=urn:btih:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&amp;dn=First&amp;tr=udp%3A%2F%2Ftracker.one%3A1337%2Fannounce&amp;tr=http%3A%2F%2Ftracker.two%3A80%2Fannounce" length="1000" type="application/x-bittorrent"/>
+    </item>
+  </channel>
+</rss>

@@ -5,8 +5,14 @@ package apidocs
 
 import _ "embed"
 
+//go:embed openapi/v1.yaml
+var v1 []byte
+
 //go:embed openapi/v2.yaml
 var v2 []byte
+
+// V1 returns the OpenAPI document of /api/v1 (the deprecated RSS feed).
+func V1() []byte { return append([]byte(nil), v1...) }
 
 // V2 returns the OpenAPI document of /api/v2.
 func V2() []byte { return append([]byte(nil), v2...) }

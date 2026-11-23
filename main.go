@@ -33,6 +33,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	webapiv2 "github.com/skobkin/magnetico-web/internal/web/apiv2"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
+	webfeed "github.com/skobkin/magnetico-web/internal/web/feed"
 	"github.com/skobkin/magnetico-web/internal/web/filecache"
 	"github.com/skobkin/magnetico-web/internal/web/fileview"
 	webmail "github.com/skobkin/magnetico-web/internal/web/mail"
@@ -425,6 +426,15 @@ func runWeb(o *opflags.WebOptions) {
 
 	if _, err := webtorrents.Install(srv, webtorrents.Deps{
 		Search: searchSvc, Details: reader, View: viewSvc, Trackers: trackerCache, PublicBase: o.PublicBaseURL,
+	}); err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+
+	// RSS feeds (W7): the deprecated v1 compatibility feed and the v2 feed, each
+	// with its own fixed credential policy, over RSS tokens only.
+	if _, err := webfeed.Install(srv, webfeed.Config{
+		Auth: accountStore, Rows: reader, Trackers: trackerCache, PublicBase: o.PublicBaseURL,
 	}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())

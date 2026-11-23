@@ -1,0 +1,111 @@
+openapi: 3.1.0
+info:
+  title: Magnetico API (v1, deprecated)
+  version: "1.0"
+  description: |
+    The legacy compatibility surface: one RSS feed for torrent clients. It is
+    **deprecated** and may be removed in a future release; use the v2 feed
+    (`/api/v2/feeds/latest.rss?feed_token=`) and the JSON API under `/api/v2`.
+    Existing URLs and existing legacy tokens keep working until their token is
+    revoked (or all tokens are revoked by a password reset).
+
+    The old login, logout and JSON torrent endpoints do not exist any more.
+
+    **Authentication.** An **RSS token** only (a token created in the *RSS
+    feeds* section of the account page, or a legacy token carried over from the
+    old application). It may be sent as the `api-token` header, as the
+    `api-token` cookie, or as the `api-token` query parameter, checked in that
+    order. General API tokens (`mgt_...`) are rejected here, exactly as RSS
+    tokens are rejected by the JSON API. Because the token can appear in a URL,
+    the response carries `Referrer-Policy: no-referrer` and
+    `Cache-Control: private, no-store`, and the server never logs or echoes
+    it; configure your reverse proxy to mask query strings in its own logs.
+servers:
+  - url: /api/v1
+paths:
+  /feed/rss/last:
+    get:
+      deprecated: true
+      operationId: getLegacyFeed
+      summary: Newest torrents as RSS 2.0
+      description: |
+        Up to 1,000 torrents per page, newest first. Each item has the info hash
+        as `guid` and `description`, the torrent name as `title`, the magnet URI
+        (with the configured trackers and the name) as `link`, the details page
+        as `comments`, the discovery time as `pubDate`, and an `enclosure` whose
+        `url` is the magnet URI, `length` the total size in bytes and `type`
+        `application/x-bittorrent`.
+
+        **Change from the old application:** `page=1` (the default) now returns
+        the newest 1,000 torrents. The old feed skipped them, so on its first
+        poll after the upgrade a client may see up to 1,000 recent items it has
+        never seen; item GUIDs are info hashes, so clients de-duplicate.
+      security:
+        - apiTokenHeader: []
+        - apiTokenCookie: []
+        - apiTokenQuery: []
+      parameters:
+        - name: page
+          in: query
+          description: 1 to 10; larger values are treated as 10, anything else as 1.
+          schema: {type: integer, minimum: 1, maximum: 10, default: 1}
+      responses:
+        "200":
+          description: The feed.
+          content:
+            application/rss+xml:
+              schema: {type: string}
+        "401":
+          description: The RSS token is missing, unknown, expired, revoked or its owner is suspended. The same answer is given in every case.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+              example: {code: 401, status: error, message: Invalid credentials., data: null}
+        "429":
+          description: Too many requests.
+          headers:
+            Retry-After:
+              schema: {type: integer, minimum: 0}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "500":
+          description: Unexpected failure.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+        "503":
+          description: Busy or temporarily unavailable; retry after the delay.
+          headers:
+            Retry-After:
+              schema: {type: integer, minimum: 0}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+components:
+  securitySchemes:
+    apiTokenHeader:
+      type: apiKey
+      in: header
+      name: api-token
+      description: An RSS token. General API tokens are rejected.
+    apiTokenCookie:
+      type: apiKey
+      in: cookie
+      name: api-token
+      description: An RSS token. General API tokens are rejected.
+    apiTokenQuery:
+      type: apiKey
+      in: query
+      name: api-token
+      description: An RSS token (the form existing torrent clients use). General API tokens are rejected.
+  schemas:
+    Error:
+      type: object
+      description: The legacy error envelope.
+      required: [code, status, message, data]
+      properties:
+        code: {type: integer}
+        status: {type: string, enum: [error, fail]}
+        message: {type: string}
+        data: {type: "null"}

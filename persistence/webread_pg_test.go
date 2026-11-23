@@ -534,3 +534,46 @@ func TestReaderFileBlobOversizedIsNotChanged(t *testing.T) {
 		t.Fatalf("normal: %v", err)
 	}
 }
+
+func TestLatestTorrentsOrderBoundsAndNoBlobAccess(t *testing.T) {
+	e := newReaderEnv(t)
+	var all []int32
+	for i := 0; i < 25; i++ {
+		all = append(all, e.seed(t, fmt.Sprintf("t%02d", i), int64(i+1), int64(1_000_000+i), 1))
+	}
+	ctx := context.Background()
+	got, err := e.r.LatestTorrents(ctx, 0, 10)
+	if err != nil || len(got) != 10 {
+		t.Fatalf("%d %v", len(got), err)
+	}
+	for i, tr := range got { // newest id first
+		if tr.ID != all[len(all)-1-i] {
+			t.Fatalf("row %d = %d", i, tr.ID)
+		}
+	}
+	next, _ := e.r.LatestTorrents(ctx, 10, 10)
+	if next[0].ID != all[len(all)-11] || len(next) != 10 {
+		t.Fatalf("second page starts at %d", next[0].ID)
+	}
+	tail, _ := e.r.LatestTorrents(ctx, 20, 10)
+	if len(tail) != 5 || tail[4].ID != all[0] {
+		t.Fatalf("tail = %d rows", len(tail))
+	}
+	if empty, err := e.r.LatestTorrents(ctx, 100, 10); err != nil || len(empty) != 0 {
+		t.Fatalf("beyond the end: %d %v", len(empty), err)
+	}
+	for _, b := range [][2]int{{-1, 10}, {0, 0}, {0, MaxLatestLimit + 1}, {MaxLatestOffset + 1, 10}} {
+		if _, err := e.r.LatestTorrents(ctx, b[0], b[1]); !errors.Is(err, ErrInvalidSearch) {
+			t.Fatalf("offset %d limit %d: %v", b[0], b[1], err)
+		}
+	}
+	if _, err := e.r.LatestTorrents(ctx, MaxLatestOffset, MaxLatestLimit); err != nil {
+		t.Fatalf("largest page: %v", err)
+	}
+	// The statement budget applies: an expired context fails fast.
+	cctx, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := e.r.LatestTorrents(cctx, 0, 10); err == nil {
+		t.Fatal("cancelled context accepted")
+	}
+}

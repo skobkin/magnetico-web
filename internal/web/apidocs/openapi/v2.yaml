@@ -33,6 +33,7 @@ security:
 tags:
   - name: Torrents
   - name: Files
+  - name: Feeds
 paths:
   /torrents:
     get:
@@ -189,8 +190,58 @@ paths:
         "429": {$ref: "#/components/responses/RateLimited"}
         "500": {$ref: "#/components/responses/InternalError"}
         "503": {$ref: "#/components/responses/Unavailable"}
+  /feeds/latest.rss:
+    get:
+      tags: [Feeds]
+      operationId: getLatestFeed
+      summary: Newest torrents as RSS 2.0
+      description: |
+        The one endpoint that does **not** use the Authorization header, so that
+        torrent clients and feed readers that cannot send custom headers can use
+        it. It accepts an **RSS token** (`mgf_...`, created in the *RSS feeds*
+        section of the account page) in the `feed_token` query parameter, and
+        nothing else: API tokens, session cookies and the legacy `api-token`
+        transports do not work here. RSS tokens in turn do not work on any JSON
+        endpoint.
+
+        Up to 1,000 torrents per page, newest first, in the same item format as
+        the deprecated v1 feed (the info hash is the `guid` and `description`,
+        `link` and the `enclosure` url are the magnet URI with the configured
+        trackers, `comments` is the details page). Because the token is part of
+        the URL, the response carries `Referrer-Policy: no-referrer` and
+        `Cache-Control: private, no-store`; the server never logs or echoes the
+        token. Treat the URL like a password.
+      security:
+        - feedToken: []
+      parameters:
+        - name: feed_token
+          in: query
+          required: true
+          description: An RSS token. Must be given exactly once.
+          schema: {type: string, maxLength: 256}
+        - name: page
+          in: query
+          description: 1 to 10; larger values are treated as 10, anything else as 1.
+          schema: {type: integer, minimum: 1, maximum: 10, default: 1}
+      responses:
+        "200":
+          description: The feed.
+          content:
+            application/rss+xml:
+              schema: {type: string}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "429": {$ref: "#/components/responses/RateLimited"}
+        "500": {$ref: "#/components/responses/InternalError"}
+        "503": {$ref: "#/components/responses/Unavailable"}
 components:
   securitySchemes:
+    feedToken:
+      type: apiKey
+      in: query
+      name: feed_token
+      description: |
+        An RSS token (`mgf_...`). Accepted only by the feed endpoint, and only
+        in this query parameter.
     bearerAuth:
       type: http
       scheme: bearer
