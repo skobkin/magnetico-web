@@ -249,8 +249,17 @@ func (a *Auth) postLogout(w http.ResponseWriter, r *http.Request) {
 	redirect(w, "/login")
 }
 
-// home is the interim signed-in page at the exact root (until W4).
+// home redirects the exact root of a signed-in session to the torrent list.
 func (a *Auth) home(w http.ResponseWriter, r *http.Request) {
-	au, _ := authedOf(r.Context())
-	_ = a.srv.Renderer().Render(w, http.StatusOK, "home", ui.HomePage{Username: au.Username, CSRFToken: sessionCSRF(au.token)})
+	redirect(w, "/torrents")
+}
+
+// SessionFormToken returns the session-bound CSRF token for forms on pages
+// served on Session routes (the logout form). It is empty outside them.
+func SessionFormToken(r *http.Request) string {
+	au, ok := authedOf(r.Context())
+	if !ok {
+		return ""
+	}
+	return sessionCSRF(au.token)
 }

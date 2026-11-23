@@ -4,3 +4,14 @@
 body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
 main { max-width: 40rem; margin: 3rem auto; padding: 0 1rem; }
 .meta { color: var(--muted); font-size: .875rem; }
+/* W4 minimal pages (functional only; W5 owns the design). */
+nav { display: flex; gap: 1rem; align-items: center; padding: .5rem 1rem; border-bottom: 1px solid var(--muted); }
+form.inline { display: inline; margin-left: auto; }
+main.wide, body main { max-width: 60rem; }
+.marker { color: var(--muted); background: rgba(128,128,128,.2); border-radius: 3px; padding: 0 .2em; font-family: monospace; }
+.dup { color: var(--muted); font-size: .8rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid rgba(128,128,128,.3); vertical-align: top; }
+td.num { text-align: right; white-space: nowrap; }
+td.name { overflow-wrap: anywhere; }
+.error { color: #b00020; }

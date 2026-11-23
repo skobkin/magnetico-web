@@ -1,9 +1,0 @@
-{{define "title"}}Home{{end}}
-{{define "content"}}
-<h1>Signed in</h1>
-<p>Signed in as {{.Username}}.</p>
-<form method="post" action="/logout">
-{{template "csrf" .CSRFToken}}
-<p><button type="submit">Sign out</button></p>
-</form>
-{{end}}

@@ -337,3 +337,32 @@ func TestBackgroundStopsOnForcedShutdown(t *testing.T) {
 		t.Fatal("background task still running at backend close")
 	}
 }
+
+func TestDrainedHooksRunBeforeBackgroundStopsAndBackendCloses(t *testing.T) {
+	var order []string
+	err, _, be := runWithBackground(t, func(ctx context.Context, running *atomic.Bool) {
+		<-ctx.Done()
+		order = append(order, "background-stopped")
+		running.Store(false)
+	}, func(s *Server) {
+		s.OnDrained(func(context.Context) error {
+			order = append(order, "drained")
+			return nil
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(order) != 2 || order[0] != "drained" || order[1] != "background-stopped" || be.closed.Load() != 1 {
+		t.Fatalf("order %v closed=%d", order, be.closed.Load())
+	}
+}
+
+func TestFailingDrainedHookReportsIncompleteShutdown(t *testing.T) {
+	err, _, be := runWithBackground(t, func(ctx context.Context, running *atomic.Bool) { <-ctx.Done() }, func(s *Server) {
+		s.OnDrained(func(ctx context.Context) error { return errors.New("stuck") })
+	})
+	if !errors.Is(err, ErrShutdownIncomplete) || be.closed.Load() != 1 {
+		t.Fatalf("Run: %v closed=%d", err, be.closed.Load())
+	}
+}

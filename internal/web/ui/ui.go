@@ -168,13 +168,6 @@ type LoginPage struct {
 	Error     string // generic message, "" for none
 }
 
-// HomePage is the interim signed-in page served at the exact root until W4
-// adds the torrent pages.
-type HomePage struct {
-	Username  string
-	CSRFToken string // session-bound token for the logout form
-}
-
 // MessagePage is a plain notice (CSRF failure, temporary unavailability).
 type MessagePage struct {
 	Heading  string

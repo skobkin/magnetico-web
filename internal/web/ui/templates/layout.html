@@ -1,4 +1,13 @@
 {{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.}}">{{end}}
+{{define "navbar"}}<nav>
+<a href="/torrents">Torrents</a>
+<span class="meta">Signed in as {{.Username}}</span>
+<form method="post" action="/logout" class="inline">
+{{template "csrf" .CSRFToken}}
+<button type="submit">Sign out</button>
+</form>
+</nav>{{end}}
+{{define "segs"}}{{range .}}{{if .Marker}}<span class="marker">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{end}}{{end}}
 {{define "layout"}}<!doctype html>
 <html lang="en">
 <head>
@@ -9,6 +18,7 @@
 <link rel="stylesheet" href="{{asset "app.css"}}">
 </head>
 <body>
+{{block "nav" .}}{{end}}
 <main>
 {{template "content" .}}
 </main>

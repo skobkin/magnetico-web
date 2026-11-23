@@ -1,0 +1,36 @@
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "title"}}Torrents{{end}}
+{{define "content"}}
+<h1>Torrents</h1>
+<form method="get" action="/torrents">
+<p>
+<input type="search" name="q" value="{{.Q}}" maxlength="512" aria-label="Search">
+<select name="sort" aria-label="Sort by">
+{{range .SortOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+<select name="order" aria-label="Direction">
+{{range .OrderOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+<select name="size" aria-label="Page size">
+{{range .SizeOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+<button type="submit">Search</button>
+</p>
+</form>
+{{if .Ignored}}<p class="meta">{{.Ignored}} word(s) shorter than 3 characters were ignored.</p>{{end}}
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+{{if .Rows}}
+<table>
+<thead><tr><th>Name</th><th>Size</th><th>Files</th><th>Discovered</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr>
+<td class="name"><a href="{{.Href}}"><bdi>{{template "segs" .Name}}</bdi></a></td>
+<td class="num">{{.Size}}</td><td class="num">{{.Files}}</td><td class="num"><time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></td>
+</tr>{{end}}
+</tbody>
+</table>
+<p>{{if .Prev}}<a href="{{.Prev}}" rel="prev">Previous</a>{{end}} {{if .Next}}<a href="{{.Next}}" rel="next">Next</a>{{end}}</p>
+{{else if not .Error}}
+<p>{{if .Lookup}}No torrent has that info hash.{{else if .Query}}No torrents match your search.{{else}}There are no torrents yet.{{end}}</p>
+{{end}}
+{{end}}

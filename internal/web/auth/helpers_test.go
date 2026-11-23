@@ -235,6 +235,7 @@ func newEnv(t *testing.T, mutate ...func(*envOpts)) *env {
 	a, err := Install(srv, Config{
 		Store: e.store, Verifier: e.svc, Lifetimes: testLifetimes, DevMode: o.dev,
 		Now: e.clock.Now, IPLimiter: ip, UserLimiter: ul,
+		RootHandler: http.HandlerFunc(testRoot),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -439,4 +440,13 @@ func loadFixture(t *testing.T, id string) (hash, pw string) {
 	}
 	t.Fatalf("fixture %s not found", id)
 	return
+}
+
+// testRoot stands in for a signed-in page (W3 had an interim home page): it
+// shows the user and carries the session form token, as a real page chrome does.
+func testRoot(w http.ResponseWriter, r *http.Request) {
+	p, _ := Current(r.Context())
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte("<p>Signed in as " + p.Username + `</p><form method="post" action="/logout"><input type="hidden" name="csrf_token" value="` +
+		SessionFormToken(r) + `"></form>`))
 }

@@ -86,6 +86,7 @@ type Server struct {
 	// (auth.Install); see Run for their lifecycle.
 	startup    []func(context.Context) error
 	background func(context.Context)
+	onDrained  []func(context.Context) error
 	bgStopWait time.Duration // bound on waiting for the background task at shutdown
 
 	baseCtx    context.Context
@@ -237,6 +238,14 @@ func (s *Server) OnStartup(f func(context.Context) error) { s.startup = append(s
 // and is cancelled and awaited before the database is closed.
 func (s *Server) SetBackground(f func(context.Context)) { s.background = f }
 
+// OnDrained registers a hook that runs at shutdown after the in-flight
+// requests are drained or terminated and before the background task and the
+// database are stopped. It lets a component that owns request-detached work
+// (the file-index cache) stop it while the database is still open; the hook
+// must return within the context it is given or report an error, which makes
+// the shutdown incomplete.
+func (s *Server) OnDrained(f func(context.Context) error) { s.onDrained = append(s.onDrained, f) }
+
 // ErrorPage renders the generic error page for status (details never reach
 // the client).
 func (s *Server) ErrorPage(w http.ResponseWriter, r *http.Request, status int) {
@@ -366,9 +375,10 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case err := <-serveErr:
 		// Serve returns only on failure here (Shutdown has not been called).
+		drained := s.runDrained()
 		stopped := stopBackground()
 		s.backend.Close()
-		if !stopped {
+		if !stopped || !drained {
 			// Keep the Serve failure for diagnostics and report the incomplete
 			// shutdown too; errors.Is matches both.
 			return fmt.Errorf("serve: %w (%w)", err, ErrShutdownIncomplete)
@@ -409,6 +419,21 @@ func (s *Server) startBackground() (stop func() bool) {
 	}
 }
 
+// runDrained runs the OnDrained hooks, each bounded; it reports whether all
+// completed.
+func (s *Server) runDrained() bool {
+	ok := true
+	for _, f := range s.onDrained {
+		hctx, hcancel := context.WithTimeout(context.Background(), s.bgStopWait)
+		if err := f(hctx); err != nil {
+			ok = false
+			s.log.Warn("shutdown hook did not complete", "error_type", typeName(err))
+		}
+		hcancel()
+	}
+	return ok
+}
+
 func (s *Server) shutdown(srv *http.Server, stopBackground func() bool) error {
 	s.draining.Store(true)
 	incomplete := false
@@ -426,6 +451,10 @@ func (s *Server) shutdown(srv *http.Server, stopBackground func() bool) error {
 		for s.inflight.Load() > 0 && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+
+	if !s.runDrained() {
+		incomplete = true
 	}
 
 	// In-flight requests are drained or terminated; now the purger, and only

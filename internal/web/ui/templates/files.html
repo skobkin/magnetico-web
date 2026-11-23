@@ -1,0 +1,24 @@
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "title"}}Files{{end}}
+{{define "content"}}
+<p><a href="{{.TorrentHref}}">&larr; Torrent</a></p>
+<h1><bdi>{{template "segs" .Name}}</bdi></h1>
+<p class="breadcrumbs">
+<a href="{{.RootHref}}">/</a>{{range .Crumbs}} / {{if .Href}}<a href="{{.Href}}">{{template "segs" .Name}}</a>{{else}}{{template "segs" .Name}}{{end}}{{end}}
+</p>
+<p class="meta">{{.DirFiles}} file(s), {{.DirSize}} in this directory tree.{{if .Total}} Showing {{.First}}–{{.Last}} of {{.Total}} entries.{{end}}</p>
+{{if .Rows}}
+<table>
+<thead><tr><th>Name</th><th>Size</th><th>Files</th></tr></thead>
+<tbody>
+{{range .Rows}}<tr>
+<td class="name">{{if .Dir}}<a href="{{.Href}}">{{template "segs" .Name}}/</a>{{else}}{{template "segs" .Name}}{{if .Dup}} <span class="dup">(duplicate path)</span>{{end}}{{end}}</td>
+<td class="num">{{.Size}}</td><td class="num">{{if .Dir}}{{.Files}}{{end}}</td>
+</tr>{{end}}
+</tbody>
+</table>
+<p>{{if .Prev}}<a href="{{.Prev}}" rel="prev">Previous</a>{{end}} {{if .Next}}<a href="{{.Next}}" rel="next">Next</a>{{end}}</p>
+{{else}}
+<p>This directory is empty.</p>
+{{end}}
+{{end}}

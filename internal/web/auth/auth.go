@@ -70,6 +70,8 @@ type Config struct {
 	DevMode bool
 
 	// Optional overrides (tests). Nil/zero means the documented defaults.
+	// RootHandler replaces the redirect from the exact root to /torrents.
+	RootHandler http.Handler
 	Now         func() time.Time // clock of the pre-session cookie
 	IPLimiter   *ratelimit.Limiter
 	UserLimiter *ratelimit.Limiter
@@ -130,7 +132,11 @@ func Install(srv *server.Server, cfg Config) (*Auth, error) {
 	rt.Handle("POST /logout", server.KindRequest, server.Session, http.HandlerFunc(a.postLogout))
 	// Exact root only: "GET /" would be a subtree pattern and would answer every
 	// unknown GET path (/torrents before W4, legacy routes) instead of 404.
-	rt.Handle("GET /{$}", server.KindRequest, server.Session, http.HandlerFunc(a.home))
+	var root http.Handler = http.HandlerFunc(a.home)
+	if cfg.RootHandler != nil {
+		root = cfg.RootHandler
+	}
+	rt.Handle("GET /{$}", server.KindRequest, server.Session, root)
 
 	srv.OnStartup(a.startup)
 	srv.SetBackground(a.Background)

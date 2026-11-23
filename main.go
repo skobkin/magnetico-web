@@ -31,8 +31,11 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
+	"github.com/skobkin/magnetico-web/internal/web/filecache"
 	"github.com/skobkin/magnetico-web/internal/web/password"
+	websearch "github.com/skobkin/magnetico-web/internal/web/search"
 	webserver "github.com/skobkin/magnetico-web/internal/web/server"
+	webtorrents "github.com/skobkin/magnetico-web/internal/web/torrents"
 	webdb "github.com/skobkin/magnetico-web/internal/web/webdb"
 	"github.com/skobkin/magnetico-web/internal/web/webschema"
 	"github.com/skobkin/magnetico-web/metadata"
@@ -341,6 +344,26 @@ func runWeb(o *opflags.WebOptions) {
 		},
 		DevMode: o.DevMode,
 	}); err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+
+	// Search, details and the file browser (W4). The file-index cache owns the
+	// only request-detached work; it is stopped after requests drain and
+	// before the database closes.
+	reader := persistence.NewReader(backend.Pool(), codec.DefaultLimits())
+	searchSvc, err := websearch.New(reader, websearch.Config{Concurrency: o.SearchConcurrency})
+	if err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+	fileCache, err := filecache.New(reader, filecache.Config{Logger: logger})
+	if err != nil {
+		backend.Close()
+		log.Fatalln("The web service could not start: " + err.Error())
+	}
+	srv.OnDrained(fileCache.Close)
+	if _, err := webtorrents.Install(srv, webtorrents.Deps{Search: searchSvc, Details: reader, Files: fileCache}); err != nil {
 		backend.Close()
 		log.Fatalln("The web service could not start: " + err.Error())
 	}

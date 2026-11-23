@@ -1,0 +1,14 @@
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "title"}}Torrent{{end}}
+{{define "content"}}
+<p><a href="/torrents">&larr; Torrents</a></p>
+<h1><bdi>{{template "segs" .Name}}</bdi></h1>
+<dl>
+<dt>Size</dt><dd>{{.Size}}</dd>
+<dt>Files</dt><dd>{{.Files}}</dd>
+<dt>Discovered</dt><dd><time datetime="{{.DiscoveredISO}}">{{.Discovered}}</time></dd>
+<dt>Info hash</dt><dd><code>{{.InfoHash}}</code></dd>
+<dt>Magnet (no trackers)</dt><dd><a href="{{.Magnet}}">Open magnet link</a></dd>
+</dl>
+<p><a href="{{.FilesHref}}">Browse files</a></p>
+{{end}}
