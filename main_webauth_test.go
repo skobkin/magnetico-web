@@ -278,8 +278,8 @@ func TestWebBinaryLoginFlow(t *testing.T) {
 	if resp := b.get("/"); resp.StatusCode != 303 || resp.Header.Get("Location") != "/login?next=%2F" {
 		t.Fatalf("anonymous /: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	if resp := b.get("/torrents"); resp.StatusCode != 404 {
-		t.Fatalf("/torrents before W4: %d", resp.StatusCode)
+	if resp := b.get("/torrents"); resp.StatusCode != 303 || resp.Header.Get("Location") != "/login?next=%2Ftorrents" {
+		t.Fatalf("anonymous /torrents: %d %q", resp.StatusCode, resp.Header.Get("Location"))
 	}
 
 	// Wrong password, then the right one.
@@ -318,7 +318,7 @@ func TestWebBinaryLoginFlow(t *testing.T) {
 	if resp := b.login("alice", pw); resp.StatusCode != 303 {
 		t.Fatalf("second login: %d", resp.StatusCode)
 	}
-	b.get("/")
+	b.get("/torrents")
 	tok := b.token()
 	if resp := b.get("/logout"); resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /logout: %d", resp.StatusCode)

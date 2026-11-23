@@ -172,8 +172,9 @@ func TestWebBinaryServesAndStopsOnSIGTERM(t *testing.T) {
 	if resp, _ := get("/healthz"); resp.StatusCode != 200 {
 		t.Fatalf("healthz: %d", resp.StatusCode)
 	}
-	if resp, _ := get("/torrents"); resp.StatusCode != 404 {
-		t.Fatalf("no data route may exist in W1, got %d", resp.StatusCode)
+	// (The anonymous redirect of the W4 routes is covered by the login-flow test.)
+	if resp, _ := get("/nonexistent"); resp.StatusCode != 404 {
+		t.Fatalf("unknown path: %d", resp.StatusCode)
 	}
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
