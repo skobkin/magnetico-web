@@ -1038,31 +1038,6 @@ main {
 .file-browser-root {
   min-height:92px;
 }
-.file-browser-status {
-  padding:11px 14px;
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  flex-wrap:wrap;
-}
-.file-browser-mode {
-  display:flex;
-  align-items:center;
-  gap:9px;
-  flex-wrap:wrap;
-  font-size:12px;
-}
-.file-browser-mode strong {
-  font-size:12px;
-}
-.status-dot {
-  width:7px;
-  height:7px;
-  background:var(--accent);
-  border-radius:50%;
-  flex:0 0 auto;
-}
 .browser-tooling {
   padding:9px 14px;
   display:flex;
@@ -1371,11 +1346,6 @@ main {
   display:none!important;
 }
 @media(max-width:680px) {
-  .file-browser-status {
-    padding:10px 11px;
-    align-items:start;
-    gap:8px;
-  }
   .browser-tooling {
     padding:8px 10px;
     gap:7px;

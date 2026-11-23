@@ -142,6 +142,11 @@ window.runSelfTests = async function (vectors) {
   q(root, '[data-act="collapse"]').click();
   await sleep(10);
   check("tree: collapse all", qa(root, ".tree-row").length === 5, qa(root, ".tree-row").length);
+  q(root, '[data-act="expand"]').click();
+  await sleep(10);
+  check("tree: expand all opens every folder", qa(root, ".tree-row").length > 5 && qa(root, '.folder-toggle[aria-expanded="false"]').length === 0, qa(root, ".tree-row").length);
+  q(root, '[data-act="collapse"]').click();
+  await sleep(10);
 
   // small torrents expand everything
   var fs = fakeFetch(function () { var d = treeDoc(3); d.file_count = 8; return { status: 200, body: d }; });

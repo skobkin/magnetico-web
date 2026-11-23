@@ -210,16 +210,6 @@
 
   /* ---- shared pieces of the browser panels ------------------------------- */
 
-  function statusLine(label, detail) {
-    return h("div", { class: "file-browser-status" }, [
-      h("div", { class: "file-browser-mode" }, [
-        h("span", { class: "status-dot", "aria-hidden": "true" }),
-        h("strong", { text: label }),
-        h("span", { class: "subtext small", text: detail || "" })
-      ])
-    ]);
-  }
-
   function loadingBlock(text) {
     return h("div", { class: "file-loading", role: "status" }, [h("span", { class: "spinner", "aria-hidden": "true" }), text]);
   }
@@ -350,7 +340,6 @@
     function load() {
       tree = null;
       clear(panel);
-      panel.appendChild(statusLine("In-browser tree", "Loading file list…"));
       panel.appendChild(loadingBlock("Loading the file list…"));
       ctx.request(ctx.treeUrl, holder).then(function (res) {
         if (res.status !== 200 || res.bad || !res.body) {
@@ -369,7 +358,6 @@
 
     function showError(f) {
       clear(panel);
-      panel.appendChild(statusLine("In-browser tree", ""));
       panel.appendChild(errorBlock(f, "retry"));
       var b = $('[data-act="retry"]', panel);
       if (b) b.focus();
@@ -377,11 +365,11 @@
 
     function ready() {
       clear(panel);
-      panel.appendChild(statusLine("In-browser tree", countText(tree.files) + " · loaded once"));
       var input = h("input", { type: "search", "data-filter": "", placeholder: "Filter files by name", autocomplete: "off", "aria-label": "Filter files by name" });
       panel.appendChild(h("div", { class: "browser-tooling" }, [
         h("label", { class: "file-search" }, [h("span", { class: "sr-only", text: "Filter file names" }), icon("search"), input]),
         h("button", { type: "button", class: "btn small ghost", "data-act": "clear", hidden: true, text: "Clear" }),
+        h("button", { type: "button", class: "btn small", "data-act": "expand", text: "Expand all" }),
         h("button", { type: "button", class: "btn small", "data-act": "collapse", text: "Collapse all" })
       ]));
       panel.appendChild(h("div", { class: "file-list-head" }, [
@@ -445,6 +433,11 @@
         // Filtering tracks collapsed folders, normal browsing tracks expanded ones;
         // the manual expansion survives a filter session untouched.
         if (open === !!state.filter) set.add(id); else set.delete(id);
+        render();
+      } else if (act === "expand") {
+        state.filterClosed.clear();
+        tree.nodes.forEach(function (n) { if (n.type === "dir") state.expanded.add(n.id); });
+        state.limit = TREE_CHUNK;
         render();
       } else if (act === "collapse") {
         state.expanded.clear();
@@ -567,7 +560,6 @@
     function draw(focusCrumbs) {
       var d = cur.data, ready = cur.status === "ready";
       clear(panel);
-      panel.appendChild(statusLine("On-demand browsing", (ctx.files ? countText(ctx.files) + " · " : "") + "Folders are loaded as you open them"));
       if (notice) panel.appendChild(h("div", { class: "file-warning", role: "status" }, [icon("info"), h("div", {}, [h("p", { text: notice })])]));
       var ancestors = d ? d.ancestors || [] : [];
       var crumbs = [h("button", { type: "button", "data-path": "", "aria-current": ready && !ancestors.length ? "location" : false }, ["Root"])];
