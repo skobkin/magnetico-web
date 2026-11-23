@@ -91,3 +91,7 @@ All use disposable PostgreSQL (`internal/pgtest`) and synthetic data. Behaviour 
 1. **Accept or reject Deviation 1** (identity without blob length) and Deviation 2 (four round trips per read). Neither changes behaviour.
 2. **Name sort on broad terms** is the one path that scales with the match count (52 ms at 300k rows). No action proposed now; it will be measured at 1M/5M in step 8, and any index would need your separate approval.
 3. No index, schema or codec-behaviour change was needed or made. The only codec change is the approved additive `PeekDecodedSize`.
+
+## Owner policy update (C1 batch)
+
+The owner prefers to revisit search-index optimisation **after the 0.8.0 release and migration, using real data**. The search implementation and the evidence above are unchanged; no index is added or proposed, and the 52 ms synthetic `name`-sort case is not being optimised. Item 2 above is therefore deferred, not open. Timeout, cancellation and correctness requirements are unaffected.

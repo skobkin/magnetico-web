@@ -1,0 +1,3 @@
+go1.27.0 linux/amd64, cpu="AMD Ryzen 9 7950X3D 16-Core Processor" (8 logical CPUs visible), 32102 MiB RAM, kernel 6.12.117+deb13-amd64
+no cgroup memory/CPU limit; children ran with GOMAXPROCS=2 (default matrix) or 8, GOGC=100 (default), GOMEMLIMIT unset unless the file name says otherwise
+PostgreSQL was not involved in these measurements (pure in-memory codec + index).

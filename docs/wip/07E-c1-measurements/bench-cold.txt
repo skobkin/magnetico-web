@@ -1,0 +1,15 @@
+goos: linux
+cpu: AMD Ryzen 9 7950X3D 16-Core Processor          
+BenchmarkColdBuild/deepchain-250k/decode-2         	       5	  63866091 ns/op	116562104 B/op	  250048 allocs/op
+BenchmarkColdBuild/deepchain-250k/index-arena-2    	       5	 180053359 ns/op	 9385888 B/op	      28 allocs/op
+BenchmarkColdBuild/deepchain-250k/index-ref-2      	       5	 162624614 ns/op	 2385808 B/op	      26 allocs/op
+BenchmarkColdBuild/deepchain-250k/cold-arena-2     	       5	 240106342 ns/op	125947998 B/op	  250076 allocs/op
+BenchmarkColdBuild/typical-250k/decode-2           	       5	 131883319 ns/op	94673456 B/op	  500024 allocs/op
+BenchmarkColdBuild/typical-250k/index-arena-2      	       5	  29594247 ns/op	21093344 B/op	      34 allocs/op
+BenchmarkColdBuild/typical-250k/index-ref-2        	       5	  10544822 ns/op	 4004816 B/op	      32 allocs/op
+BenchmarkColdBuild/typical-250k/cold-arena-2       	       5	 192034266 ns/op	115766800 B/op	  500058 allocs/op
+BenchmarkColdBuild/longpath-250k/decode-2          	       5	  90887418 ns/op	106982086 B/op	  250038 allocs/op
+BenchmarkColdBuild/longpath-250k/index-arena-2     	       5	  43162731 ns/op	 8283552 B/op	      14 allocs/op
+BenchmarkColdBuild/longpath-250k/index-ref-2       	       5	  37359336 ns/op	 2025360 B/op	      12 allocs/op
+BenchmarkColdBuild/longpath-250k/cold-arena-2      	       5	 106325696 ns/op	115265654 B/op	  250052 allocs/op
+ok  	github.com/skobkin/magnetico-web/internal/web/filetree	8.280s

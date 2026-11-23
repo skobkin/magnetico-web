@@ -1,0 +1,174 @@
+{
+ "dataset": "adversarial-50k",
+ "files": 50000,
+ "path_bytes": 585217,
+ "total_size": 430647246369572,
+ "stored_bytes": {
+  "flat-none": 884433,
+  "prefix-brotli9": 575464,
+  "prefix-none": 740863,
+  "prefix-zstd": 621153
+ },
+ "skipped": {
+  "trie-brotli9": "trie cannot represent this list",
+  "trie-none": "trie cannot represent this list"
+ }
+}{
+ "dataset": "deep-250k",
+ "files": 250000,
+ "path_bytes": 34226193,
+ "total_size": 2153522657100032,
+ "stored_bytes": {
+  "prefix-brotli9": 8793502,
+  "prefix-none": 11551800,
+  "prefix-zstd": 8844258,
+  "trie-brotli9": 8138212,
+  "trie-none": 11311381
+ },
+ "skipped": {
+  "flat-none": "limit stored_bytes"
+ }
+}{
+ "dataset": "deepchain-250k",
+ "files": 250000,
+ "path_bytes": 65550000,
+ "total_size": 2149907413682443,
+ "stored_bytes": {
+  "prefix-brotli9": 2265752,
+  "prefix-none": 3821812,
+  "prefix-zstd": 2333725,
+  "trie-brotli9": 2409782,
+  "trie-none": 4507358
+ },
+ "skipped": {
+  "flat-none": "limit uncompressed_bytes"
+ }
+}{
+ "dataset": "flat-250k",
+ "files": 250000,
+ "path_bytes": 12998443,
+ "total_size": 2142307459534086,
+ "stored_bytes": {
+  "flat-none": 14494473,
+  "prefix-brotli9": 9390014,
+  "prefix-none": 14041088,
+  "prefix-zstd": 10049569,
+  "trie-brotli9": 9670867,
+  "trie-none": 14494477
+ },
+ "skipped": {}
+}{
+ "dataset": "flatmax-250k",
+ "files": 250000,
+ "path_bytes": 63000000,
+ "total_size": 2148854098266859,
+ "stored_bytes": {
+  "prefix-brotli9": 1521188,
+  "prefix-zstd": 1764978,
+  "trie-brotli9": 1697010
+ },
+ "skipped": {
+  "flat-none": "limit stored_bytes",
+  "prefix-none": "limit stored_bytes",
+  "trie-none": "limit stored_bytes"
+ }
+}{
+ "dataset": "longname-1500",
+ "files": 1500,
+ "path_bytes": 30129191,
+ "total_size": 13031308735124,
+ "stored_bytes": {
+  "flat-none": 30140570,
+  "prefix-brotli9": 20378743,
+  "prefix-none": 30126718,
+  "prefix-zstd": 30127422,
+  "trie-brotli9": 20377151,
+  "trie-none": 30125928
+ },
+ "skipped": {}
+}{
+ "dataset": "longpath-250k",
+ "files": 250000,
+ "path_bytes": 63500000,
+ "total_size": 2152087278243438,
+ "stored_bytes": {
+  "prefix-brotli9": 2100936,
+  "prefix-none": 3423101,
+  "prefix-zstd": 2158911,
+  "trie-brotli9": 2044078,
+  "trie-none": 3747167
+ },
+ "skipped": {
+  "flat-none": "limit stored_bytes"
+ }
+}{
+ "dataset": "typical-100",
+ "files": 100,
+ "path_bytes": 5994,
+ "total_size": 762595490031,
+ "stored_bytes": {
+  "flat-none": 6596,
+  "prefix-brotli9": 4082,
+  "prefix-none": 5864,
+  "prefix-zstd": 4130,
+  "trie-brotli9": 3989,
+  "trie-none": 5798
+ },
+ "skipped": {}
+}{
+ "dataset": "typical-10k",
+ "files": 10000,
+ "path_bytes": 830602,
+ "total_size": 86022328829105,
+ "stored_bytes": {
+  "flat-none": 890475,
+  "prefix-brotli9": 416836,
+  "prefix-none": 591480,
+  "prefix-zstd": 420633,
+  "trie-brotli9": 408177,
+  "trie-none": 585158
+ },
+ "skipped": {}
+}{
+ "dataset": "typical-1k",
+ "files": 1000,
+ "path_bytes": 83160,
+ "total_size": 8914368525728,
+ "stored_bytes": {
+  "flat-none": 89155,
+  "prefix-brotli9": 41218,
+  "prefix-none": 59073,
+  "prefix-zstd": 41274,
+  "trie-brotli9": 40355,
+  "trie-none": 58441
+ },
+ "skipped": {}
+}{
+ "dataset": "typical-250k",
+ "files": 250000,
+ "path_bytes": 20755754,
+ "total_size": 2146479361237818,
+ "stored_bytes": {
+  "flat-none": 22252114,
+  "prefix-brotli9": 10032122,
+  "prefix-none": 14801018,
+  "prefix-zstd": 10671756,
+  "trie-brotli9": 9859907,
+  "trie-none": 14645985
+ },
+ "skipped": {}
+}{
+ "dataset": "wide-250k",
+ "files": 250000,
+ "path_bytes": 17704207,
+ "total_size": 2144638178714882,
+ "stored_bytes": {
+  "flat-none": 19200258,
+  "prefix-brotli9": 9526572,
+  "prefix-none": 14214364,
+  "prefix-zstd": 10177134,
+  "trie-brotli9": 9706821,
+  "trie-none": 14533144
+ },
+ "skipped": {}
+}
