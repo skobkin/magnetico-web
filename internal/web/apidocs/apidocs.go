@@ -49,17 +49,17 @@ func Install(srv *server.Server) {
 			srv.ErrorPage(w, r, http.StatusInternalServerError)
 		}
 	})
-	page := func(title, spec string) http.HandlerFunc {
+	page := func(title, version, spec string) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Security-Policy", docsCSP)
 			w.Header().Set("Cache-Control", "no-store")
-			if err := srv.Renderer().Render(w, http.StatusOK, "api_docs", ui.DocsPage{Title: title, SpecURL: spec}); err != nil {
+			if err := srv.Renderer().Render(w, http.StatusOK, "api_docs", ui.DocsPage{Title: title, Version: version, SpecURL: spec}); err != nil {
 				srv.ErrorPage(w, r, http.StatusInternalServerError)
 			}
 		}
 	}
-	pub("/api/v1", page("API v1 (deprecated)", "/api/v1/openapi.yaml"))
-	pub("/api/v2", page("API v2", "/api/v2/openapi.yaml"))
+	pub("/api/v1", page("API v1 (deprecated)", "v1", "/api/v1/openapi.yaml"))
+	pub("/api/v2", page("API v2", "v2", "/api/v2/openapi.yaml"))
 	pub("/api/v1/openapi.yaml", spec(v1))
 	pub("/api/v2/openapi.yaml", spec(v2))
 }

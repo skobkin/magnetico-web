@@ -94,4 +94,5 @@ type AccountPage struct {
 type DocsPage struct {
 	Title   string
 	SpecURL string // same-origin path of the OpenAPI document
+	Version string // "v1" or "v2": the switcher marks it as current
 }

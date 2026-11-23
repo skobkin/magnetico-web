@@ -9,9 +9,13 @@
 <meta name="robots" content="noindex, nofollow">
 <title>{{.Title}} · {{siteTitle}}</title>
 <link rel="stylesheet" href="{{asset "swagger-ui.css"}}">
+<link rel="stylesheet" href="{{asset "docs.css"}}">
 </head>
 <body>
-<nav aria-label="API documentation"><a href="/api">All API documentation</a> · <a href="{{.SpecURL}}">Download the OpenAPI document</a></nav>
+<header class="docs-bar"><div class="docs-bar-inner">
+<nav class="docs-crumbs" aria-label="API documentation"><a href="/api">API documentation</a></nav>
+<nav class="docs-versions" aria-label="API version"><a href="/api/v2"{{if eq .Version "v2"}} aria-current="page"{{end}}>v2</a><a href="/api/v1"{{if eq .Version "v1"}} aria-current="page"{{end}}>v1 <span class="docs-tag">deprecated</span></a></nav>
+</div></header>
 <div id="swagger-ui" data-spec="{{.SpecURL}}"></div>
 <noscript><p>The interactive documentation needs JavaScript. You can read the OpenAPI document directly: <a href="{{.SpecURL}}">{{.SpecURL}}</a>.</p></noscript>
 <script src="{{asset "swagger-ui-bundle.js"}}"></script>

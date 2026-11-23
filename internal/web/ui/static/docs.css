@@ -1,0 +1,51 @@
+/* The slim bar above the vendored Swagger UI on the API documentation pages.
+ * It follows Swagger UI's own top bar (dark, same content width) so the page
+ * reads as one piece. First-party: the page's policy allows no inline style. */
+body { margin: 0; }
+.docs-bar {
+  background: #1b1b1b;
+  color: #fff;
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+.docs-bar-inner {
+  box-sizing: border-box;
+  max-width: 1460px;
+  margin: 0 auto;
+  padding: 0 20px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.docs-bar a {
+  color: #fff;
+  text-decoration: none;
+}
+.docs-bar a:hover,
+.docs-bar a:focus-visible {
+  text-decoration: underline;
+}
+.docs-crumbs a {
+  font-weight: 700;
+}
+.docs-versions {
+  display: flex;
+  gap: 6px;
+}
+.docs-versions a {
+  padding: 4px 12px;
+  border-radius: 4px;
+  color: #c8c8c8;
+}
+.docs-versions a[aria-current="page"] {
+  background: #3b3b3b;
+  color: #fff;
+  font-weight: 600;
+}
+.docs-tag {
+  font-size: 11px;
+  opacity: .75;
+  margin-left: 4px;
+}
