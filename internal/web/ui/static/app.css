@@ -228,6 +228,8 @@ code {
   text-decoration:none;
 }
 .brand-icon {
+  position:relative;
+  top:1px;
   height:26px;
   width:26px;
   border-radius:7px;
