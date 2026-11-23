@@ -1,4 +1,4 @@
-# `magnetico web` — configuration, database and reverse-proxy notes (W1–W3)
+# `magnetico web` — configuration, database and reverse-proxy notes (W1–W4)
 
 Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Nothing here has been integration-tested against a real proxy yet (that belongs to a later milestone).
 
@@ -122,3 +122,18 @@ These statements are executed verbatim by the integration tests, which start the
 **Housekeeping.** A background task deletes expired sessions and expired one-time links about every 15 minutes (first run one minute after start). It is stopped, and awaited, before the database pool is closed at shutdown. Expired rows are ignored by every lookup whether or not they were purged yet.
 
 **Privileges.** The documented runtime role (§4) is sufficient; sign-in uses `UPDATE users`, `INSERT/DELETE sessions` and the purge uses `DELETE one_time_tokens`.
+
+## 7. Search, torrent details and the file browser (W4)
+
+Routes: `GET /torrents` (search, a *search* route with the search deadline), `GET /torrents/{id}` (metadata only, never reads the file blob) and `GET /torrents/{id}/files` (file browser). `GET /` redirects to `/torrents`. All need a session.
+
+**Fixed limits (constants, not configuration):** file-list decode admission **192 MiB** of estimated working set (bounded queue: 32 waiters, 5 s), file-index cache **128 MiB** (LRU, entries revalidated against the database on every request and expired after 10 min), 500 rows per file-browser page, search queue 4 × `SEARCH_CONCURRENCY` waiters / 5 s. A saturated decode queue or search queue answers **503 with `Retry-After`**, never a partial or empty list.
+
+**Reverse proxy:** unchanged from §3 — the proxy's upstream timeouts must exceed the search write deadline (`SEARCH_TIMEOUT` + 10 s; with the default 60 s, allow ≥ 90 s). A cold file-list build takes 0.2–1.1 s uncontended and up to a few seconds when queued behind other builds, well below `REQUEST_TIMEOUT` (30 s), so file pages need no special proxy settings. Do not enable proxy response caching for these routes: pages are per-user.
+
+**Memory — recommendation for a container of about 1 GiB with 2 vCPU** (measured, see `docs/wip/07E-web-search-details-report.md` §7; verified in a real 1 GiB cgroup with swap disabled and a 200 % CPU quota):
+
+- Set a hard container memory limit of **1 GiB** and `GOMEMLIMIT=768MiB` (about 75 % of the limit). Under a deliberately cold-heavy mixed workload (32 file clients + 4 searchers + logins) the process peaked at **≈ 750 MiB cgroup memory** (RSS ≤ 740 MiB), with no OOM kill, in every `GOMEMLIMIT` setting tested (unset, 640, 768, 896 MiB). `GOMEMLIMIT` changed the peak by only tens of MiB because the live heap is already bounded by the decode gate and the cache; its job is to make the collector work harder before the hard limit, not to shrink the budgets. Treat it as a safety margin, not as a proof against OOM: pathological blobs can exceed the weight estimate (measured up to 2.1× for trie-encoded long paths), and one process-wide limit cannot protect against that.
+- Allow for PostgreSQL connections: `POOL_MAX_CONNS` (default 10) with `SEARCH_CONCURRENCY` ≤ pool − 2 keeps login and details responsive during heavy searches and decodes.
+- The target "peak RSS ≤ 640 MiB at 32 concurrent clients" was **not met** in the worst mixed workload (≤ 740 MiB); plan for ≥ 1 GiB, not 768 MiB.
+- On shutdown the file-index cache stops after in-flight requests drain and before the database pool closes; the stop is logged with the cache counters (`file index cache stopped`).

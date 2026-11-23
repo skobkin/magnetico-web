@@ -148,7 +148,6 @@ func ensureLoadData(t *testing.T, bin, dsn string) (rtDSN, opDSN string, d loadD
 	_ = conn.QueryRow(ctx, `SELECT count(*) FROM magneticod.torrents WHERE name LIKE 'load/%'`).Scan(&seeded)
 	if seeded == 0 && os.Getenv("MAGNETICO_LOAD_SKIP_SEED") == "" {
 		t.Log("seeding synthetic torrents (once)")
-		start := time.Now()
 		byName := map[string]synth.Spec{}
 		for _, s := range synth.Corpus() {
 			byName[s.Name] = s
@@ -166,13 +165,18 @@ func ensureLoadData(t *testing.T, bin, dsn string) (rtDSN, opDSN string, d loadD
 				t.Fatal(err)
 			}
 		}
+	}
+	var filler int
+	_ = conn.QueryRow(ctx, `SELECT count(*) FROM magneticod.torrents WHERE name NOT LIKE 'load/%'`).Scan(&filler)
+	if filler == 0 && os.Getenv("MAGNETICO_LOAD_SKIP_SEED") == "" {
+		start := time.Now()
 		// Search population: 300k small torrents without blobs (one file each).
 		if _, err := conn.Exec(ctx, `INSERT INTO magneticod.torrents (info_hash, name, total_size, discovered_on, file_count)
 		    SELECT substr(decode(md5(i::text)||md5((i+7)::text),'hex'),1,20),
 		           (ARRAY['ubuntu','debian','fedora','archive','movie','album','linux','release','source','data'])[1+i%10]
 		           ||' '||(ARRAY['alpha','bravo','charlie','delta','echo','foxtrot','golf','hotel'])[1+i%8]||' '||md5(i::text),
 		           (i*7919)%100000000000, 1600000000+i*13, 1
-		      FROM generate_series(1,300000) AS i`); err != nil {
+		      FROM generate_series(1::bigint,300000) AS i`); err != nil {
 			t.Fatal(err)
 		}
 		_, _ = conn.Exec(ctx, `ANALYZE magneticod.torrents`)

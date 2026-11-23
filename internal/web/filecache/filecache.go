@@ -129,6 +129,7 @@ type Stats struct {
 	Replaced                int64 // entry replaced because its identity changed
 	Oversize                int64 // built but too large to retain
 	Retries                 int64 // identity retries after ErrBlobChanged
+	Abandoned               int64 // builds cancelled because every waiter left (not errors)
 	Entries                 int
 	Bytes                   int64
 	Flights                 int
@@ -176,7 +177,7 @@ type Cache struct {
 	onDecode func() // test hook: called when a decode is committed
 
 	hits, misses, coalesced, builds, buildErrs, evictions, expired,
-	replaced, oversize, retries atomic.Int64
+	replaced, oversize, retries, abandoned atomic.Int64
 }
 
 // New returns a Cache. It fails if a blob valid under the source's limits
@@ -235,7 +236,7 @@ func (c *Cache) Stats() Stats {
 		Hits: c.hits.Load(), Misses: c.misses.Load(), Coalesced: c.coalesced.Load(),
 		Builds: c.builds.Load(), BuildErrors: c.buildErrs.Load(),
 		Evictions: c.evictions.Load(), Expired: c.expired.Load(), Replaced: c.replaced.Load(),
-		Oversize: c.oversize.Load(), Retries: c.retries.Load(),
+		Oversize: c.oversize.Load(), Retries: c.retries.Load(), Abandoned: c.abandoned.Load(),
 		Entries: len(c.entries), Bytes: c.bytes, Flights: len(c.flights),
 	}
 }
@@ -468,6 +469,8 @@ func (f *flight) run() {
 	}()
 	f.idx, f.err = f.build()
 	switch {
+	case errors.Is(f.err, context.Canceled):
+		c.abandoned.Add(1) // every waiter left (or shutdown): not a failure
 	case f.err != nil:
 		c.buildErrs.Add(1)
 	default:

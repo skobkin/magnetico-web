@@ -366,7 +366,7 @@ func runWeb(o *opflags.WebOptions) {
 		err := fileCache.Close(ctx)
 		st := fileCache.Stats()
 		logger.Info("file index cache stopped", "hits", st.Hits, "misses", st.Misses, "coalesced", st.Coalesced,
-			"builds", st.Builds, "build_errors", st.BuildErrors, "evictions", st.Evictions, "expired", st.Expired,
+			"builds", st.Builds, "build_errors", st.BuildErrors, "abandoned", st.Abandoned, "evictions", st.Evictions, "expired", st.Expired,
 			"replaced", st.Replaced, "oversize", st.Oversize, "retries", st.Retries, "entries", st.Entries, "bytes", st.Bytes)
 		return err
 	})

@@ -1,0 +1,8 @@
+effective_cache_size=524288
+fsync=off
+max_connections=200
+random_page_cost=4
+server_version=17.12 (Debian 17.12-1.pgdg13+1)
+shared_buffers=65536
+synchronous_commit=off
+work_mem=4096
