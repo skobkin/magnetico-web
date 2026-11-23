@@ -110,3 +110,36 @@ func TestMagnetRouteSurvivesRefreshFailureAndPicksUpChangesWithinTheTTL(t *testi
 	loc()
 	waitFor(t, "recovered list", func() bool { return strings.Contains(loc(), "udp%3A%2F%2Fb%3A2") })
 }
+
+func BenchmarkMagnetRedirect(b *testing.B) {
+	src := &fakeSource{urls: []string{
+		"udp://tracker.opentrackr.org:1337/announce", "udp://tracker.open-internet.nl:6969/announce", "udp://tracker.piratepublic.com:1337/announce",
+		"udp://9.rarbg.to:2710/announce", "udp://tracker.zer0day.to:1337/announce", "http://nyaa.tracker.wf:7777/announce",
+		"http://t.nyaatracker.com:80/announce", "udp://open.stealth.si:80/announce", "udp://bt.xxx-tracker.com:2710/announce",
+		"udp://exodus.desync.com:6969/announce", "udp://open.demonii.si:1337/announce", "udp://tracker.torrent.eu.org:451/announce",
+	}}
+	c := New(src, time.Hour, slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	if err := c.Load(context.Background()); err != nil {
+		b.Fatal(err)
+	}
+	pu, _ := url.Parse("https://magnet.example.org")
+	srv, err := server.New(server.Config{PublicURL: pu, RequestTimeout: 10 * time.Second, SearchTimeout: time.Minute,
+		ShutdownTimeout: 5 * time.Second, Logger: slog.New(slog.NewTextHandler(&strings.Builder{}, nil))}, fakeBackend{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	Install(srv, c)
+	h := srv.Handler()
+	req := httptest.NewRequest("GET", "/magnet/0123456789abcdef0123456789abcdef01234567", nil)
+	b.ReportAllocs()
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != 307 {
+				b.Fatal(rec.Code)
+			}
+		}
+	})
+}

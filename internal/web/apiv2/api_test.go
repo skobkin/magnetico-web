@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -749,4 +750,33 @@ func TestEveryAPIRouteIsBearerOnlyAndSafeMethodsOnly(t *testing.T) {
 	}
 	_ = strconv.Itoa
 	_ = accounts.APITokenPrefix
+}
+
+// Measurement (synthetic, one local PostgreSQL): the cost of an authenticated
+// API request, which includes the token lookup, and of the details endpoint.
+func TestMeasureAPILatency(t *testing.T) {
+	e := newEnv(t)
+	id := e.seed("latency", 0, 1, []codec.File{{Path: "a/b", Size: 1}, {Path: "c", Size: 2}})
+	e.exec(`INSERT INTO magneticod.torrents (info_hash, name, total_size, discovered_on, file_count)
+	    SELECT decode(md5(i::text) || substr(md5((i+1)::text),1,8),'hex'), 'filler ' || i, i, 1700000000 + i, 1 FROM generate_series(1, 5000) i`)
+	for name, path := range map[string]string{
+		"details":        fmt.Sprintf("/api/v2/torrents/%d", id),
+		"list (50)":      "/api/v2/torrents?limit=50",
+		"search (q)":     "/api/v2/torrents?q=filler&limit=50",
+		"dir page":       fmt.Sprintf("/api/v2/torrents/%d/files", id),
+		"401 (no token)": "",
+	} {
+		var ds []time.Duration
+		for i := 0; i < 200; i++ {
+			s := time.Now()
+			if path == "" {
+				e.do("GET", "/api/v2/torrents", nil)
+			} else {
+				e.api(path)
+			}
+			ds = append(ds, time.Since(s))
+		}
+		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
+		t.Logf("%-14s p50 %v  p95 %v  max %v", name, ds[100], ds[190], ds[199])
+	}
 }

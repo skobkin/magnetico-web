@@ -544,3 +544,31 @@ func TestNoPlaintextFallbackOrVerificationBypassInSource(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Measurement: a flood against a full queue is rejected without blocking.
+func TestMeasureQueueSaturation(t *testing.T) {
+	m := &fakeMailer{block: make(chan struct{})}
+	q := NewQueue(m, logTo(&bytes.Buffer{}), Options{Capacity: DefaultCapacity, Workers: DefaultWorkers})
+	runQueue(t, q)
+	accepted, rejected := 0, 0
+	start := time.Now()
+	for i := 0; i < 1000; i++ {
+		s, err := q.Reserve()
+		if err != nil {
+			rejected++
+			continue
+		}
+		accepted++
+		s.Submit(func(ctx context.Context, send func(Message) error) { send(Message{To: "a@example.com", Subject: "s"}) })
+	}
+	d := time.Since(start)
+	t.Logf("1000 reservations against capacity %d with stalled workers: %d accepted, %d rejected in %v (%v each)", DefaultCapacity, accepted, rejected, d, d/1000)
+	if accepted != DefaultCapacity || rejected != 1000-DefaultCapacity {
+		t.Fatalf("accepted %d rejected %d", accepted, rejected)
+	}
+	close(m.block)
+	waitFor(t, "drain", func() bool { return q.Pending() == 0 })
+	if m.count() != DefaultCapacity {
+		t.Fatalf("sent %d", m.count())
+	}
+}

@@ -3,6 +3,7 @@ package feed
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -301,4 +302,18 @@ func hashFor(t *testing.T) (string, error) {
 	t.Helper()
 	svc := newPasswordService()
 	return svc.Hash(context.Background(), "correct horse battery")
+}
+
+func mustURL(s string) *url.URL { u, _ := url.Parse(s); return u }
+
+func (e *env) srvPublicBase() *url.URL { return mustURL(publicBase) }
+
+func syntheticRows(n int) []persistence.Torrent {
+	rows := make([]persistence.Torrent, n)
+	for i := range rows {
+		h := sha256.Sum256([]byte(fmt.Sprint(i)))
+		rows[i] = persistence.Torrent{ID: int32(i + 1), InfoHash: h[:20], Name: fmt.Sprintf("Synthetic torrent number %d with a moderately long descriptive name", i),
+			TotalSize: int64(i) * 1000, DiscoveredOn: 1_700_000_000 + int64(i), FileCount: 3}
+	}
+	return rows
 }

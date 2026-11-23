@@ -3,7 +3,9 @@ package account
 import (
 	"context"
 	"crypto/sha256"
+	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -489,5 +491,44 @@ func TestConcurrentRegistrationsWithOneInvitationHaveOneWinner(t *testing.T) {
 	}
 	if wins != 1 || e.count(`SELECT count(*) FROM magnetico_web.users WHERE username LIKE 'racer_'`) != 1 {
 		t.Fatalf("statuses = %v", statuses)
+	}
+}
+
+// Measurement: the handler's duration must not depend on the account class.
+func TestMeasureForgotPasswordTimingShape(t *testing.T) {
+	e := newEnv(t, func(o *envOpts) { o.stopQueue = true; o.queueCap = 1 << 12 })
+	valid := e.mkUser("valid", pw1)
+	e.exec(`UPDATE magnetico_web.users SET email = 'valid@example.org', email_verified_at = now() WHERE id = $1`, valid.ID)
+	unv := e.mkUser("unverified", pw1)
+	e.exec(`UPDATE magnetico_web.users SET email = 'unverified@example.org' WHERE id = $1`, unv.ID)
+	dis := e.mkUser("disabled", pw1)
+	e.exec(`UPDATE magnetico_web.users SET email = 'disabled@example.org', email_verified_at = now(), active = false WHERE id = $1`, dis.ID)
+
+	classes := []string{"valid@example.org", "unverified@example.org", "disabled@example.org", "nobody@example.org"}
+	c := e.client()
+	f := c.form("/password/forgot", "email", "x@example.org")
+	p50 := map[string]time.Duration{}
+	for _, addr := range classes {
+		var ds []time.Duration
+		for i := 0; i < 300; i++ {
+			f.Set("email", fmt.Sprintf("%d%s", i, addr)) // distinct addresses: per-address limits never apply
+			if i%2 == 0 {
+				f.Set("email", addr)
+			}
+			s := time.Now()
+			c.post("/password/forgot", f)
+			ds = append(ds, time.Since(s))
+		}
+		sort.Slice(ds, func(i, j int) bool { return ds[i] < ds[j] })
+		p50[addr] = ds[150]
+		t.Logf("%-24s p50 %v  p95 %v", addr, ds[150], ds[285])
+	}
+	lo, hi := p50[classes[0]], p50[classes[0]]
+	for _, d := range p50 {
+		lo, hi = min(lo, d), max(hi, d)
+	}
+	t.Logf("spread of the four medians: %v .. %v", lo, hi)
+	if hi > 4*lo+2*time.Millisecond {
+		t.Fatalf("handler timing depends on the account class: %v", p50)
 	}
 }
