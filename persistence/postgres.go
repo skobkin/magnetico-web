@@ -270,34 +270,11 @@ func (s *pgxStore) GetFiles(ctx context.Context, infoHash []byte) ([]File, error
 		return nil, fmt.Errorf("%w: %w", ErrStorageIO, err)
 	}
 
+	meta := Torrent{Name: name, TotalSize: totalSize, FileCount: fileCount}
 	if blob == nil {
-		if fileCount == 1 {
-			// The intentional no-blob representation.
-			return []File{{Path: name, Size: totalSize}}, nil
-		}
-		return nil, ErrIntegrityMissingBlob
+		return SingleFileList(meta) // the intentional no-blob representation, or ErrIntegrityMissingBlob
 	}
-
-	files, err := codec.Decode(blob, s.limits)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrCorruptBlob, err)
-	}
-	if len(files) != int(fileCount) {
-		return nil, fmt.Errorf("%w: decoded %d files, torrents row says %d",
-			ErrCorruptBlob, len(files), fileCount)
-	}
-	var sum int64
-	for _, f := range files {
-		if sum > math.MaxInt64-f.Size {
-			return nil, fmt.Errorf("%w: decoded file sizes overflow", ErrCorruptBlob)
-		}
-		sum += f.Size
-	}
-	if sum != totalSize {
-		return nil, fmt.Errorf("%w: decoded sizes sum to %d, torrents row says %d",
-			ErrCorruptBlob, sum, totalSize)
-	}
-	return files, nil
+	return DecodeFileList(meta, blob, s.limits)
 }
 
 func (s *pgxStore) QueryTorrents(ctx context.Context, query TorrentQuery) ([]Torrent, error) {

@@ -1,0 +1,401 @@
+## S1 search plans — 300000 synthetic rows (seed 20261123, Zipf vocabulary of 2000 words), load+index+analyze 4.523s
+version: PostgreSQL 17.12 (Debian 17.12-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+shared_buffers = 128MB
+work_mem = 4MB
+random_page_cost = 4
+effective_cache_size = 4GB
+max_parallel_workers_per_gather = 2
+plan_cache_mode = auto
+datcollate/datctype = en_US.utf8 / en_US.utf8
+terms: common="cababa0" (41669 rows) medium="hecaba0" (2244) rare="todeba0" (99)
+
+### a newest first page [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents ORDER BY discovered_on DESC, id DESC LIMIT $1
+    Limit  (cost=0.47..4.78 rows=51 width=80) (actual time=0.009..0.016 rows=51 loops=1)
+      Buffers: shared hit=34
+      ->  Incremental Sort  (cost=0.47..25299.14 rows=300000 width=80) (actual time=0.009..0.014 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=34
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..12159.43 rows=300000 width=80) (actual time=0.003..0.008 rows=52 loops=1)
+                  Buffers: shared hit=34
+    Planning Time: 0.020 ms
+    Execution Time: 0.021 ms
+
+
+### b deep cursor page (50% position) [row-comparison]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE (discovered_on, id) < ($1, $2) ORDER BY discovered_on DESC, id DESC LIMIT $3
+    Limit  (cost=0.48..5.21 rows=51 width=80) (actual time=0.012..0.020 rows=51 loops=1)
+      Buffers: shared hit=40
+      ->  Incremental Sort  (cost=0.48..13882.44 rows=149787 width=80) (actual time=0.012..0.017 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=40
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..7198.66 rows=149787 width=80) (actual time=0.004..0.011 rows=52 loops=1)
+                  Index Cond: (discovered_on <= '1604500141'::bigint)
+                  Filter: (ROW(discovered_on, id) < ROW('1604500141'::bigint, 149916))
+                  Rows Removed by Filter: 1
+                  Buffers: shared hit=40
+    Planning Time: 0.023 ms
+    Execution Time: 0.025 ms
+
+
+### b deep cursor page (50% position) [OR-expanded]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE (discovered_on < $1 OR (discovered_on = $1 AND id < $2)) ORDER BY discovered_on DESC, id DESC LIMIT $3
+    Limit  (cost=0.53..7.71 rows=51 width=80) (actual time=28.423..28.434 rows=51 loops=1)
+      Buffers: shared hit=106365
+      ->  Incremental Sort  (cost=0.53..21093.21 rows=149787 width=80) (actual time=28.422..28.430 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=106365
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..14409.43 rows=149787 width=80) (actual time=28.403..28.414 rows=52 loops=1)
+                  Filter: ((discovered_on < '1604500141'::bigint) OR ((discovered_on = '1604500141'::bigint) AND (id < 149916)))
+                  Rows Removed by Filter: 150001
+                  Buffers: shared hit=106365
+    Planning Time: 0.097 ms
+    Execution Time: 28.450 ms
+
+
+### c backward page from the same cursor [row-comparison]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE (discovered_on, id) > ($1, $2) ORDER BY discovered_on ASC, id ASC LIMIT $3
+    Limit  (cost=0.48..5.21 rows=51 width=80) (actual time=0.031..0.039 rows=51 loops=1)
+      Buffers: shared hit=36
+      ->  Incremental Sort  (cost=0.48..13921.78 rows=150212 width=80) (actual time=0.030..0.036 rows=51 loops=1)
+            Sort Key: discovered_on, id
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=36
+            ->  Index Scan using idx_torrents_discovered_on on torrents  (cost=0.42..7219.22 rows=150212 width=80) (actual time=0.016..0.026 rows=52 loops=1)
+                  Index Cond: (discovered_on >= '1604500141'::bigint)
+                  Filter: (ROW(discovered_on, id) > ROW('1604500141'::bigint, 149916))
+                  Rows Removed by Filter: 1
+                  Buffers: shared hit=36
+    Planning Time: 0.068 ms
+    Execution Time: 0.052 ms
+
+
+### c backward page from the same cursor [OR-expanded]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE (discovered_on > $1 OR (discovered_on = $1 AND id > $2)) ORDER BY discovered_on ASC, id ASC LIMIT $3
+    Limit  (cost=0.53..7.70 rows=51 width=80) (actual time=30.255..30.266 rows=51 loops=1)
+      Buffers: shared hit=106054
+      ->  Incremental Sort  (cost=0.53..21112.03 rows=150213 width=80) (actual time=30.254..30.262 rows=51 loops=1)
+            Sort Key: discovered_on, id
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=106054
+            ->  Index Scan using idx_torrents_discovered_on on torrents  (cost=0.42..14409.43 rows=150213 width=80) (actual time=30.232..30.243 rows=52 loops=1)
+                  Filter: ((discovered_on > '1604500141'::bigint) OR ((discovered_on = '1604500141'::bigint) AND (id > 149916)))
+                  Rows Removed by Filter: 150000
+                  Buffers: shared hit=106054
+    Planning Time: 0.082 ms
+    Execution Time: 30.283 ms
+
+
+### d rare term, newest [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY discovered_on DESC, id DESC LIMIT $2
+    Limit  (cost=612.11..612.18 rows=30 width=80) (actual time=1.577..1.581 rows=51 loops=1)
+      Buffers: shared hit=327
+      ->  Sort  (cost=612.11..612.18 rows=30 width=80) (actual time=1.577..1.578 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Sort Method: quicksort  Memory: 38kB
+            Buffers: shared hit=327
+            ->  Bitmap Heap Scan on torrents  (cost=498.37..611.37 rows=30 width=80) (actual time=1.469..1.567 rows=99 loops=1)
+                  Recheck Cond: (name ~~* '%todeba0%'::text)
+                  Rows Removed by Index Recheck: 7
+                  Heap Blocks: exact=105
+                  Buffers: shared hit=327
+                  ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..498.36 rows=30 width=0) (actual time=1.460..1.460 rows=106 loops=1)
+                        Index Cond: (name ~~* '%todeba0%'::text)
+                        Buffers: shared hit=222
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.076 ms
+    Execution Time: 1.590 ms
+
+
+### e medium term, newest [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY discovered_on DESC, id DESC LIMIT $2
+    Limit  (cost=4.69..224.20 rows=51 width=80) (actual time=1.591..3.002 rows=51 loops=1)
+      Buffers: shared hit=4436
+      ->  Incremental Sort  (cost=4.69..13045.74 rows=3030 width=80) (actual time=1.590..2.999 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=4436
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..12909.43 rows=3030 width=80) (actual time=0.026..2.990 rows=52 loops=1)
+                  Filter: (name ~~* '%hecaba0%'::text)
+                  Rows Removed by Filter: 6145
+                  Buffers: shared hit=4436
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.066 ms
+    Execution Time: 3.008 ms
+
+
+### f common term, newest [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY discovered_on DESC, id DESC LIMIT $2
+    Limit  (cost=0.76..19.76 rows=51 width=80) (actual time=0.135..0.208 rows=51 loops=1)
+      Buffers: shared hit=306
+      ->  Incremental Sort  (cost=0.76..14678.80 rows=39394 width=80) (actual time=0.134..0.205 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=306
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..12909.43 rows=39394 width=80) (actual time=0.005..0.199 rows=52 loops=1)
+                  Filter: (name ~~* '%cababa0%'::text)
+                  Rows Removed by Filter: 386
+                  Buffers: shared hit=306
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.072 ms
+    Execution Time: 0.215 ms
+
+
+### g common + rare [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 AND name ILIKE $2 ORDER BY discovered_on DESC, id DESC LIMIT $3
+    Limit  (cost=565.87..565.88 rows=4 width=80) (actual time=3.866..3.867 rows=11 loops=1)
+      Buffers: shared hit=484
+      ->  Sort  (cost=565.87..565.88 rows=4 width=80) (actual time=3.866..3.866 rows=11 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Sort Method: quicksort  Memory: 26kB
+            Buffers: shared hit=484
+            ->  Bitmap Heap Scan on torrents  (cost=550.13..565.83 rows=4 width=80) (actual time=3.814..3.863 rows=11 loops=1)
+                  Recheck Cond: ((name ~~* '%cababa0%'::text) AND (name ~~* '%todeba0%'::text))
+                  Rows Removed by Index Recheck: 33
+                  Heap Blocks: exact=44
+                  Buffers: shared hit=484
+                  ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..550.12 rows=4 width=0) (actual time=3.803..3.803 rows=44 loops=1)
+                        Index Cond: ((name ~~* '%cababa0%'::text) AND (name ~~* '%todeba0%'::text))
+                        Buffers: shared hit=440
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.110 ms
+    Execution Time: 3.874 ms
+
+
+### h three common terms [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 AND name ILIKE $2 AND name ILIKE $3 ORDER BY discovered_on DESC, id DESC LIMIT $4
+    Limit  (cost=1812.71..1812.84 rows=51 width=80) (actual time=16.182..16.187 rows=51 loops=1)
+      Buffers: shared hit=1716
+      ->  Sort  (cost=1812.71..1813.71 rows=402 width=80) (actual time=16.181..16.184 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Sort Method: top-N heapsort  Memory: 38kB
+            Buffers: shared hit=1716
+            ->  Bitmap Heap Scan on torrents  (cost=591.16..1799.30 rows=402 width=80) (actual time=14.290..16.133 rows=328 loops=1)
+                  Recheck Cond: ((name ~~* '%cababa0%'::text) AND (name ~~* '%dababa1%'::text) AND (name ~~* '%fababa2%'::text))
+                  Rows Removed by Index Recheck: 1156
+                  Heap Blocks: exact=1258
+                  Buffers: shared hit=1716
+                  ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..591.05 rows=402 width=0) (actual time=14.174..14.175 rows=1484 loops=1)
+                        Index Cond: ((name ~~* '%cababa0%'::text) AND (name ~~* '%dababa1%'::text) AND (name ~~* '%fababa2%'::text))
+                        Buffers: shared hit=458
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.183 ms
+    Execution Time: 16.202 ms
+
+
+### i common term, size desc [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY total_size DESC, id DESC LIMIT $2
+    Limit  (cost=1.13..39.13 rows=51 width=80) (actual time=0.157..0.224 rows=51 loops=1)
+      Buffers: shared hit=342
+      ->  Incremental Sort  (cost=1.13..29351.04 rows=39394 width=80) (actual time=0.157..0.221 rows=51 loops=1)
+            Sort Key: total_size DESC, id DESC
+            Presorted Key: total_size
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=342
+            ->  Index Scan Backward using idx_torrents_total_size on torrents  (cost=0.42..27578.42 rows=39394 width=80) (actual time=0.009..0.214 rows=52 loops=1)
+                  Filter: (name ~~* '%cababa0%'::text)
+                  Rows Removed by Filter: 285
+                  Buffers: shared hit=342
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.082 ms
+    Execution Time: 0.230 ms
+
+
+### j common term, name asc [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY name ASC, id ASC LIMIT $2
+    Limit  (cost=7028.51..7028.63 rows=51 width=80) (actual time=53.511..53.518 rows=51 loops=1)
+      Buffers: shared hit=4740
+      ->  Sort  (cost=7028.51..7126.99 rows=39394 width=80) (actual time=53.510..53.514 rows=51 loops=1)
+            Sort Key: name, id
+            Sort Method: top-N heapsort  Memory: 36kB
+            Buffers: shared hit=4740
+            ->  Bitmap Heap Scan on torrents  (cost=749.81..5714.24 rows=39394 width=80) (actual time=12.330..49.881 rows=41669 loops=1)
+                  Recheck Cond: (name ~~* '%cababa0%'::text)
+                  Rows Removed by Index Recheck: 36316
+                  Heap Blocks: exact=4439
+                  Buffers: shared hit=4740
+                  ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..739.96 rows=39394 width=0) (actual time=12.014..12.014 rows=77985 loops=1)
+                        Index Cond: (name ~~* '%cababa0%'::text)
+                        Buffers: shared hit=301
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.117 ms
+    Execution Time: 53.539 ms
+
+
+### k rare term, name asc [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY name ASC, id ASC LIMIT $2
+    Limit  (cost=612.11..612.18 rows=30 width=80) (actual time=1.653..1.657 rows=51 loops=1)
+      Buffers: shared hit=327
+      ->  Sort  (cost=612.11..612.18 rows=30 width=80) (actual time=1.652..1.654 rows=51 loops=1)
+            Sort Key: name, id
+            Sort Method: quicksort  Memory: 38kB
+            Buffers: shared hit=327
+            ->  Bitmap Heap Scan on torrents  (cost=498.37..611.37 rows=30 width=80) (actual time=1.499..1.614 rows=99 loops=1)
+                  Recheck Cond: (name ~~* '%todeba0%'::text)
+                  Rows Removed by Index Recheck: 7
+                  Heap Blocks: exact=105
+                  Buffers: shared hit=327
+                  ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..498.36 rows=30 width=0) (actual time=1.489..1.489 rows=106 loops=1)
+                        Index Cond: (name ~~* '%todeba0%'::text)
+                        Buffers: shared hit=222
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.083 ms
+    Execution Time: 1.666 ms
+
+
+### l rare term, size desc [no cursor]
+  SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE $1 ORDER BY total_size DESC, id DESC LIMIT $2
+    Limit  (cost=612.11..612.18 rows=30 width=80) (actual time=1.515..1.519 rows=51 loops=1)
+      Buffers: shared hit=327
+      ->  Sort  (cost=612.11..612.18 rows=30 width=80) (actual time=1.514..1.516 rows=51 loops=1)
+            Sort Key: total_size DESC, id DESC
+            Sort Method: quicksort  Memory: 38kB
+            Buffers: shared hit=327
+            ->  Bitmap Heap Scan on torrents  (cost=498.37..611.37 rows=30 width=80) (actual time=1.416..1.505 rows=99 loops=1)
+                  Recheck Cond: (name ~~* '%todeba0%'::text)
+                  Rows Removed by Index Recheck: 7
+                  Heap Blocks: exact=105
+                  Buffers: shared hit=327
+                  ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..498.36 rows=30 width=0) (actual time=1.409..1.409 rows=106 loops=1)
+                        Index Cond: (name ~~* '%todeba0%'::text)
+                        Buffers: shared hit=222
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.073 ms
+    Execution Time: 1.526 ms
+
+
+### info-hash lookup
+    Index Scan using torrents_info_hash_key on torrents  (cost=0.42..8.44 rows=1 width=80) (actual time=0.009..0.010 rows=1 loops=1)
+      Index Cond: (info_hash = '\x405d361c4309e40ab659f401ec524c40b55177dc'::bytea)
+      Buffers: shared hit=4
+    Planning Time: 0.026 ms
+    Execution Time: 0.014 ms
+
+
+### generic-plan check: b deep cursor page (50% position) — prepared statement, 9 executions (ms): [0.6 0.2 0.2 0.1 0.2 0.2 0.1 0.1 0.1]
+    Limit  (cost=0.48..5.21 rows=51 width=80) (actual time=0.017..0.025 rows=51 loops=1)
+      Buffers: shared hit=40
+      ->  Incremental Sort  (cost=0.48..13882.44 rows=149787 width=80) (actual time=0.017..0.022 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=40
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..7198.66 rows=149787 width=80) (actual time=0.009..0.016 rows=52 loops=1)
+                  Index Cond: (discovered_on <= '1604500141'::bigint)
+                  Filter: (ROW(discovered_on, id) < ROW('1604500141'::bigint, 149916))
+                  Rows Removed by Filter: 1
+                  Buffers: shared hit=40
+    Planning Time: 0.030 ms
+    Execution Time: 0.031 ms
+
+### generic-plan check: f common term, newest — prepared statement, 9 executions (ms): [0.9 0.5 0.6 0.6 0.6 0.6 0.4 0.4 0.4]
+    Limit  (cost=0.76..19.76 rows=51 width=80) (actual time=0.128..0.198 rows=51 loops=1)
+      Buffers: shared hit=306
+      ->  Incremental Sort  (cost=0.76..14678.80 rows=39394 width=80) (actual time=0.128..0.195 rows=51 loops=1)
+            Sort Key: discovered_on DESC, id DESC
+            Presorted Key: discovered_on
+            Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 29kB  Peak Memory: 29kB
+            Buffers: shared hit=306
+            ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.42..12909.43 rows=39394 width=80) (actual time=0.004..0.189 rows=52 loops=1)
+                  Filter: (name ~~* '%cababa0%'::text)
+                  Rows Removed by Filter: 386
+                  Buffers: shared hit=306
+    Planning:
+      Buffers: shared hit=1
+    Planning Time: 0.065 ms
+    Execution Time: 0.203 ms
+
+## S1 TOAST measurement — identity and header queries against large bytea values (warm, repeated)
+version: PostgreSQL 17.12 (Debian 17.12-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit; shared_buffers = 128MB
+
+### incompressible 24 MiB (stored external) — stored size 25165824 bytes, compression=""
+  FileIdentity (as implemented)        n=200 p50=   0.271 ms  p95=   0.384 ms  max=   0.621 ms   toast_blks_hit +0, toast_blks_read +0 (per call: 0.0 hit)
+  identity WITH octet_length (rejected) n=200 p50=   0.240 ms  p95=   0.400 ms  max=   0.623 ms   toast_blks_hit +0, toast_blks_read +0 (per call: 0.0 hit)
+  FileHeader (substring + octet_length) n=200 p50=   0.247 ms  p95=   0.326 ms  max=   0.407 ms   toast_blks_hit +200, toast_blks_read +0 (per call: 1.0 hit)
+  FileBlob (full transfer)             n=15  p50=  28.316 ms  p95= 210.195 ms  max= 211.808 ms   toast_blks_hit +47295, toast_blks_read +0 (per call: 3153.0 hit)
+  EXPLAIN identity with octet_length:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs b  (cost=0.15..8.18 rows=1 width=36) (actual time=0.011..0.011 rows=1 loops=1)
+        Index Cond: (torrent_id = 1)
+        Buffers: shared hit=2
+      Planning Time: 0.043 ms
+      Execution Time: 0.021 ms
+  EXPLAIN identity without octet_length:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs b  (cost=0.15..8.18 rows=1 width=32) (actual time=0.004..0.005 rows=1 loops=1)
+        Index Cond: (torrent_id = 1)
+        Buffers: shared hit=2
+      Planning Time: 0.019 ms
+      Execution Time: 0.010 ms
+  EXPLAIN header substring:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs  (cost=0.15..8.17 rows=1 width=32) (actual time=0.017..0.017 rows=1 loops=1)
+        Index Cond: (torrent_id = 1)
+        Buffers: shared hit=5
+      Planning Time: 0.025 ms
+      Execution Time: 0.023 ms
+
+### compressible 24 MiB (pglz) — stored size 294526 bytes, compression="pglz"
+  FileIdentity (as implemented)        n=200 p50=   0.270 ms  p95=   0.414 ms  max=   0.529 ms   toast_blks_hit +0, toast_blks_read +0 (per call: 0.0 hit)
+  identity WITH octet_length (rejected) n=200 p50=   0.280 ms  p95=   0.391 ms  max=   3.287 ms   toast_blks_hit +0, toast_blks_read +0 (per call: 0.0 hit)
+  FileHeader (substring + octet_length) n=200 p50=   0.254 ms  p95=   0.359 ms  max=   0.510 ms   toast_blks_hit +200, toast_blks_read +0 (per call: 1.0 hit)
+  FileBlob (full transfer)             n=15  p50=  16.545 ms  p95=  30.177 ms  max=  69.454 ms   toast_blks_hit +570, toast_blks_read +0 (per call: 38.0 hit)
+  EXPLAIN identity with octet_length:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs b  (cost=0.15..8.18 rows=1 width=36) (actual time=0.009..0.010 rows=1 loops=1)
+        Index Cond: (torrent_id = 2)
+        Buffers: shared hit=2
+      Planning Time: 0.025 ms
+      Execution Time: 0.016 ms
+  EXPLAIN identity without octet_length:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs b  (cost=0.15..8.18 rows=1 width=32) (actual time=0.003..0.004 rows=1 loops=1)
+        Index Cond: (torrent_id = 2)
+        Buffers: shared hit=2
+      Planning Time: 0.014 ms
+      Execution Time: 0.008 ms
+  EXPLAIN header substring:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs  (cost=0.15..8.17 rows=1 width=32) (actual time=0.012..0.012 rows=1 loops=1)
+        Index Cond: (torrent_id = 2)
+        Buffers: shared hit=5
+      Planning Time: 0.011 ms
+      Execution Time: 0.015 ms
+
+### small 2 KiB (inline) — stored size 2048 bytes, compression=""
+  FileIdentity (as implemented)        n=200 p50=   0.252 ms  p95=   0.357 ms  max=   0.421 ms   toast_blks_hit +0, toast_blks_read +0 (per call: 0.0 hit)
+  identity WITH octet_length (rejected) n=200 p50=   0.295 ms  p95=   0.391 ms  max=   0.508 ms   toast_blks_hit +0, toast_blks_read +0 (per call: 0.0 hit)
+  FileHeader (substring + octet_length) n=200 p50=   0.280 ms  p95=   0.349 ms  max=   0.526 ms   toast_blks_hit +200, toast_blks_read +0 (per call: 1.0 hit)
+  FileBlob (full transfer)             n=15  p50=   0.305 ms  p95=   0.459 ms  max=   0.530 ms   toast_blks_hit +15, toast_blks_read +0 (per call: 1.0 hit)
+  EXPLAIN identity with octet_length:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs b  (cost=0.15..8.18 rows=1 width=36) (actual time=0.015..0.016 rows=1 loops=1)
+        Index Cond: (torrent_id = 3)
+        Buffers: shared hit=2
+      Planning Time: 0.042 ms
+      Execution Time: 0.026 ms
+  EXPLAIN identity without octet_length:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs b  (cost=0.15..8.18 rows=1 width=32) (actual time=0.004..0.005 rows=1 loops=1)
+        Index Cond: (torrent_id = 3)
+        Buffers: shared hit=2
+      Planning Time: 0.016 ms
+      Execution Time: 0.009 ms
+  EXPLAIN header substring:
+      Index Scan using torrent_file_blobs_pkey on torrent_file_blobs  (cost=0.15..8.17 rows=1 width=32) (actual time=0.012..0.012 rows=1 loops=1)
+        Index Cond: (torrent_id = 3)
+        Buffers: shared hit=5
+      Planning Time: 0.012 ms
+      Execution Time: 0.016 ms
+
