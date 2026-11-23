@@ -200,3 +200,52 @@ func TestFrontendSelfTestsInBrowser(t *testing.T) {
 	}
 	t.Logf("%d passed, %d failed", res.Passed, res.Failed)
 }
+
+// Light and dark must define exactly the same colour tokens, and the
+// system-preference light block must repeat the explicit light theme.
+func TestThemesDefineTheSameTokens(t *testing.T) {
+	t.Parallel()
+	b, _ := fs.ReadFile(embedded, "static/app.css")
+	css := string(b)
+	block := func(start string) string {
+		i := strings.Index(css, start)
+		if i < 0 {
+			t.Fatalf("css lacks %q", start)
+		}
+		j := strings.Index(css[i:], "}")
+		return css[i : i+j]
+	}
+	tokens := func(s string) []string {
+		var out []string
+		for _, m := range regexp.MustCompile(`--([a-z-]+):`).FindAllStringSubmatch(s, -1) {
+			out = append(out, m[1])
+		}
+		return out
+	}
+	dark := tokens(block(":root {"))
+	light := tokens(block(`:root[data-theme="light"] {`))
+	system := tokens(block(`:root:not([data-theme="dark"]):not([data-theme="light"])`))
+	has := func(list []string, n string) bool {
+		for _, x := range list {
+			if x == n {
+				return true
+			}
+		}
+		return false
+	}
+	for _, n := range light {
+		if !has(dark, n) || !has(system, n) {
+			t.Errorf("token --%s missing from the dark or the system-light block", n)
+		}
+	}
+	for _, n := range []string{"bg", "surface", "text", "subtext", "muted", "accent", "danger", "focus", "border-strong"} {
+		if !has(dark, n) || !has(light, n) {
+			t.Errorf("token --%s is not defined in both themes", n)
+		}
+	}
+	for _, bp := range []string{"max-width:900px", "max-width:680px", "max-width:360px"} {
+		if !strings.Contains(css, bp) {
+			t.Errorf("missing responsive breakpoint %s", bp)
+		}
+	}
+}

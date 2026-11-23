@@ -1,4 +1,4 @@
-# `magnetico web` — configuration, database and reverse-proxy notes (W1–W4)
+# `magnetico web` — configuration, database and reverse-proxy notes (W1–W5)
 
 Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Nothing here has been integration-tested against a real proxy yet (that belongs to a later milestone).
 
@@ -123,13 +123,15 @@ These statements are executed verbatim by the integration tests, which start the
 
 **Privileges.** The documented runtime role (§4) is sufficient; sign-in uses `UPDATE users`, `INSERT/DELETE sessions` and the purge uses `DELETE one_time_tokens`.
 
-## 7. Search, torrent details and the file browser (W4)
+## 7. Search, torrent details and the file browser (W4, reworked in W5)
 
-Routes: `GET /torrents` (search, a *search* route with the search deadline), `GET /torrents/{id}` (metadata only, never reads the file blob) and `GET /torrents/{id}/files` (file browser). `GET /` redirects to `/torrents`. All need a session.
+Routes: `GET /torrents` (search, a *search* route with the search deadline), `GET /torrents/{id}` (metadata; reads at most the blob's first 12 bytes to choose the browsing mode, never decodes it) and the two JSON endpoints behind the details page's file browser, `GET /torrents/{id}/files/tree` and `GET /torrents/{id}/files?dir=&offset=&limit=` (W5; they replace the W4 HTML directory pages). `GET /` redirects to `/torrents`. All need a session; the JSON endpoints answer `401` `application/problem+json` instead of redirecting. No public `/api/v2` route exists yet (W7).
 
-**Fixed limits (constants, not configuration):** file-list decode admission **192 MiB** of estimated working set (bounded queue: 32 waiters, 5 s), file-index cache **128 MiB** (LRU, entries revalidated against the database on every request and expired after 10 min), 500 rows per file-browser page, search queue 4 × `SEARCH_CONCURRENCY` waiters / 5 s. A saturated decode queue or search queue answers **503 with `Retry-After`**, never a partial or empty list.
+**Fixed limits (constants, not configuration):** file-list decode admission **192 MiB** of estimated working set (bounded queue: 32 waiters, 5 s), file-index cache **128 MiB** (LRU, entries revalidated against the database on every request and expired after 10 min), directory pages of at most 1,000 entries and 1 MiB (the UI asks for 160), search queue 4 × `SEARCH_CONCURRENCY` waiters / 5 s. A saturated decode queue or search queue answers **503 with `Retry-After`**, never a partial or empty list.
 
-**Reverse proxy:** unchanged from §3 — the proxy's upstream timeouts must exceed the search write deadline (`SEARCH_TIMEOUT` + 10 s; with the default 60 s, allow ≥ 90 s). A cold file-list build takes 0.2–1.1 s uncontended and up to a few seconds when queued behind other builds, well below `REQUEST_TIMEOUT` (30 s), so file pages need no special proxy settings. Do not enable proxy response caching for these routes: pages are per-user.
+**File-view limits (W5, constants, not configuration; rationale in `docs/wip/07F-web-ui-report.md`):** a complete tree is offered for torrents of at most **12,000 files** whose estimated JSON size is at most **3 MiB** and is refused (`422`, the browser then pages directory by directory) if the exact document would exceed **4 MiB**; serialization has its own budget of **8 concurrent responses × 4 MiB** (up to 32 MiB of buffers, separate from the 192 MiB decode gate), with a bounded 32-request queue and a 2 s wait, then `503`; the index refuses hierarchies of more than **250,000 directories or 256 levels** (`422 index-too-complex`; such torrents stay searchable and their details render). Neither the tree nor directory pages may be cached by a proxy (`Cache-Control: private, no-store`); only `/static/*` is immutable.
+
+**Reverse proxy:** unchanged from §3 — the proxy's upstream timeouts must exceed the search write deadline (`SEARCH_TIMEOUT` + 10 s; with the default 60 s, allow ≥ 90 s). A cold file-list build takes 0.2–1.1 s uncontended and up to a few seconds when queued behind other builds, well below `REQUEST_TIMEOUT` (30 s), so file pages need no special proxy settings. Do not enable proxy response caching for these routes: pages and file-view JSON are per-user. `/static/*` files carry content-hashed names and `immutable` caching and may be cached freely. The UI makes no requests to any third-party host (no fonts, scripts or analytics); the Content-Security-Policy is unchanged (`default-src 'self'`, no inline scripts or styles). The file browser needs JavaScript in the browser; everything else works without it.
 
 **Memory — recommendation for a container of about 1 GiB with 2 vCPU** (measured, see `docs/wip/07E-web-search-details-report.md` §7; verified in a real 1 GiB cgroup with swap disabled and a 200 % CPU quota):
 
@@ -137,4 +139,4 @@ Routes: `GET /torrents` (search, a *search* route with the search deadline), `GE
 - Allow for PostgreSQL connections: `POOL_MAX_CONNS` (default 10) with `SEARCH_CONCURRENCY` ≤ pool − 2 keeps login and details responsive during heavy searches and decodes.
 - The target "peak RSS ≤ 640 MiB at 32 concurrent clients" was **not met** in the worst mixed workload (≤ 740 MiB); plan for ≥ 1 GiB, not 768 MiB.
 - On shutdown the file-index cache stops after in-flight requests drain and before the database pool closes; the stop is logged with the cache counters (`file index cache stopped`).
-- **Very long directory paths.** The file browser addresses a directory with the `dir` query parameter, and the server rejects request lines plus headers above 16 KiB with `431 Request Header Fields Too Large`. A codec-valid path can be up to 64 KiB and percent-escaping may triple it, so such directories cannot be opened by URL (the listing of their parent still renders). Raising a reverse proxy's limits does not help because the application limit applies; the file-browser addressing is being reconsidered for W5.
+- **Directory addressing (W5).** Directories are addressed by short positional paths (at most 256 numeric components, under 2 KB), so the W4 limitation for very long directory URLs no longer exists and the 16 KiB request-header limit is no longer a concern for the file browser. A hierarchy beyond the index limits is the only case in which a valid torrent cannot be browsed.

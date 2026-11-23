@@ -1,7 +1,7 @@
 # Magnetico 0.8.0 — Web Service Specification (web-v1)
 
 > **DRAFT — FOR OWNER REVIEW. NOT APPROVED AS A WHOLE. NOT IMPLEMENTED.**
-> Revision 5 (W2 schema contract: DDL realized in `internal/web/webschema`, version table `web_version`, one-time links deleted on consumption, no triggers, structural verification, minimum privileges) on top of revision 4 (account lifecycle: `disable` suspends rather than revokes tokens and invitations, password reset revokes all credentials, `revoke-tokens`) on top of revision 3 (final owner corrections after review of `15b76d20`: separate RSS and API credentials, final answers on the open items, tracker CLI, `AGENTS.md` rule) and revision 2 (review of `17b4c2f0`). Tags used below:
+> Revision 6 (W5: the file browser moves into the details page and is served as JSON in two backend-selected modes with deterministic positional directory paths; the HTML directory browser, percent-encoded directory links and the no-JavaScript requirement for file viewing are retired; §6.4.7–6.4.13, §7.2–7.6, §11.1) on top of revision 5 (W2 schema contract: DDL realized in `internal/web/webschema`, version table `web_version`, one-time links deleted on consumption, no triggers, structural verification, minimum privileges) on top of revision 4 (account lifecycle: `disable` suspends rather than revokes tokens and invitations, password reset revokes all credentials, `revoke-tokens`) on top of revision 3 (final owner corrections after review of `15b76d20`: separate RSS and API credentials, final answers on the open items, tracker CLI, `AGENTS.md` rule) and revision 2 (review of `17b4c2f0`). Tags used below:
 > **[APPROVED]** — decided by the owner; **[PROPOSAL]** — a recommendation, not a decision; **[OPEN]** — an undecided owner question.
 > Rationale and the legacy inventory are in [`docs/wip/07A-web-design-plan.md`](../wip/07A-web-design-plan.md). This document remains DRAFT until the owner's final review.
 
@@ -67,7 +67,7 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 
 3.3 **Absolute URLs** (RSS, setup/reset/verification/invite links, magnet short links shown to users) MUST be built from `--public-url`, never from the `Host` header.
 
-3.4 **Response headers** for HTML: a CSP with `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`; `X-Content-Type-Options: nosniff`; `Referrer-Policy` (`same-origin` by default, `no-referrer` where specified); `Cache-Control: private, no-store` for authenticated pages; `Permissions-Policy` denying unused features. The documentation pages (§9.4) MAY use a narrower relaxation limited to those routes.
+3.4 **Response headers** for HTML: a CSP with `default-src 'self'`, no inline scripts, `frame-ancestors 'none'`; `X-Content-Type-Options: nosniff`; `Referrer-Policy` (`same-origin` by default, `no-referrer` where specified); `Cache-Control: private, no-store` for authenticated pages and for the session-authenticated JSON endpoints (§6.4.9); `Permissions-Policy` denying unused features. Static assets are served under content-hashed names with `Cache-Control: public, max-age=31536000, immutable`. The documentation pages (§9.4) MAY use a narrower relaxation limited to those routes.
 
 3.5 **Panics** produce a generic 500 with a request ID; details only in the log.
 
@@ -94,9 +94,10 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 | `/api/v1/feed/rss/last` | RSS token (§4.8.2, §8.2) |
 | `/api/v2/feeds/latest.rss` | RSS token in the URL (§4.8.2, §8.2.8) |
 | other `/api/v2/*` | bearer API token (§4.8.1) |
+| `/torrents/{id}/files`, `/torrents/{id}/files/tree` (UI JSON endpoints, §6.4.9) | authenticated **session**; anonymous requests receive `401` `application/problem+json`, never a redirect |
 | every other route | authenticated session |
 
-Unauthenticated requests to UI pages redirect to `/login`; to API routes they receive `401`. Documentation pages contain no live tokens, credentials or user-specific data (§9.4).
+Unauthenticated requests to UI pages redirect to `/login`; to the session-authenticated UI JSON endpoints and to API routes they receive `401`. Documentation pages contain no live tokens, credentials or user-specific data (§9.4).
 
 ### 4.2 Accounts and roles
 
@@ -156,7 +157,7 @@ There is no `pending_setup` state.
 
 4.5.2 Two layers: the standard library's cross-origin protection (Fetch-metadata/`Origin` based) and a synchronizer token in every form. For forms shown before a session exists, the token is bound to a short-lived pre-session cookie. **[APPROVED, W3 review]** The token is a stateless, cookie-bound construction (a domain-separated SHA-256 of the high-entropy HttpOnly cookie secret), not a server-stored value; it relies on the `__Host-` cookie prefix against cookie injection. Pre-session cookie lifetime is 1 h. After login, a validated local `next` path may be honoured; absolute URLs, `//`, `/\\` and encoded variants are rejected.
 
-4.5.3 Bearer-token API endpoints are not subject to cookie CSRF and MUST NOT accept the session cookie as authentication.
+4.5.3 Bearer-token API endpoints are not subject to cookie CSRF and MUST NOT accept the session cookie as authentication. The session-authenticated UI JSON endpoints (§6.4.9) are a separate route class (`SessionJSON`): `GET`/`HEAD` only (enforced at route registration), they carry no state change and therefore need no CSRF token, they accept the session cookie only, and they are not part of `/api/v2`. The two classes share the file-view service (§6.4.7) but never an authentication mechanism.
 
 ### 4.6 Rate limiting
 
@@ -296,8 +297,9 @@ Commands MUST NOT print secrets other than the single link or token they were as
 | `GET /{$}` | session | Homepage and entry point: redirect to `/torrents` when signed in, otherwise to `/login`. Exact root only; unknown paths are 404. **Interim (W3, until W4):** a signed-in user sees a minimal page with the logout form |
 | `GET, POST /login`; `POST /logout` | public / session | Sign in / out |
 | `GET /torrents` | session | Search and listing |
-| `GET /torrents/{id}` | session | Details |
-| `GET /torrents/{id}/files` | session | File browser view |
+| `GET /torrents/{id}` | session | Details; hosts the file browser (§6.4) |
+| `GET /torrents/{id}/files/tree` | session (JSON) | Complete file tree, only for eligible torrents (§6.4.9) |
+| `GET /torrents/{id}/files?dir=&offset=&limit=` | session (JSON) | One page of one directory, for every torrent (§6.4.9) |
 | `GET, POST /register/{code}` | public | Invite registration |
 | `GET, POST /password/forgot`, `/password/reset/{token}`, `/password/setup/{token}` | public | Reset and setup |
 | `GET, POST /email/verify/{token}` | public | Email verification |
@@ -330,11 +332,11 @@ Commands MUST NOT print secrets other than the single link or token they were as
 
 ### 6.4 Details and file browser
 
-6.4.1 `GET /torrents/{id}` reads the `torrents` row (no blob). Unknown ID → 404.
+6.4.1 `GET /torrents/{id}` renders the torrent metadata immediately from the `torrents` row. It additionally asks the file-view service for the browsing mode (§6.4.7), which costs at most one bounded read of the blob's first 12 bytes (one TOAST page, `FileHeader`); it never decodes a list, builds an index or serializes a tree. If that peek fails or times out (sub-deadline 1 s) the page still renders in full with mode `dirs` and the failure is logged by category. File data is loaded afterwards by the browser, asynchronously and independently of the metadata. Unknown ID → 404.
 
-6.4.2 The file list comes from the persistence layer's `GetFiles` semantics (`postgresql-persistence-v2.md` §5): whole list or a typed error, never partial. Missing/corrupt blob → HTTP 500 page, `ERROR` log with `torrent_id`, no silent repair.
+6.4.2 The file list comes from the persistence layer's `GetFiles` semantics (`postgresql-persistence-v2.md` §5): whole list or a typed error, never partial. Missing/corrupt blob → the JSON endpoints answer `500` `application/problem+json` (and the file browser shows an error with no partial list), `ERROR` log with `torrent_id`, no silent repair; the details page itself keeps working.
 
-6.4.3 **Display limits and resource limits are separate.** *Display:* at most **[PROPOSAL]** 500 entries per page; directories show file count and aggregated size. *Resources:* decoding the full list and building or looking up its index is not reduced by the display limit; it MUST be bounded by the codec limits (`codec.DefaultLimits`: 250,000 files, 64 MiB uncompressed), a process-wide weighted limit on concurrent decodes, per-request deadlines, and — if used — a size-bounded cache. A directory navigation MUST NOT silently repeat an unbounded decode.
+6.4.3 **Display limits and resource limits are separate.** *Display:* directory pages return at most 1,000 entries (the UI asks for 160) and never more than 1 MiB of JSON; directories carry their recursive file count and size. *Resources:* decoding the full list and building or looking up its index is bounded by the codec limits (`codec.DefaultLimits`: 250,000 files, 64 MiB uncompressed), the process-wide weighted decode gate, per-request deadlines, the size-bounded index cache, and the **web index complexity limits** of §6.4.8. A directory navigation never repeats an unbounded decode: all pages of a torrent are served from one cached index.
 
 6.4.4 **Benchmark targets [APPROVED as targets, not release gates; unmeasured].** To be measured in W4 on **disposable synthetic** data (generated by the test, no real or network data), on a stated reference host (**[PROPOSAL]** 2 vCPU, 1 GiB container), single web process, idle database:
 
@@ -350,9 +352,72 @@ Commands MUST NOT print secrets other than the single link or token they were as
 
 These numbers are accepted by the owner as **benchmark targets, not hard release gates [APPROVED]**; they are not measured achievements. W4 MUST measure cold decode and index construction, cached navigation, 8/32 concurrent requests, peak memory and allocations. If a target is missed, W4 reports the measurements and identifies the bottleneck; it does **not** automatically redesign the codec or the persistence schema. The owner selects the final solution (plan §6.4 lists alternatives) from the measurements and practical resource needs; any schema or codec change requires separate owner approval.
 
-6.4.5 **Fidelity.** Duplicate `(path, size)` entries are preserved and displayed, in canonical order. Paths are opaque byte strings (`wire-format-v1.md` §1): splitting on `/` is for display grouping only; empty components, leading `/`, invalid UTF-8 and very long components are shown with explicit markers, never normalised, merged or dropped. Rendering escapes all output. Directory links carry path bytes percent-encoded so that arbitrary bytes round-trip.
+6.4.5 **Fidelity.** Duplicate `(path, size)` entries are preserved as distinct entries, in canonical order, each with its canonical position (`file_index`). Paths are opaque byte strings (`wire-format-v1.md` §1): splitting on `/` is for grouping only; empty components, leading `/`, `.`/`..`, invalid UTF-8 and very long components are carried and shown with explicit markers, never normalised, merged or dropped. **Directories are addressed by deterministic positional paths (§6.4.8), not by path bytes**: no percent-encoded byte path, temporary identifier, server-side registry, session mapping or per-client state exists, so no byte sequence needs to survive a URL and the W4 request-line limitation for long directory links is gone. Names travel in JSON losslessly (§6.4.9) and are rendered with `textContent` only.
 
-6.4.6 **Invalid UTF-8 in HTML [APPROVED].** The page shows a clearly identified, lossless representation: each invalid byte as an escaped sequence (`\xNN`) in a visibly marked span, valid parts as text. It never substitutes U+FFFD.
+6.4.6 **Invalid UTF-8 in the page [APPROVED].** The page shows a clearly identified, lossless representation: each invalid byte as an escaped sequence (`\xNN`) in a visibly marked span, valid parts as text; control characters, bidi formatting characters and a literal U+FFFD as `\u{XXXX}` markers. It never substitutes U+FFFD. The rendering rule is implemented twice (Go `pathfmt.Display` for server-rendered names, `app.js` for file names) and both are pinned to the same vectors (`internal/web/pathfmt/testdata/name-vectors.json`).
+
+6.4.7 **One file-view service, two operations [APPROVED W5].** The package `internal/web/fileview` is the single implementation of file browsing. The session-authenticated UI endpoints (§6.4.9) and the future bearer-authenticated `/api/v2` endpoints (§7.5) are thin authentication adapters over it; both reuse the persistence reader, the Arena index, the LRU cache and weighted decode gate (`filecache`), eligibility, directory resolution, pagination and serialization limits. There are two independent operations:
+- **Tree**: the entire hierarchy in one JSON document, only for torrents that qualify.
+- **Directory page**: a bounded page of one directory, for **any** torrent, with no minimum file count.
+
+*Mode selection is the backend's decision.* The details page carries it as `data-mode="tree"` or `"dirs"`; the browser never estimates a size or chooses a mode. A client may always choose directory pages regardless of the mode.
+
+*Eligibility has two stages.* (1) A cheap, conservative **pre-check** (`Decide`): single-file torrents are eligible; torrents with more than `MaxTreeFiles` files are not; otherwise the blob's declared payload length is read from its 12-byte header and `estimate = 96 × files + declared_bytes` must not exceed `MaxTreeEstimate`. It never decodes. The estimate is **not** an upper bound: prefix-delta and trie encodings and directory-heavy hierarchies can expand well beyond it (measured ratio actual/estimate: 0.68–0.83 for ordinary shapes, 1.54 for a directory-heavy adversarial list; `docs/wip/07F-w5-measurements/tree-size.txt`). (2) The **exact serialized size** is enforced while building the document in a bounded buffer; if the next byte would exceed `MaxTreeBytes` the request fails with a typed error **before any byte or status is sent**. `full_tree_available` / `data-mode` is the outcome of stage 1; stage 2 is authoritative. A rare false-positive estimate therefore yields a typed `422` that makes the client switch to directory pages, never an oversized response. Endpoints re-run stage 1 themselves, so a caller cannot bypass the thresholds by calling the endpoint directly.
+
+*Thresholds [PROPOSAL, owner review pending] (defaults, `fileview.Default*`):* `MaxTreeFiles` = 12,000; `MaxTreeEstimate` = 3 MiB; `MaxTreeBytes` (hard cap) = 4 MiB; `MaxPageBytes` = 1 MiB; encode budget = 8 concurrent responses × `MaxTreeBytes`. A 12,000-file torrent is ≈ 1.2–1.5 MB of JSON; 250,000 files ≈ 31 MB. The numbers come from the W5 measurements (client CPU is negligible up to 50,000 files on the test engine; transfer size and low-end-phone memory are the reasons for the limits and are an owner review item).
+
+*Encode admission.* Serialization has its own weighted gate, separate from the 192 MiB decode gate (which keeps protecting decoding and index builds only); a response holds `MaxTreeBytes` of that budget until its bytes were written. Waiting respects the request context; saturation gives `503` with `Retry-After`. Large pooled buffers are not retained. No intermediate object graph is built.
+
+6.4.8 **Positional directory paths [APPROVED W5].** A directory is addressed by its position in the index's deterministic hierarchy: `""` is the root; otherwise decimal components joined by `_` (e.g. `2_5_6`). Component *i* is the index of the subdirectory within its parent's listing, where subdirectories are listed first, sorted by name bytes (hence stable for an immutable blob). Grammar: `^(0|[1-9][0-9]{0,5})(_(0|[1-9][0-9]{0,5}))*$`, at most `MaxDepth` (256) components; only directories can be addressed (a component ≥ the parent's subdirectory count is `404`; a malformed path or one deeper than the limit is `400`). Directory positions and canonical file positions (`file_index`) are separate namespaces. Torrent file metadata is immutable under the normal ingest contract, so no client-side blob-version protocol and no `409` recovery exist; if a blob were replaced, positions are interpreted against the new list.
+
+*Index complexity limits (web resource limits, not codec validity):* the web index refuses a hierarchy with more than `MaxDirs` = 250,000 directories or deeper than `MaxDepth` = 256, checked incrementally during the scan, before the index arrays grow (measurements: ≤ 17 MiB index at the limit; `docs/wip/07F-w5-measurements/index-complexity.txt`). A valid torrent beyond the limits stays visible in search and its details remain accessible; **both** file operations answer `422 index-too-complex` (§6.4.13). This is an intentional resource-safety limitation, not a corruption classification, and it cannot be bypassed by switching modes because both modes use the same index.
+
+6.4.9 **JSON contracts (UI endpoints) [APPROVED W5].** Both routes are `GET`/`HEAD` session routes (§4.1, §4.5.3); responses are `application/json` or `application/problem+json`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, `X-Robots-Tag: noindex, nofollow`, with a `Content-Length`. Documents are RFC 8259 JSON produced by a dedicated writer that follows the `encoding/json` string-escaping rules (no Go-literal escapes) and are verified with `json.Valid` and round trips. Unknown query parameters are ignored; repeated `dir`/`offset`/`limit` parameters, malformed escapes and non-canonical numbers are `400`.
+
+*Names.* Every named entry carries `"name"` (a string) when the bytes are valid UTF-8, otherwise `"name": null` and `"name_base64"` (RFC 4648 §4 standard alphabet, with padding) holding the exact bytes. An empty component is `"name": ""`. Nothing is converted to U+FFFD. (This is the §7.3 `path`/`path_base64` convention applied per component.)
+
+*file-tree v1* — `GET /torrents/{id}/files/tree`:
+```json
+{"version":1,"file_count":N,"size":S,
+ "root":{"file_count":N,"size":S,
+         "dirs":[{"name":…,"file_count":n,"size":s,"dirs":[…],"files":[…]}],
+         "files":[{"name":…,"size":n,"file_index":p,"duplicate":false}]}}
+```
+`dirs[i]` has positional component *i*; its path is derived (parent path + `_i`) and not repeated. `files` are in canonical order; `file_index` is the canonical position (the identity of duplicates); `duplicate` is true when the name equals the previous file entry's name in the same directory. Aggregates are recursive.
+
+*file-dir-page v1* — `GET /torrents/{id}/files?dir=<positional>&offset=<n>&limit=<1..1000>` (defaults: root, 0, 160):
+```json
+{"version":1,"path":"2_5","ancestors":[{"name":…,"path":"2"},{"name":…,"path":"2_5"}],
+ "dir":{"file_count":n,"size":s,"dir_count":d,"entry_count":e},
+ "offset":o,"limit":l,"next_offset":k,
+ "entries":[{"type":"dir","name":…,"path":"2_5_0","file_count":n,"size":s,"dir_count":d,"entry_count":e},
+            {"type":"file","name":…,"size":n,"file_index":p,"duplicate":false}]}
+```
+Entries are subdirectories (by name bytes) then files (canonical order). `entry_count` is the number of listing rows of a directory (`dir_count` + immediate files). A page never exceeds `MaxPageBytes`: when the size bound of the requested rows would, the page is cut (never below one entry) and **`next_offset`** is the offset of the first row not returned, or `null` at the end. Clients MUST continue with `next_offset`, not `offset + limit`. An offset beyond the end is a valid empty page.
+
+6.4.10 **Logging and caching.** The JSON endpoints log only the request ID, torrent ID, operation, outcome category and response size; never names, paths, `dir` values or tokens. Responses are never cacheable by proxies (`private, no-store`); the immutable-asset policy applies to static files only. No proxy response caching may be enabled for these routes.
+
+6.4.11 **Front end [APPROVED W5].** `app.js` (one first-party file, no framework, CSP-compatible) renders the browser into `#file-browser` on the details page:
+- *Tree mode:* fetch the tree once; folders collapsed unless the torrent has at most 20 files in total; expand/collapse and local filtering (case-insensitive, file names, matches keep their ancestors, the manual expansion state survives a filter session) make no request; at most 120 rows are in the DOM, extended 120 at a time; names via `textContent`.
+- *Directory mode:* breadcrumbs, up, previous/next, explicit loading/error/retry states, requests are aborted when superseded, a stalled request times out after 30 s; directory changes never navigate the page and never add history entries (`history.replaceState` edits only `dir` and `offset` and keeps other parameters, the fragment and unrelated history state; a reload restores a valid location, an invalid one falls back to the root with a notice).
+- A `422 full-tree-unavailable` from the tree endpoint switches to directory mode; `422 index-too-complex` is final (no retry, no mode switch); `401` offers sign-in; `503` and timeouts offer retry.
+Limitations: no virtualised scrolling (chunked rendering), no filter in directory mode (listing is server-side and search never scans paths), deep trees are not exposed to assistive technology as an ARIA tree (a list of rows with `aria-expanded` folder buttons), and phone performance with thousands of rows is unmeasured.
+
+6.4.12 **No-JavaScript behaviour [APPROVED W5 exception].** Search, details, sign-in and sign-out work without JavaScript. The file browser requires it: without JavaScript the Contents panel shows a clear notice and no HTML file tree is rendered (the old `/torrents/{id}/files` HTML directory pages were removed). This is an explicit exception to §11.1.
+
+6.4.13 **Errors** (`application/problem+json`, RFC 9457; `type` is a stable URN `urn:magnetico:problem:<slug>`):
+
+| Condition | Status | Slug |
+|---|---|---|
+| anonymous request | 401 | `unauthenticated` |
+| unknown torrent or directory | 404 | `not-found` |
+| malformed `dir`, `offset`, `limit` or query | 400 | `invalid-parameter` |
+| tree not available (file count, estimate or exact size) | 422 | `full-tree-unavailable` (+ `alternate`: the directory-page URL) |
+| hierarchy beyond the web index limits | 422 | `index-too-complex` |
+| decode or encode capacity saturated, deadline, storage I/O, blob replaced mid-request | 503 + `Retry-After` | `temporarily-unavailable` |
+| missing or corrupt blob, list too large to index | 500 | `internal-error` |
+
+Bodies never carry names, paths or internal detail.
 
 ## 7. API v2 (draft)
 
@@ -364,20 +429,34 @@ These numbers are accepted by the owner as **benchmark targets, not hard release
 |---|---|
 | `GET /torrents?q=&sort=&order=&limit=&cursor=` | `{items: [torrent], next_cursor}`; `limit` ≤ 100 |
 | `GET /torrents?info_hash=<40 hex>` | zero or one torrent |
-| `GET /torrents/{id}` | torrent, including `magnet_uri` |
-| `GET /torrents/{id}/files?limit=&cursor=` | page of the canonical file list; `limit` ≤ 1,000 |
+| `GET /torrents/{id}` | torrent, including `magnet_uri` and `full_tree_available` (§7.5) |
+| `GET /torrents/{id}/files/tree` | the complete hierarchy (file-tree v1, §6.4.9), only if eligible; else `422` (§7.5) |
+| `GET /torrents/{id}/files?dir=&offset=&limit=` | one page of one directory (file-dir-page v1, §6.4.9); `limit` ≤ 1,000; available for every torrent |
 | `GET /feeds/latest.rss?feed_token=` | RSS of the newest torrents; **RSS-token** authentication through the URL (§8.2.8). The one documented exception to header-only authentication |
 
-Torrent object: `id`, `info_hash` (hex), `name`, `total_size`, `file_count`, `discovered_at`.
+Torrent object: `id`, `info_hash` (hex), `name`, `total_size`, `file_count`, `discovered_at`; the single-torrent response adds `magnet_uri` and `full_tree_available` (boolean).
+
+The W4-era proposal of `/files` as a flat canonical list with positional cursors is **replaced** by the directory-navigation contract above; none of these endpoints has been released.
 
 7.3 **File paths [APPROVED contract].** A file entry is `{ "path": <string|null>, "path_base64": <string, present only when path is null>, "size": <integer> }`:
 - Valid UTF-8 path → `path` is the original string; `path_base64` is absent.
 - Invalid UTF-8 path → `"path": null` and `path_base64` holds the **exact original bytes** (RFC 4648 §4 standard alphabet, with padding).
 - Validity is decided per whole path (Go `utf8.Valid`); a path mixing valid and invalid segments is invalid as a whole.
 - Invalid byte sequences are **never** converted to replacement characters. Storage and the codec format are unchanged.
-- The OpenAPI schema expresses exactly-one-of `path` / `path_base64`. Duplicate paths are returned as separate entries in canonical order; cursors are positional.
+- The OpenAPI schema expresses exactly-one-of `path` / `path_base64`. Duplicate paths are returned as separate entries in canonical order.
+- For the hierarchical file views (§6.4.9) the same rule applies per component with the member names `name` / `name_base64` (exactly one of them carries the bytes: `name` is a string, or `null` together with `name_base64`); the schema documents this.
 
 7.4 No OAuth; no password-based token minting. Every other `/api/v2/*` endpoint accepts API tokens in the `Authorization` header only; the feed endpoint accepts RSS tokens only and rejects API tokens.
+
+7.5 **File-view parity with the web UI [APPROVED W5 addendum; implemented in W7].** `/api/v2` offers the same file-browsing capabilities as the UI through the same service (§6.4.7), as two independent operations under `/api/v2/torrents/{id}`:
+- `GET /files/tree` returns file-tree v1 only when the torrent is eligible. Otherwise it answers **`422 Unprocessable Content`** `application/problem+json` with `type` `urn:magnetico:problem:full-tree-unavailable`, a `detail` stating that full-tree delivery is unavailable for this torrent, and `alternate` pointing at `/api/v2/torrents/{id}/files`. `413` is not used. The limit is applied before any response byte is committed, so a `200` is never begun for a tree that then proves too large.
+- `GET /files?dir=&offset=&limit=` returns file-dir-page v1 for **any** torrent, including one with 100 files; there is no minimum file count.
+- `full_tree_available: boolean` in `GET /torrents/{id}` is the service's stage-1 decision (§6.4.7): `true` means the tree is eligible for one-response delivery; `false` means use `/files`. Clients may always choose `/files`, and are not required to fetch the tree when it is available.
+- Hard limits (file count, estimated size, exact serialized size, page byte cap, encode budget) are enforced by the service, not by the adapter, so no request can bypass them. Errors are those of §6.4.13 under the API's problem+json rules (`503` carries `Retry-After`, per §6.2.5).
+- Authentication: bearer API token only (§4.8.1, §7.1); the adapters share nothing with the session adapters except the service. API v2 routes MUST NOT be exposed before the bearer authentication exists (W7); W5 deliberately registers none, and a test asserts it.
+- Fidelity and tests required of W7: duplicates as distinct entries, exact ordering, hierarchy and positional paths, sizes and directory aggregates, empty components, arbitrary bytes via `name`/`name_base64`; a small torrent usable through either endpoint; a 100-file torrent paginated; a large torrent with `full_tree_available = false`, a `422` from `/files/tree` and a working `/files`; every directory reachable without downloading the tree; malformed positional paths and page values rejected; resource limits not bypassable by direct requests; authentication enforced independently for the UI and the API.
+
+7.6 **OpenAPI planning.** `/api/v2/openapi.yaml` (W7) MUST describe: the `Torrent` schema with `full_tree_available`; `FileTree` (file-tree v1: `FileTreeDir`, `FileTreeFile`), `FileDirPage` (file-dir-page v1: `DirEntry`, `FileEntry`, `Ancestor`, `DirSummary`) with the exactly-one-of `name`/`name_base64` rule; the query parameters `dir` (pattern `^(0|[1-9][0-9]{0,5})(_(0|[1-9][0-9]{0,5}))*$`, at most 256 components), `offset` (integer ≥ 0) and `limit` (1–1,000, default 160); the `Problem` schema and the `full-tree-unavailable`, `index-too-complex`, `invalid-parameter`, `not-found`, `temporarily-unavailable` problem types; and the `next_offset` continuation rule. The route-versus-OpenAPI consistency test (§9.1) covers both new routes. The UI JSON endpoints (§6.4.9) are internal and are **not** part of the public OpenAPI documents.
 
 ## 8. Compatibility surface
 
@@ -464,9 +543,9 @@ The import runs as a step of the **explicit web-schema initialization** command 
 
 ## 11. UI requirements
 
-11.1 Server-rendered HTML with auto-escaping; all pages usable without JavaScript. JavaScript, if any, is a single small first-party file (no framework, no CDN, no inline scripts) providing enhancements only.
+11.1 Server-rendered HTML with auto-escaping; search, details, sign-in and sign-out are usable without JavaScript. JavaScript is first-party only (`app.js` plus a tiny blocking `theme.js`; no framework, no CDN, no inline scripts) and provides enhancements (theme switch, clipboard copy, `/` to focus search, selector auto-submit) **and the file browser**, which requires it (§6.4.12, an approved exception: no duplicate HTML tree renderer is kept).
 
-11.2 Light and dark themes (system preference with an explicit override), usable at 360 px width, keyboard operable, visible focus, labelled inputs, sort state exposed to assistive technology, contrast of at least 4.5:1 for text in both themes, respect for reduced motion.
+11.2 Light and dark themes (system preference with an explicit override), usable at 360 px width, keyboard operable, visible focus, labelled inputs, sort state exposed to assistive technology, contrast of at least 4.5:1 for text and 3:1 for control boundaries in both themes (`docs/wip/07F-w5-measurements/contrast.txt`), respect for reduced motion, a skip link.
 
 11.3 No third-party requests from the browser (fonts, icons, scripts, analytics).
 
@@ -496,11 +575,11 @@ The import runs as a step of the **explicit web-schema initialization** command 
 
 12.9 **Policy and compatibility tests.** `/robots.txt` body is exactly the default; `X-Robots-Tag: noindex, nofollow` on all response classes; documentation and OpenAPI routes are public and contain no credentials; no external requests from documentation pages; old UI routes return 404 and old state-changing GETs change nothing; v1 RSS accepts RSS tokens by query, header and cookie, keeps item identity, and `page=1` returns the newest 1,000 (documented change); v1 OpenAPI lists only implemented endpoints; v2 rejects query-string API tokens everywhere except the RSS-token feed endpoint; the OpenAPI documents describe the RSS authentication contract; a route-versus-OpenAPI consistency test passes (§9.1).
 
-12.10 **API path tests.** Valid UTF-8, invalid UTF-8 (`path: null`, `path_base64` round-trips to the exact bytes), mixed segments, duplicate paths, mixed encodings within one page and across cursor boundaries; the HTML shows lossless escapes and no U+FFFD.
+12.10 **API path tests.** Valid UTF-8, invalid UTF-8 (`path: null`, `path_base64` round-trips to the exact bytes), mixed segments, duplicate paths, mixed encodings within one page and across continuation (`next_offset`) boundaries; the file browser shows lossless escapes and no U+FFFD (shared Go/JS name vectors); JSON validity and byte round trips for tree and page documents (NUL, controls, quotes, backslash, U+2028/2029, U+FFFD, invalid UTF-8, random bytes, fuzzing against `encoding/json`).
 
 12.11 **Security tests.** Spoofed forwarded headers from an untrusted peer do not change rate-limit identity; CSRF enforced on every POST including unauthenticated ones; equal responses for known/unknown usernames, emails and invitations; log capture shows no secrets or invitation codes; headers present; dev-mode cookie rules rejected for non-loopback URLs; invitations of other users are never visible.
 
-12.12 **File-tree benchmarks (W4)** per §6.4.4, on synthetic disposable data.
+12.12 **File-tree benchmarks (W4)** per §6.4.4, on synthetic disposable data; **file-view measurements (W5):** serialized size and time per corpus shape, estimate calibration, index memory at the complexity limits, 8/32 concurrent full-tree clients, tree serialization concurrent with cold index builds, directory navigation under cache eviction churn (`docs/wip/07F-w5-measurements/`).
 
 12.13 **Operational constraints for all testing:** disposable databases only (`internal/pgtest`); synthetic data; no production access; **no DHT or other public BitTorrent traffic from the development VM, under any circumstances.**
 
@@ -516,7 +595,7 @@ Revision 3 (review of `15b76d20`): **separate `rss_tokens` and `api_tokens`**, l
 
 ### 13.2 Still open
 
-1. **File-tree final solution** after the W4 measurements; budgets are targets only (§6.4.4).
+1. ~~File-tree final solution~~ **Resolved in W5**: JSON file browser on the details page, tree mode and directory mode chosen by the backend, positional directory paths (§6.4.7–6.4.13). The W4 memory budgets remain benchmark targets (§6.4.4).
 2. Breached-password lookup (not proposed).
 
 Minor proposals still unconfirmed, not blockers: the notice to the previous address after an email change (§4.9.8), the placement of the SMTP implementation (standard library preferred, §4.9.10), and the default reset/setup/verification link lifetimes (§4.9.4).

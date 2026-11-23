@@ -57,9 +57,10 @@ func envOr(k, def string) string {
 // ---- data -----------------------------------------------------------------------
 
 type loadData struct {
-	heavy map[string]int // corpus name → torrent id
-	pool  []int          // mixed pool ids (eviction churn)
-	words []string       // search words that exist
+	heavy    map[string]int // corpus name → torrent id
+	pool     []int          // mixed pool ids (eviction churn)
+	treePool []int          // tree-eligible torrents (full-tree endpoint)
+	words    []string       // search words that exist
 }
 
 var heavySpecs = []string{"typical-250k", "longpath-250k", "flatmax-250k", "deep-250k", "wide-250k", "adversarial-50k", "longname-1500", "typical-10k", "typical-1k"}
@@ -166,6 +167,21 @@ func ensureLoadData(t *testing.T, bin, dsn string) (rtDSN, opDSN string, d loadD
 			}
 		}
 	}
+	var haveTree int
+	_ = conn.QueryRow(ctx, `SELECT count(*) FROM magneticod.torrents WHERE name LIKE 'load/tree#%'`).Scan(&haveTree)
+	if haveTree == 0 && os.Getenv("MAGNETICO_LOAD_SKIP_SEED") == "" {
+		// Full-tree workloads: torrents the backend serves as one JSON tree
+		// (3,500–10,500 files each), plus one hierarchy beyond the index limits.
+		base := synth.Spec{Name: "tree", Shape: synth.Typical, Files: 7000, Seed: 88}
+		for _, s := range synth.Torrents(base, 24) {
+			if _, err := seedTorrent(ctx, conn, "load/"+s.Name, synth.Generate(s)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := seedTorrent(ctx, conn, "load/toodeep", []codec.File{{Path: strings.Repeat("d/", 300) + "f", Size: 1}, {Path: "x", Size: 1}}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var filler int
 	_ = conn.QueryRow(ctx, `SELECT count(*) FROM magneticod.torrents WHERE name NOT LIKE 'load/%'`).Scan(&filler)
 	if filler == 0 && os.Getenv("MAGNETICO_LOAD_SKIP_SEED") == "" {
@@ -193,6 +209,8 @@ func ensureLoadData(t *testing.T, bin, dsn string) (rtDSN, opDSN string, d loadD
 		n := strings.TrimPrefix(name, "load/")
 		if strings.HasPrefix(n, "pool#") {
 			d.pool = append(d.pool, id)
+		} else if strings.HasPrefix(n, "tree#") {
+			d.treePool = append(d.treePool, id)
 		} else {
 			d.heavy[n] = id
 		}
@@ -820,6 +838,41 @@ func TestWebLoad(t *testing.T) {
 		lw.Wait()
 		res["login"] = loginAcc.result(dur)
 		return res, map[string]any{"file_clients": 32, "search_clients": 4, "duration": dur.String()}
+	})
+
+	// Full-tree (W5) scenarios: one JSON document per request, serialized
+	// under the encode gate; 200 for eligible torrents.
+	treePick := func(r *rand.Rand) string {
+		return fmt.Sprintf("/torrents/%d/files/tree", data.treePool[r.IntN(len(data.treePool))])
+	}
+	for _, n := range []int{8, 32} {
+		run(fmt.Sprintf("tree%d", n), func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {
+			res := d.drive(dur, []workload{{name: "tree", workers: n, acc: newAcc(), pick: treePick}})
+			return res, map[string]any{"clients": n, "duration": dur.String(), "tree_pool": len(data.treePool)}
+		})
+	}
+	// Tree serialization concurrent with cold index builds and eviction churn
+	// (pool torrents of ~150k files) and search.
+	run("treemix", func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {
+		dirs := d.crawlDirs(t, typical, 300)
+		res := d.drive(dur, []workload{
+			{name: "tree", workers: 16, acc: newAcc(), pick: treePick},
+			{name: "dirs", workers: 16, acc: newAcc(), pick: poolPick(dirs)},
+			{name: "search", workers: 2, acc: newAcc(), pick: searchPick},
+		})
+		return res, map[string]any{"tree_clients": 16, "dir_clients": 16, "duration": dur.String()}
+	})
+	// A hierarchy beyond the index limits answers 422 quickly and does not
+	// disturb the other classes.
+	run("complex", func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {
+		deep := data.heavy["toodeep"]
+		res := d.drive(dur, []workload{
+			{name: "toodeep", workers: 8, acc: newAcc(), pick: func(r *rand.Rand) string {
+				return []string{fmt.Sprintf("/torrents/%d/files/tree", deep), fmt.Sprintf("/torrents/%d/files", deep)}[r.IntN(2)]
+			}},
+			{name: "tree", workers: 8, acc: newAcc(), pick: treePick},
+		})
+		return res, map[string]any{"duration": dur.String()}
 	})
 
 	run("cancel", func(t *testing.T, sr *serverRun, d *driver) (any, map[string]any) {

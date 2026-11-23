@@ -1,0 +1,7 @@
+small        id=1 details=200 mode=tree (1.8 ms) | tree=200  1165 B (2.2 ms) | dir=200 699 B (1.0 ms)
+standard     id=2 details=200 mode=tree (1.2 ms) | tree=200  4584 B (1.9 ms) | dir=200 677 B (0.8 ms)
+series       id=3 details=200 mode=tree (1.1 ms) | tree=200  290750 B (4.2 ms) | dir=200 5126 B (0.7 ms)
+longpath     id=5 details=200 mode=tree (1.1 ms) | tree=200  603783 B (5.9 ms) | dir=200 287 B (0.8 ms)
+adversarial  id=6 details=200 mode=tree (0.9 ms) | tree=200  72908 B (2.5 ms) | dir=200 16895 B (0.7 ms)
+huge         id=4 details=200 mode=dirs (0.7 ms) | tree=422 full-tree-unavailable 247 B (0.8 ms) | dir=200 18814 B (91.6 ms)
+toodeep      id=7 details=200 mode=tree (1.5 ms) | tree=422 index-too-complex 185 B (2.2 ms) | dir=422 185 B (1.4 ms)

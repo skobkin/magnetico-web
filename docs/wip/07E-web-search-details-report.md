@@ -1,5 +1,7 @@
 # Task 07E / W4 — Search, torrent details and file browser: implementation report (Steps 6–8, stop at S2)
 
+> **W5 update (2026-11-23):** the HTML file browser and the percent-encoded `dir` addressing described in this report were replaced in W5 by JSON endpoints, backend-selected tree/directory modes and positional directory paths; the long-directory URL limitation (§9, §12 item 6) no longer exists and the cache, gate and index described here are reused unchanged apart from the new directory-complexity limits. See [`07F-web-ui-report.md`](07F-web-ui-report.md) and `web-v1.md` §6.4.7–6.4.13. The W4 measurements below stay valid for the index, cache and decode gate.
+
 Branch `refactor/0.8.0-unify-and-new-storage`, continuing from C1 (`aeb3454b`). Plan: `07E-web-search-details-plan.md` (final values at its end). C1 evidence: `07E-c1-report.md` (decisions in §14). Raw measurements: `07E-w4-measurements/`.
 
 ## 1. Outcome
