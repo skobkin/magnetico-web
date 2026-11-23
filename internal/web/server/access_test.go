@@ -110,7 +110,7 @@ func TestStartupHookFailureFailsClosedWithoutListening(t *testing.T) {
 	boom := errors.New("hook failed")
 	f.srv.OnStartup(func(context.Context) error { return boom })
 	var started atomic.Bool
-	f.srv.SetBackground(func(context.Context) { started.Store(true) })
+	f.srv.AddBackground(func(context.Context) { started.Store(true) })
 	err := f.srv.Run(context.Background())
 	if !errors.Is(err, boom) {
 		t.Fatalf("Run: %v", err)
@@ -124,14 +124,14 @@ func TestBackgroundNeverStartsOnVerificationOrListenFailure(t *testing.T) {
 	var started atomic.Bool
 	f := newFixture(t, nil)
 	f.be.verifyErr = errors.New("bad schema")
-	f.srv.SetBackground(func(context.Context) { started.Store(true) })
+	f.srv.AddBackground(func(context.Context) { started.Store(true) })
 	if err := f.srv.Run(context.Background()); err == nil || started.Load() {
 		t.Fatalf("verification failure: err=%v started=%v", err, started.Load())
 	}
 
 	started.Store(false)
 	f = newFixture(t, func(c *Config) { c.Listen = "256.0.0.1:0" }) // cannot bind
-	f.srv.SetBackground(func(context.Context) { started.Store(true) })
+	f.srv.AddBackground(func(context.Context) { started.Store(true) })
 	if err := f.srv.Run(context.Background()); err == nil || started.Load() {
 		t.Fatalf("listen failure: err=%v started=%v", err, started.Load())
 	}
@@ -146,9 +146,13 @@ type orderBackend struct {
 	fakeBackend
 	bgRunning          *atomic.Bool
 	closedWhileRunning atomic.Bool
+	onClose            func()
 }
 
 func (b *orderBackend) Close() {
+	if b.onClose != nil {
+		b.onClose()
+	}
 	if b.bgRunning.Load() {
 		b.closedWhileRunning.Store(true)
 	}
@@ -165,7 +169,7 @@ func runWithBackground(t *testing.T, bg func(ctx context.Context, running *atomi
 		t.Fatal(e)
 	}
 	entered := make(chan struct{})
-	s.SetBackground(func(ctx context.Context) {
+	s.AddBackground(func(ctx context.Context) {
 		running.Store(true)
 		close(entered)
 		bg(ctx, running)
@@ -231,7 +235,7 @@ func TestBackgroundStopsBeforeCloseOnUnexpectedServeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	entered := make(chan struct{})
-	s.SetBackground(func(ctx context.Context) {
+	s.AddBackground(func(ctx context.Context) {
 		running.Store(true)
 		close(entered)
 		<-ctx.Done()
@@ -270,7 +274,7 @@ func TestStuckBackgroundOnUnexpectedServeFailureReportsIncompleteShutdown(t *tes
 	release := make(chan struct{})
 	defer close(release)
 	entered := make(chan struct{})
-	s.SetBackground(func(context.Context) {
+	s.AddBackground(func(context.Context) {
 		close(entered)
 		<-release // ignores cancellation
 	})
@@ -312,7 +316,7 @@ func TestBackgroundStopsOnForcedShutdown(t *testing.T) {
 		<-r.Context().Done() // only the forced cancel ends it
 	}))
 	bgEntered := make(chan struct{})
-	s.SetBackground(func(ctx context.Context) {
+	s.AddBackground(func(ctx context.Context) {
 		running.Store(true)
 		close(bgEntered)
 		<-ctx.Done()
@@ -364,5 +368,73 @@ func TestFailingDrainedHookReportsIncompleteShutdown(t *testing.T) {
 	})
 	if !errors.Is(err, ErrShutdownIncomplete) || be.closed.Load() != 1 {
 		t.Fatalf("Run: %v closed=%d", err, be.closed.Load())
+	}
+}
+
+func TestTokenClassesAreSafeMethodsOnlyAndNeedGuards(t *testing.T) {
+	f := newFixture(t, nil)
+	rt := f.srv.Router()
+	for _, a := range []Access{APIToken, Feed} {
+		for _, p := range []string{"POST /x", "PUT /x", "DELETE /x", "PATCH /x", "/x"} {
+			mustPanic(t, a.String()+" "+p, func() { rt.Handle(p, KindRequest, a, http.HandlerFunc(ok)) })
+		}
+		mustPanic(t, a.String()+" without a guard", func() { rt.Handle("GET /x", KindRequest, a, http.HandlerFunc(ok)) })
+	}
+	rt.SetGuards(map[Access]Guard{
+		APIToken: func(next http.Handler) http.Handler { return next },
+		Feed:     func(next http.Handler) http.Handler { return next },
+	})
+	rt.Handle("GET /api-x", KindRequest, APIToken, http.HandlerFunc(ok))
+	rt.Handle("HEAD /feed-x", KindRequest, Feed, http.HandlerFunc(ok))
+	if APIToken.String() != "api-token" || Feed.String() != "feed" {
+		t.Fatalf("names: %s %s", APIToken, Feed)
+	}
+}
+
+func TestSeveralBackgroundTasksRunAndAreAllAwaitedBeforeTheBackendCloses(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.ShutdownTimeout = time.Second })
+	running := &atomic.Int32{}
+	be := &orderBackend{bgRunning: &atomic.Bool{}}
+	s, err := New(f.srv.cfg, be)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var closedWhileRunning atomic.Bool
+	be.onClose = func() {
+		if running.Load() != 0 {
+			closedWhileRunning.Store(true)
+		}
+	}
+	started := make(chan struct{}, 3)
+	for i := 0; i < 3; i++ {
+		s.AddBackground(func(ctx context.Context) {
+			running.Add(1)
+			started <- struct{}{}
+			<-ctx.Done()
+			time.Sleep(50 * time.Millisecond)
+			running.Add(-1)
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- s.Run(ctx) }()
+	for i := 0; i < 3; i++ {
+		select {
+		case <-started:
+		case <-time.After(10 * time.Second):
+			t.Fatal("a background task never started")
+		}
+	}
+	cancel()
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	if closedWhileRunning.Load() {
+		t.Fatal("the backend closed while a background task was still running")
 	}
 }

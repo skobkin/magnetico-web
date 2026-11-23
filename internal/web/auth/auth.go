@@ -140,7 +140,7 @@ func Install(srv *server.Server, cfg Config) (*Auth, error) {
 	rt.Handle("GET /{$}", server.KindRequest, server.Session, root)
 
 	srv.OnStartup(a.startup)
-	srv.SetBackground(a.Background)
+	srv.AddBackground(a.Background)
 	return a, nil
 }
 

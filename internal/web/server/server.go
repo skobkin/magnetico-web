@@ -82,12 +82,13 @@ type Server struct {
 
 	closeWait time.Duration // bound on backend.Close during shutdown
 
-	// Startup hooks and the single background task are installed before Run
-	// (auth.Install); see Run for their lifecycle.
-	startup    []func(context.Context) error
-	background func(context.Context)
-	onDrained  []func(context.Context) error
-	bgStopWait time.Duration // bound on waiting for the background task at shutdown
+	// Startup hooks and the background tasks are installed before Run
+	// (auth.Install and the other feature packages); see Run for their
+	// lifecycle.
+	startup     []func(context.Context) error
+	backgrounds []func(context.Context)
+	onDrained   []func(context.Context) error
+	bgStopWait  time.Duration // bound on waiting for the background tasks at shutdown
 
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
@@ -115,6 +116,18 @@ const (
 	// 401 application/problem+json instead of the login redirect, and no
 	// state-changing method exists to need CSRF protection.
 	SessionJSON
+	// APIToken routes are the bearer-authenticated API v2 JSON endpoints. They
+	// answer safe methods only (enforced at registration), accept the
+	// Authorization header only (never a cookie, a query parameter or an RSS
+	// token) and need no CSRF protection because they carry no ambient
+	// credential. Failures are 401 application/problem+json.
+	APIToken
+	// Feed routes are the RSS endpoints authenticated by an RSS token. They
+	// answer safe methods only (enforced at registration). The class carries
+	// no credential logic: each route binds its own fixed credential policy
+	// (which transports, which failure envelope), so the v1 and v2 feeds can
+	// never share transports by accident.
+	Feed
 )
 
 func (a Access) String() string {
@@ -127,6 +140,10 @@ func (a Access) String() string {
 		return "session"
 	case SessionJSON:
 		return "session-json"
+	case APIToken:
+		return "api-token"
+	case Feed:
+		return "feed"
 	}
 	return "unknown"
 }
@@ -166,7 +183,7 @@ func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodH
 // GET/HEAD, or a guarded class whose guard was not installed.
 func (r *Router) Handle(pattern string, k Kind, a Access, h http.Handler) {
 	method, _, hasMethod := strings.Cut(pattern, " ")
-	if (a == Public || a == SessionJSON) && (!hasMethod || !safeMethod(method)) {
+	if (a == Public || a == SessionJSON || a == APIToken || a == Feed) && (!hasMethod || !safeMethod(method)) {
 		panic("server: " + a.String() + " route " + pattern + " must be GET or HEAD only; state-changing routes need PublicForm or Session")
 	}
 	if a != Public {
@@ -241,10 +258,12 @@ func New(cfg Config, backend Backend) (*Server, error) {
 // for work that must precede traffic (the password service's Prepare).
 func (s *Server) OnStartup(f func(context.Context) error) { s.startup = append(s.startup, f) }
 
-// SetBackground installs the single background task (the session purger). It
-// is started by Run only after startup succeeded and the listener is open,
-// and is cancelled and awaited before the database is closed.
-func (s *Server) SetBackground(f func(context.Context)) { s.background = f }
+// AddBackground registers a background task (the session purger, the tracker
+// refresher, the mail workers). Every task is started by Run only after
+// startup succeeded and the listener is open, and all are cancelled and
+// awaited, together, before the database is closed. A task must return when
+// its context is cancelled.
+func (s *Server) AddBackground(f func(context.Context)) { s.backgrounds = append(s.backgrounds, f) }
 
 // OnDrained registers a hook that runs at shutdown after the in-flight
 // requests are drained or terminated and before the background task and the
@@ -399,18 +418,23 @@ func (s *Server) Run(ctx context.Context) error {
 	return s.shutdown(srv, stopBackground)
 }
 
-// startBackground starts the background task, if any, under its own context
-// (not baseCtx, whose cancellation is ordered by the grace logic) and returns
-// a function that cancels it and waits for it, bounded by bgStopWait. The
-// function reports whether the task stopped in time and is safe to call more
-// than once.
+// startBackground starts the background tasks, if any, under their own shared
+// context (not baseCtx, whose cancellation is ordered by the grace logic) and
+// returns a function that cancels it and waits for all of them, bounded by
+// bgStopWait. The function reports whether every task stopped in time and is
+// safe to call more than once.
 func (s *Server) startBackground() (stop func() bool) {
-	if s.background == nil {
+	if len(s.backgrounds) == 0 {
 		return func() bool { return true }
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { defer close(done); s.background(ctx) }()
+	var wg sync.WaitGroup
+	for _, f := range s.backgrounds {
+		wg.Add(1)
+		go func() { defer wg.Done(); f(ctx) }()
+	}
+	go func() { wg.Wait(); close(done) }()
 	var stopped atomic.Bool
 	var once sync.Once
 	return func() bool {
@@ -420,7 +444,7 @@ func (s *Server) startBackground() (stop func() bool) {
 			case <-done:
 				stopped.Store(true)
 			case <-time.After(s.bgStopWait):
-				s.log.Warn("background task did not stop in time")
+				s.log.Warn("background tasks did not stop in time")
 			}
 		})
 		return stopped.Load()

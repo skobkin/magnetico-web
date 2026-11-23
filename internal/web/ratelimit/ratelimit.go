@@ -73,6 +73,22 @@ func UserKey(username string) Key {
 	return k
 }
 
+// KeyOf derives a bucket key in its own namespace: kind separates unrelated
+// uses (for example per-account token creation and per-email recovery) so two
+// namespaces can never share a bucket, and the value is hashed so no typed
+// string is kept in memory. The caller picks a distinct kind byte per use; the
+// kinds 0, 4, 6 and 'u' are taken by the constructors above.
+func KeyOf(kind byte, value string) Key {
+	h := sha256.New()
+	h.Write([]byte("magnetico/ratelimit/kind/v1\x00"))
+	h.Write([]byte{kind})
+	h.Write([]byte(value))
+	var k Key
+	k[0] = kind
+	copy(k[1:], h.Sum(nil)[:16])
+	return k
+}
+
 // Config configures a Limiter.
 type Config struct {
 	// Burst is the number of events a full bucket allows at once (≥ 1).

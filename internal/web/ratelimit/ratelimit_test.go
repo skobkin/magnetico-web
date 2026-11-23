@@ -345,3 +345,19 @@ func TestCancelIgnoresEvictedBucket(t *testing.T) {
 		t.Fatal("refund of a live bucket no longer works")
 	}
 }
+
+func TestKeyOfSeparatesNamespacesAndValues(t *testing.T) {
+	a := KeyOf('e', "alice@example.org")
+	if a != KeyOf('e', "alice@example.org") {
+		t.Fatal("not deterministic")
+	}
+	if a == KeyOf('t', "alice@example.org") {
+		t.Fatal("namespaces share a key")
+	}
+	if a == KeyOf('e', "bob@example.org") {
+		t.Fatal("values share a key")
+	}
+	if KeyOf('u', "alice") == UserKey("alice") {
+		t.Fatal("KeyOf collides with UserKey")
+	}
+}
