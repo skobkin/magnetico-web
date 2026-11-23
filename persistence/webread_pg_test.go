@@ -487,3 +487,50 @@ func TestSearchCancellationEndsTheBackendAndPoolRecovers(t *testing.T) {
 		t.Fatalf("pool did not recover: %v", err)
 	}
 }
+
+// An unchanged blob over the stored-size limit is a non-retryable limit error
+// (ErrCorruptBlob + *codec.LimitError), not ErrBlobChanged; a changed or
+// missing blob stays ErrBlobChanged; the oversized bytes are never returned.
+func TestReaderFileBlobOversizedIsNotChanged(t *testing.T) {
+	e := newReaderEnv(t)
+	ctx := context.Background()
+	files := []File{{Path: "a/b", Size: 1}, {Path: "a/c", Size: 2}, {Path: "d", Size: 3}}
+	id, blob := e.seedWithFiles(t, "big", files)
+	fi, err := e.r.FileIdentity(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	small := codec.DefaultLimits()
+	small.MaxStoredBytes = len(blob) - 1
+	rs := NewReader(e.pool, small)
+	got, err := rs.FileBlob(ctx, id, fi.Version)
+	var le *codec.LimitError
+	if !errors.Is(err, ErrCorruptBlob) || errors.Is(err, ErrBlobChanged) || !errors.As(err, &le) ||
+		le.Limit != codec.LimitStoredBytes || le.Actual != uint64(len(blob)) || le.Allowed != uint64(len(blob)-1) {
+		t.Fatalf("oversized unchanged blob: %v (%+v)", err, le)
+	}
+	if got != nil {
+		t.Fatalf("oversized bytes were returned: %d", len(got))
+	}
+	// Exactly at the limit is fine.
+	small.MaxStoredBytes = len(blob)
+	if got, err := NewReader(e.pool, small).FileBlob(ctx, id, fi.Version); err != nil || !bytes.Equal(got, blob) {
+		t.Fatalf("at the limit: %v", err)
+	}
+	// Stale version, even when oversized, is retryable: the caller refreshes
+	// the identity and then meets the limit through FileHeader/Peek.
+	small.MaxStoredBytes = len(blob) - 1
+	if _, err := NewReader(e.pool, small).FileBlob(ctx, id, "0"); !errors.Is(err, ErrBlobChanged) {
+		t.Fatalf("stale version: %v", err)
+	}
+	// Missing blob row: retryable ErrBlobChanged.
+	other := e.seed(t, "noblob", 1, 1, 1)
+	if _, err := e.r.FileBlob(ctx, other, "1"); !errors.Is(err, ErrBlobChanged) {
+		t.Fatalf("missing blob: %v", err)
+	}
+	// Unchanged normal blob still works through the standard limits.
+	if got, err := e.r.FileBlob(ctx, id, fi.Version); err != nil || !bytes.Equal(got, blob) {
+		t.Fatalf("normal: %v", err)
+	}
+}

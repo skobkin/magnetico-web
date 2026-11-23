@@ -32,8 +32,9 @@ var (
 	ErrBudgetExhausted = errors.New("request budget exhausted before the statement could start")
 	// ErrAnchorNotFound: the row an anchor-only cursor refers to no longer exists.
 	ErrAnchorNotFound = errors.New("cursor anchor row not found")
-	// ErrBlobChanged: the blob differs from the identity the caller validated
-	// (replaced, or larger than the limit); the caller retries from the identity.
+	// ErrBlobChanged: the blob is missing or its row version differs from the
+	// identity the caller validated; the caller may retry from the identity.
+	// (An unchanged blob over the stored-size limit is ErrCorruptBlob, not this.)
 	ErrBlobChanged = errors.New("file list blob changed")
 	// ErrInvalidSearch: a SearchSpec that violates the documented bounds.
 	ErrInvalidSearch = errors.New("invalid search specification")
@@ -123,7 +124,8 @@ func (r *Reader) remaining(ctx context.Context) time.Duration {
 func (r *Reader) classify(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, ErrTorrentNotFound), errors.Is(err, ErrIntegrityMissingBlob),
-		errors.Is(err, ErrAnchorNotFound), errors.Is(err, ErrBlobChanged), errors.Is(err, ErrInvalidSearch):
+		errors.Is(err, ErrAnchorNotFound), errors.Is(err, ErrBlobChanged), errors.Is(err, ErrInvalidSearch),
+		errors.Is(err, ErrCorruptBlob):
 		return err
 	}
 	if cerr := ctx.Err(); cerr != nil {
@@ -229,19 +231,42 @@ func (r *Reader) FileHeader(ctx context.Context, id int32) (header []byte, store
 	return header, storedLen, err
 }
 
-// FileBlob fetches the blob of torrent id if its row version is still ver and
-// it is not larger than the codec's stored-length limit; otherwise
-// ErrBlobChanged.
+// FileBlob fetches the blob of torrent id if its row version is still ver.
+//
+//   - Missing blob or a different row version: ErrBlobChanged (retryable after
+//     refreshing the identity).
+//   - Same version but stored larger than the codec's stored-length limit: a
+//     non-retryable ErrCorruptBlob wrapping *codec.LimitError (LimitStoredBytes).
+//     The size predicate runs in SQL, so the oversized bytes are never
+//     transferred.
+//
+// There is no retry loop here; the caller decides.
 func (r *Reader) FileBlob(ctx context.Context, id int32, ver string) ([]byte, error) {
 	var blob []byte
+	limit := min(r.limits.MaxStoredBytes, math.MaxInt32)
 	err := r.readTx(ctx, func(tx pgx.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT data FROM magneticod.torrent_file_blobs
-		    WHERE torrent_id = $1 AND xmin::text = $2 AND octet_length(data) <= $3`,
-			id, ver, int32(min(r.limits.MaxStoredBytes, math.MaxInt32))).Scan(&blob)
+		var cur string
+		var n int32
+		err := tx.QueryRow(ctx, `SELECT xmin::text, octet_length(data),
+		        CASE WHEN xmin::text = $2 AND octet_length(data) <= $3 THEN data END
+		    FROM magneticod.torrent_file_blobs WHERE torrent_id = $1`,
+			id, ver, int32(limit)).Scan(&cur, &n, &blob)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrBlobChanged
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		if cur != ver {
+			blob = nil
+			return ErrBlobChanged
+		}
+		if int(n) > limit {
+			blob = nil
+			return fmt.Errorf("%w: %w", ErrCorruptBlob, &codec.LimitError{
+				Limit: codec.LimitStoredBytes, Actual: uint64(n), Allowed: uint64(limit)})
+		}
+		return nil
 	})
 	return blob, err
 }
