@@ -163,8 +163,8 @@ func TestHealthBodiesCarryNoVersionOrConfig(t *testing.T) {
 // Every response class carries the indexing and security headers.
 func TestSecurityHeadersOnAllResponseClasses(t *testing.T) {
 	f := newFixture(t, nil)
-	f.srv.Router().Handle("GET /boom", KindRequest, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("x") }))
-	f.srv.Router().Handle("GET /redir", KindRequest, http.RedirectHandler("/healthz", 302))
+	f.srv.Router().Handle("GET /boom", KindRequest, Public, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("x") }))
+	f.srv.Router().Handle("GET /redir", KindRequest, Public, http.RedirectHandler("/healthz", 302))
 
 	paths := []string{"/healthz", "/readyz", "/robots.txt", "/nope", "/boom", "/redir", "/static/missing.css"}
 	for _, p := range paths {
@@ -205,7 +205,7 @@ func TestHSTSOnlyForHTTPSPublicURL(t *testing.T) {
 
 func TestPanicRecovery(t *testing.T) {
 	f := newFixture(t, nil)
-	f.srv.Router().Handle("GET /boom", KindRequest, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	f.srv.Router().Handle("GET /boom", KindRequest, Public, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("hunter2-in-a-panic-value")
 	}))
 	rec := f.get("/boom")
@@ -237,7 +237,7 @@ func TestPanicRecovery(t *testing.T) {
 
 func TestPanicAfterPartialWriteDoesNotAppendErrorPage(t *testing.T) {
 	f := newFixture(t, nil)
-	f.srv.Router().Handle("GET /partial", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().Handle("GET /partial", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(202)
 		_, _ = io.WriteString(w, "partial")
 		panic("late")
@@ -250,7 +250,7 @@ func TestPanicAfterPartialWriteDoesNotAppendErrorPage(t *testing.T) {
 
 func TestAbortHandlerPanicIsPropagated(t *testing.T) {
 	f := newFixture(t, nil)
-	f.srv.Router().Handle("GET /abort", KindRequest, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+	f.srv.Router().Handle("GET /abort", KindRequest, Public, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic(http.ErrAbortHandler)
 	}))
 	defer func() {
@@ -280,8 +280,8 @@ func TestRequestIDIsGeneratedNotTrusted(t *testing.T) {
 // cookies.
 func TestAccessLogIsSecretSafe(t *testing.T) {
 	f := newFixture(t, nil)
-	f.srv.Router().Handle("GET /api/v2/feeds/latest.rss", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	f.srv.Router().Handle("GET /register/{code}", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	f.srv.Router().Handle("GET /api/v2/feeds/latest.rss", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	f.srv.Router().Handle("GET /register/{code}", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	secrets := []string{"mgf_SECRETFEEDTOKEN", "legacy-api-token-md5", "INVITECODE0123456789abcdef", "sessionsecret", "mgt_BEARERSECRET", "q-secret-search"}
 	req := httptest.NewRequest("GET", "/api/v2/feeds/latest.rss?feed_token="+secrets[0]+"&api-token="+secrets[1]+"&q="+secrets[5], nil)
@@ -329,7 +329,7 @@ func TestProbesLogAtDebugOnly(t *testing.T) {
 func TestClientIPThroughTheChain(t *testing.T) {
 	f := newFixture(t, nil)
 	var got string
-	f.srv.Router().Handle("GET /ip", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().Handle("GET /ip", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = ClientIP(r.Context()).String()
 	}))
 	cases := []struct{ remote, xff, want string }{
@@ -354,7 +354,7 @@ func TestClientIPThroughTheChain(t *testing.T) {
 
 func TestCrossOriginProtection(t *testing.T) {
 	f := newFixture(t, nil)
-	f.srv.Router().Handle("POST /submit", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().rawHandle("POST /submit", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
 	}))
 	post := func(h map[string]string) *httptest.ResponseRecorder {
@@ -407,7 +407,7 @@ func TestCrossOriginProtection(t *testing.T) {
 func TestRequestBodyIsLimited(t *testing.T) {
 	f := newFixture(t, nil)
 	var readErr error
-	f.srv.Router().Handle("POST /upload", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().rawHandle("POST /upload", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, readErr = io.Copy(io.Discard, r.Body)
 	}))
 	req := httptest.NewRequest("POST", "/upload", strings.NewReader(strings.Repeat("x", maxBodyBytes+1)))
@@ -455,8 +455,8 @@ func TestRouteDeadlinesByClass(t *testing.T) {
 			*dst = time.Until(d)
 		})
 	}
-	f.srv.Router().Handle("GET /plain", KindRequest, capture(&reqRemaining))
-	f.srv.Router().Handle("GET /search", KindSearch, capture(&searchRemaining))
+	f.srv.Router().Handle("GET /plain", KindRequest, Public, capture(&reqRemaining))
+	f.srv.Router().Handle("GET /search", KindSearch, Public, capture(&searchRemaining))
 	f.get("/plain")
 	f.get("/search")
 	if reqRemaining <= 0 || reqRemaining > 5*time.Second {
@@ -476,7 +476,7 @@ func TestRouteDeadlinesByClass(t *testing.T) {
 func TestHandlerContextExpires(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.RequestTimeout = 100 * time.Millisecond })
 	var err error
-	f.srv.Router().Handle("GET /slow", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().Handle("GET /slow", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 		err = r.Context().Err()
 	}))
@@ -525,8 +525,8 @@ func TestWriteDeadlinePerRouteNotGlobal(t *testing.T) {
 		time.Sleep(600 * time.Millisecond) // longer than the request class, shorter than search
 		_, _ = io.WriteString(w, "done")
 	})
-	f.srv.Router().Handle("GET /plain-slow", KindRequest, slow)
-	f.srv.Router().Handle("GET /search-slow", KindSearch, slow)
+	f.srv.Router().Handle("GET /plain-slow", KindRequest, Public, slow)
+	f.srv.Router().Handle("GET /search-slow", KindSearch, Public, slow)
 	addr, done, cancel := startServer(t, f)
 	defer func() { cancel(); <-done }()
 
@@ -593,7 +593,7 @@ func TestRunListenFailureClosesBackend(t *testing.T) {
 func TestGracefulShutdownLetsInFlightFinish(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.ShutdownTimeout = 3 * time.Second })
 	started := make(chan struct{})
-	f.srv.Router().Handle("GET /work", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().Handle("GET /work", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
 		time.Sleep(300 * time.Millisecond)
 		_, _ = io.WriteString(w, "finished")
@@ -637,7 +637,7 @@ func TestShutdownTimeoutCancelsStuckRequests(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.ShutdownTimeout = 200 * time.Millisecond })
 	started := make(chan struct{})
 	cancelled := make(chan struct{})
-	f.srv.Router().Handle("GET /stuck", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().Handle("GET /stuck", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(started)
 		<-r.Context().Done() // only the forced cancellation releases it
 		close(cancelled)
@@ -695,7 +695,7 @@ func TestMarginDoesNotExtendHandlerContextButAllowsErrorResponse(t *testing.T) {
 	f := newFixture(t, func(c *Config) { c.RequestTimeout = 150 * time.Millisecond })
 	f.srv.router.dl.requestMargin = 2 * time.Second
 	var cancelledAfter time.Duration
-	f.srv.Router().Handle("GET /slowdb", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	f.srv.Router().Handle("GET /slowdb", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		<-r.Context().Done() // stands in for a query honouring its context
 		cancelledAfter = time.Since(start)
@@ -760,4 +760,11 @@ func TestBackendCloseIsBounded(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return although Close is stuck")
 	}
+}
+
+// rawHandle registers a route without an access class. It exists only in
+// tests of the transport layers themselves (cross-origin protection, body
+// limit), which need a bare POST route; production code cannot do this.
+func (r *Router) rawHandle(pattern string, k Kind, h http.Handler) {
+	r.mux.Handle(pattern, routeDeadline(pattern, k, r.dl)(h))
 }

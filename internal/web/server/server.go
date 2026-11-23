@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,10 +34,11 @@ const (
 	idleTimeout       = 120 * time.Second
 	maxHeaderBytes    = 16 << 10
 
-	verifyTimeout    = 30 * time.Second
-	readyPingTimeout = 2 * time.Second
-	inflightWait     = 2 * time.Second
-	backendCloseWait = 5 * time.Second
+	verifyTimeout      = 30 * time.Second
+	readyPingTimeout   = 2 * time.Second
+	inflightWait       = 2 * time.Second
+	backendCloseWait   = 5 * time.Second
+	backgroundStopWait = 5 * time.Second
 )
 
 // Backend is what the foundation needs from the database layer. Production
@@ -79,20 +82,92 @@ type Server struct {
 
 	closeWait time.Duration // bound on backend.Close during shutdown
 
+	// Startup hooks and the single background task are installed before Run
+	// (auth.Install); see Run for their lifecycle.
+	startup    []func(context.Context) error
+	background func(context.Context)
+	bgStopWait time.Duration // bound on waiting for the background task at shutdown
+
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 }
 
-// Router registers routes with a deadline class. It is the single place new
-// milestones add handlers, so none can forget the per-route deadlines.
-type Router struct {
-	mux *http.ServeMux
-	dl  deadlines
+// Access is the authentication class of a route. Every route is registered
+// with one, so authentication and CSRF protection are structural: a handler
+// cannot forget them (docs/wip/07D-web-auth-session-plan.md §6.1).
+type Access int
+
+const (
+	// Public routes need no authentication and no CSRF protection; they may
+	// answer only safe methods (GET/HEAD), enforced at registration.
+	Public Access = iota
+	// PublicForm routes are forms available before sign-in (login, and the
+	// W6 registration/reset forms). Non-safe methods are CSRF-protected with
+	// the pre-session token.
+	PublicForm
+	// Session routes require a valid session; non-safe methods are
+	// CSRF-protected with the session token.
+	Session
+)
+
+func (a Access) String() string {
+	switch a {
+	case Public:
+		return "public"
+	case PublicForm:
+		return "public-form"
+	case Session:
+		return "session"
+	}
+	return "unknown"
 }
 
+// Guard wraps a handler with the authentication and CSRF behaviour of one
+// Access class. They are supplied by the auth package (Router.SetGuards).
+type Guard func(next http.Handler) http.Handler
+
+// Route is one registered route, for the route-table tests.
+type Route struct {
+	Pattern string
+	Access  Access
+}
+
+// Router registers routes with a deadline class and an access class. It is
+// the single place new milestones add handlers, so none can forget the
+// per-route deadlines or the authentication class.
+type Router struct {
+	mux    *http.ServeMux
+	dl     deadlines
+	guards map[Access]Guard
+	routes []Route
+}
+
+// SetGuards installs the guards of the non-public access classes. It must be
+// called before any route of those classes is registered.
+func (r *Router) SetGuards(g map[Access]Guard) { r.guards = g }
+
+// Routes lists the registered routes in registration order.
+func (r *Router) Routes() []Route { return append([]Route(nil), r.routes...) }
+
+func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodHead }
+
 // Handle registers pattern (a Go 1.22 method+path pattern) with the deadline
-// class k.
-func (r *Router) Handle(pattern string, k Kind, h http.Handler) {
+// class k and the access class a. It panics (at startup, never at request
+// time) on a programming error: a Public route that is not restricted to
+// GET/HEAD, or a guarded class whose guard was not installed.
+func (r *Router) Handle(pattern string, k Kind, a Access, h http.Handler) {
+	method, _, hasMethod := strings.Cut(pattern, " ")
+	if a == Public && (!hasMethod || !safeMethod(method)) {
+		panic("server: public route " + pattern + " must be GET or HEAD only; state-changing routes need PublicForm or Session")
+	}
+	if a != Public {
+		g := r.guards[a]
+		if g == nil {
+			panic("server: no guard installed for " + a.String() + " route " + pattern)
+		}
+		h = g(h)
+	}
+	r.routes = append(r.routes, Route{Pattern: pattern, Access: a})
 	r.mux.Handle(pattern, routeDeadline(pattern, k, r.dl)(h))
 }
 
@@ -114,7 +189,7 @@ func New(cfg Config, backend Backend) (*Server, error) {
 		return nil, fmt.Errorf("server: templates: %w", err)
 	}
 
-	s := &Server{cfg: cfg, log: cfg.Logger, backend: backend, assets: assets, renderer: renderer, closeWait: backendCloseWait}
+	s := &Server{cfg: cfg, log: cfg.Logger, backend: backend, assets: assets, renderer: renderer, closeWait: backendCloseWait, bgStopWait: backgroundStopWait}
 	s.baseCtx, s.baseCancel = context.WithCancel(context.Background())
 	s.router = &Router{mux: http.NewServeMux(), dl: deadlines{
 		request: cfg.RequestTimeout, search: cfg.SearchTimeout,
@@ -152,6 +227,28 @@ func New(cfg Config, backend Backend) (*Server, error) {
 	return s, nil
 }
 
+// OnStartup registers a hook that runs after the database verification and
+// before the listener opens; an error fails startup without listening. Used
+// for work that must precede traffic (the password service's Prepare).
+func (s *Server) OnStartup(f func(context.Context) error) { s.startup = append(s.startup, f) }
+
+// SetBackground installs the single background task (the session purger). It
+// is started by Run only after startup succeeded and the listener is open,
+// and is cancelled and awaited before the database is closed.
+func (s *Server) SetBackground(f func(context.Context)) { s.background = f }
+
+// ErrorPage renders the generic error page for status (details never reach
+// the client).
+func (s *Server) ErrorPage(w http.ResponseWriter, r *http.Request, status int) {
+	s.errorPage(w, r, status)
+}
+
+// Renderer returns the page renderer.
+func (s *Server) Renderer() *ui.Renderer { return s.renderer }
+
+// Logger returns the server logger.
+func (s *Server) Logger() *slog.Logger { return s.log }
+
 // Router returns the route registry.
 func (s *Server) Router() *Router { return s.router }
 
@@ -184,14 +281,14 @@ func (s *Server) errorPage(w http.ResponseWriter, r *http.Request, status int) {
 
 func (s *Server) registerFoundationRoutes() {
 	rt := s.router
-	rt.Handle("GET /healthz", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	rt.Handle("GET /healthz", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusOK, "ok\n")
 	}))
-	rt.Handle("GET /readyz", KindRequest, http.HandlerFunc(s.ready))
-	rt.Handle("GET /robots.txt", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	rt.Handle("GET /readyz", KindRequest, Public, http.HandlerFunc(s.ready))
+	rt.Handle("GET /robots.txt", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		plain(w, http.StatusOK, "User-agent: *\nDisallow: /\n")
 	}))
-	rt.Handle("GET "+ui.StaticPrefix+"{file}", KindRequest, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	rt.Handle("GET "+ui.StaticPrefix+"{file}", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.assets.ServeFile(w, r, r.PathValue("file"))
 	}))
 }
@@ -230,6 +327,9 @@ func (s *Server) Run(ctx context.Context) error {
 
 	vctx, vcancel := context.WithTimeout(ctx, verifyTimeout)
 	err := s.backend.Verify(vctx)
+	for i := 0; err == nil && i < len(s.startup); i++ {
+		err = s.startup[i](vctx)
+	}
 	vcancel()
 	if err != nil {
 		s.backend.Close()
@@ -255,22 +355,56 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	s.logStartup(ln.Addr())
 
+	// The background task starts only now: verification, the startup hooks and
+	// the listener all succeeded. From here every exit path calls
+	// stopBackground before backend.Close.
+	stopBackground := s.startBackground()
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 
 	select {
 	case err := <-serveErr:
 		// Serve returns only on failure here (Shutdown has not been called).
+		stopBackground()
 		s.backend.Close()
 		return fmt.Errorf("serve: %w", err)
 	case <-ctx.Done():
 	}
 
 	s.log.Info("shutting down", "grace", s.cfg.ShutdownTimeout.String())
-	return s.shutdown(srv)
+	return s.shutdown(srv, stopBackground)
 }
 
-func (s *Server) shutdown(srv *http.Server) error {
+// startBackground starts the background task, if any, under its own context
+// (not baseCtx, whose cancellation is ordered by the grace logic) and returns
+// a function that cancels it and waits for it, bounded by bgStopWait. The
+// function reports whether the task stopped in time and is safe to call more
+// than once.
+func (s *Server) startBackground() (stop func() bool) {
+	if s.background == nil {
+		return func() bool { return true }
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); s.background(ctx) }()
+	var stopped atomic.Bool
+	var once sync.Once
+	return func() bool {
+		once.Do(func() {
+			cancel()
+			select {
+			case <-done:
+				stopped.Store(true)
+			case <-time.After(s.bgStopWait):
+				s.log.Warn("background task did not stop in time")
+			}
+		})
+		return stopped.Load()
+	}
+}
+
+func (s *Server) shutdown(srv *http.Server, stopBackground func() bool) error {
 	s.draining.Store(true)
 	incomplete := false
 
@@ -287,6 +421,12 @@ func (s *Server) shutdown(srv *http.Server) error {
 		for s.inflight.Load() > 0 && time.Now().Before(deadline) {
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+
+	// In-flight requests are drained or terminated; now the purger, and only
+	// then the database it uses.
+	if !stopBackground() {
+		incomplete = true
 	}
 
 	closed := make(chan struct{})

@@ -20,6 +20,7 @@ type reqState struct {
 	id       string
 	clientIP netip.Addr
 	route    string
+	userID   int64 // set by authentication; 0 = anonymous
 }
 
 type ctxKey struct{}
@@ -36,6 +37,10 @@ func RequestID(ctx context.Context) string { return stateOf(ctx).id }
 
 // ClientIP returns the resolved client address of ctx (zero outside the chain).
 func ClientIP(ctx context.Context) netip.Addr { return stateOf(ctx).clientIP }
+
+// SetUserID records the authenticated user's ID for the access log (spec
+// §10.1: the ID, never the name). It is a no-op outside the middleware chain.
+func SetUserID(ctx context.Context, id int64) { stateOf(ctx).userID = id }
 
 // statusWriter records the status and size of a response. Unwrap keeps
 // http.ResponseController (write deadlines, flushing) working through it.
@@ -107,7 +112,7 @@ func accessLog(log *slog.Logger) func(http.Handler) http.Handler {
 			case route == "GET /healthz" || route == "GET /readyz":
 				level = slog.LevelDebug
 			}
-			log.LogAttrs(r.Context(), level, "request",
+			attrs := []slog.Attr{
 				slog.String("request_id", st.id),
 				slog.String("method", r.Method),
 				slog.String("route", route),
@@ -115,7 +120,11 @@ func accessLog(log *slog.Logger) func(http.Handler) http.Handler {
 				slog.Int64("bytes", sw.bytes),
 				slog.Duration("duration", time.Since(start)),
 				slog.String("client_ip", st.clientIP.String()),
-			)
+			}
+			if st.userID != 0 {
+				attrs = append(attrs, slog.Int64("user_id", st.userID))
+			}
+			log.LogAttrs(r.Context(), level, "request", attrs...)
 		})
 	}
 }
@@ -183,7 +192,7 @@ func resolveClientIP(proxies []netip.Prefix) func(http.Handler) http.Handler {
 }
 
 // crossOrigin rejects cross-origin state-changing requests (CSRF layer one;
-// the per-form synchronizer token is added with authentication in W3). The
+// the per-form token layer is the auth package's, W3). The
 // public origin is trusted explicitly because a reverse proxy may rewrite the
 // Host header the stdlib compares Origin against.
 func crossOrigin(publicOrigin string, deny http.Handler) (func(http.Handler) http.Handler, error) {
