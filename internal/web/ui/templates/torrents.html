@@ -8,9 +8,17 @@
 <button type="submit" class="btn primary">Search</button>
 </form>
 <details class="help-toggle"><summary>{{template "icon" "info"}} Search rules</summary><div class="help-text">
-<p>Words with fewer than three Unicode characters are ignored. Remaining words must all appear in the torrent name, regardless of case or order.</p>
-<p>A 40-character hexadecimal string finds an exact info hash. An empty search shows the newest torrents. The characters <code>%</code> and <code>_</code> are literal.</p>
-<p>Searching never scans individual file paths.</p>
+<p>Use words of <strong>3 or more</strong> characters. Shorter words are <u>ignored</u>.</p>
+<p>The search finds torrents whose name contains <strong>all</strong> of your words, <u>regardless of their order and case</u>.</p>
+<p>Examples:</p>
+<ul>
+<li><code>pirates silicon valley</code> finds “Pirates of Silicon Valley”. The word <code>of</code> is ignored even if you type it.</li>
+<li><code>some series s08e10</code> finds a specific episode of a season.</li>
+<li><code>some series season</code> finds a full season.</li>
+<li>Popular keywords help to pick a quality or format: <code>some show 2160 265</code> should be enough to find a 4K release encoded with H.265 (HEVC).</li>
+<li>A 40-character hexadecimal <strong>info hash</strong> finds that exact torrent.</li>
+</ul>
+<p>An empty search shows the newest torrents. The characters <code>%</code> and <code>_</code> are taken literally, and file paths inside torrents are not searched.</p>
 </div></details>
 {{if .Ignored}}<p class="muted small">{{.Ignored}} word(s) shorter than 3 characters were ignored.</p>{{end}}
 {{if .Error}}<div class="notice error" role="alert">{{template "icon" "alert"}}<span>{{.Error}}</span></div>{{end}}
