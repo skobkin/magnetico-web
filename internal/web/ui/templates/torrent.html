@@ -12,7 +12,7 @@
 <div class="page-actions">
 <a class="btn" href="{{.Magnet}}">{{template "icon" "magnet"}} Open magnet</a>
 <button type="button" class="btn primary" data-copy="{{.Magnet}}" data-copied="Magnet link copied" hidden>{{template "icon" "copy"}} Copy magnet</button>
-{{if .ShortLink}}<button type="button" class="btn" data-copy="{{.ShortLink}}" data-copied="Short link copied" hidden>{{template "icon" "copy"}} Copy short link</button>{{end}}
+{{if .ShortLink}}<button type="button" class="btn" data-copy="{{.ShortLink}}" data-copied="Short link copied to the clipboard" title="Copy the short link" hidden>{{template "icon" "share"}} Share</button>{{end}}
 </div></div>
 <div class="metadata-grid">
 <div class="meta-item"><span class="meta-label">Size</span><span class="meta-value">{{.Size}}</span></div>

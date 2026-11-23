@@ -31,7 +31,7 @@ func TestMagnetLinksCarryTrackersInOrderAndDetailsShowTheShortLink(t *testing.T)
 	if err := e.pool.QueryRow(tctx(t), `SELECT encode(info_hash,'hex') FROM magneticod.torrents WHERE id = $1`, id).Scan(&hash); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(c.body, `data-copy="https://magnet.example.org/magnet/`+hash+`"`) || !strings.Contains(c.body, "Copy short link") {
+	if !strings.Contains(c.body, `data-copy="https://magnet.example.org/magnet/`+hash+`"`) || !strings.Contains(c.body, "Share") {
 		t.Fatalf("details lacks the short link:\n%s", c.body)
 	}
 }
@@ -41,7 +41,7 @@ func TestWithoutTrackersOrPublicURLMagnetsAreUnchangedAndNoShortLink(t *testing.
 	id := e.seed("Plain", 10, 1_700_000_000, nil)
 	c := e.signedIn()
 	c.get(fmt.Sprintf("/torrents/%d", id))
-	if strings.Contains(c.body, "tr=") || strings.Contains(c.body, "Copy short link") {
+	if strings.Contains(c.body, "tr=") || strings.Contains(c.body, "Share") {
 		t.Fatalf("unexpected tracker or short link:\n%s", c.body)
 	}
 }

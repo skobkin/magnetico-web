@@ -386,7 +386,7 @@ func TestWebBinaryAccountAPIFeedsDocsAndEmail(t *testing.T) {
 		t.Fatalf("an unknown hash must redirect all the same: %d", code)
 	}
 	b.get(fmt.Sprintf("/torrents/%d", id))
-	if !strings.Contains(b.body, base+"/magnet/"+hash) || !strings.Contains(b.body, "Copy short link") {
+	if !strings.Contains(b.body, base+"/magnet/"+hash) || !strings.Contains(b.body, "Share") {
 		t.Fatalf("details lacks the short link:\n%s", b.body)
 	}
 
