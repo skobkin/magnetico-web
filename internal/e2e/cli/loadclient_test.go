@@ -8,19 +8,28 @@ package cli
 // links.
 
 import (
-	"context"
+	"bytes"
+	"crypto/sha1"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"html"
 	"io"
+	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/skobkin/magnetico-web/internal/pgtest"
 )
 
 type errAfter struct {
@@ -188,69 +197,356 @@ func TestSearchContinuationFollowsTheNextLink(t *testing.T) {
 
 // ---- the ingest drain ----------------------------------------------------------------
 
-func harnessDrainEnv(t *testing.T, dsn string, deadline time.Duration) (*harnessEnv, *[]string) {
-	t.Helper()
-	var fails []string
-	e := &harnessEnv{t: t, dsn: dsn, outDir: t.TempDir(), label: "drain", drainDeadline: deadline,
-		onFail: func(m string) { fails = append(fails, m) }}
-	return e, &fails
+// harnessClientTimeout bounds one load-client request.
+const harnessClientTimeout = 90 * time.Second
+
+// outcome classes, reported separately and never merged.
+const (
+	oOK        = "ok"
+	o429       = "limited429"
+	oBusy      = "busy503"
+	oTimeout   = "timeout503"
+	oOther5xx  = "other5xx"
+	oUnexpect  = "unexpected4xx"
+	oTransport = "transport"
+)
+
+// ---- processes in their own scopes --------------------------------------------------
+
+type harnessIdent struct {
+	user    string
+	xff     string
+	session string // "name=value"
+	api     []string
+	rss     []string
 }
 
-func TestDrainReportsQueryErrorsAndEnforcesItsDeadline(t *testing.T) {
-	ctx := context.Background()
-	dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
+type harnessPools struct {
+	small, medium, large, huge []int
+	idents                     []*harnessIdent
+	apiSeq, rssSeq             atomic.Int64
+}
 
-	// 1. No ingest schema: the failed query must fail the gate, not read as an empty queue.
-	e, fails := harnessDrainEnv(t, dsn, 5*time.Second)
-	e.drain()
-	if len(*fails) == 0 || !strings.Contains((*fails)[0], "queue depth query failed") {
-		t.Fatalf("a failed queue query was not reported: %v", *fails)
-	}
+func (p *harnessPools) nextAPI() string {
+	n := p.apiSeq.Add(1)
+	id := p.idents[int(n)%len(p.idents)]
+	return id.api[int(n/int64(len(p.idents)))%len(id.api)]
+}
 
-	conn, err := pgx.Connect(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close(ctx)
-	for _, q := range []string{
-		`CREATE SCHEMA magnetico_ingest`,
-		`CREATE TABLE magnetico_ingest.queue (x int)`,
-		`CREATE TABLE magnetico_ingest.quarantine (x int)`,
-		`INSERT INTO magnetico_ingest.queue VALUES (1)`,
-	} {
-		if _, err := conn.Exec(ctx, q); err != nil {
-			t.Fatal(err)
+func (p *harnessPools) nextRSS() string {
+	n := p.rssSeq.Add(1)
+	id := p.idents[int(n)%len(p.idents)]
+	return id.rss[int(n/int64(len(p.idents)))%len(id.rss)]
+}
+
+type harnessReq struct {
+	class  string
+	path   string
+	hdr    map[string]string
+	expect []int
+}
+
+func harnessPickClass(rng *rand.Rand) string {
+	n := rng.IntN(100)
+	for _, m := range harnessMixes {
+		if n < m.weight {
+			return m.class
 		}
+		n -= m.weight
 	}
+	return "search"
+}
 
-	// 2. A queue that never empties: the deadline ends the wait and fails the gate.
-	e, fails = harnessDrainEnv(t, dsn, 1500*time.Millisecond)
-	start := time.Now()
-	e.drain()
-	if took := time.Since(start); took > 6*time.Second {
-		t.Fatalf("drain overran its 1.5 s deadline: %s", took)
+func harnessTerm(rng *rand.Rand) string {
+	switch n := rng.IntN(100); {
+	case n < 50:
+		return harnessCommon[rng.IntN(len(harnessCommon))]
+	case n < 60:
+		return harnessCommon[rng.IntN(len(harnessCommon))] + " " + harnessCommon[rng.IntN(len(harnessCommon))]
+	case n < 80:
+		return "m" + strconv.Itoa(int(math.Pow(rng.Float64(), 2)*400))
+	case n < 92:
+		return "w" + strconv.Itoa(rng.IntN(200000))
+	case n < 94:
+		return "zzqxj"
+	case n < 97:
+		return []string{"日本語", "Кириллица"}[rng.IntN(2)]
 	}
-	if len(*fails) == 0 || !strings.Contains((*fails)[0], "queue holds 1 rows") {
-		t.Fatalf("a non-empty queue did not fail the gate: %v", *fails)
-	}
+	return ""
+}
 
-	// 3. A statement blocked behind a lock: the context must cut it at the deadline,
-	// and the unknown depth is reported as such, never as zero.
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
+func (p *harnessPools) pick(rng *rand.Rand, id *harnessIdent) harnessReq {
+	ses := map[string]string{"Cookie": id.session}
+	multi := func() int {
+		switch n := rng.IntN(100); {
+		case n < 40:
+			return p.small[rng.IntN(len(p.small))]
+		case n < 75:
+			return p.medium[rng.IntN(len(p.medium))]
+		case n < 95:
+			return p.large[rng.IntN(len(p.large))]
+		}
+		return p.huge[rng.IntN(len(p.huge))]
 	}
-	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `LOCK TABLE magnetico_ingest.queue IN ACCESS EXCLUSIVE MODE`); err != nil {
-		t.Fatal(err)
+	cls := harnessPickClass(rng)
+	switch cls {
+	case "search":
+		q := url.Values{}
+		if t := harnessTerm(rng); t != "" {
+			q.Set("q", t)
+		}
+		q.Set("sort", []string{"discovered", "discovered", "discovered", "size", "name"}[rng.IntN(5)])
+		q.Set("order", []string{"asc", "desc"}[rng.IntN(2)])
+		q.Set("size", []string{"20", "50", "100"}[rng.IntN(3)])
+		return harnessReq{cls, "/torrents?" + q.Encode(), ses, []int{200}}
+	case "details":
+		return harnessReq{cls, "/torrents/" + strconv.Itoa(multi()), ses, []int{200}}
+	case "dirs":
+		return harnessReq{cls, fmt.Sprintf("/torrents/%d/files?dir=&limit=160", multi()), ses, []int{200}}
+	case "tree":
+		// Torrents the backend serves as a complete tree (up to 4,000 files); the
+		// rest answer 422 and the client falls back to pages, both are expected.
+		return harnessReq{cls, fmt.Sprintf("/torrents/%d/files/tree", multi()), ses, []int{200, 422}}
+	case "api":
+		q := url.Values{"limit": {[]string{"20", "50", "100"}[rng.IntN(3)]}}
+		if t := harnessTerm(rng); t != "" {
+			q.Set("q", t)
+		}
+		return harnessReq{cls, "/api/v2/torrents?" + q.Encode(), map[string]string{"Authorization": "Bearer " + p.nextAPI()}, []int{200}}
+	case "apifiles":
+		return harnessReq{cls, fmt.Sprintf("/api/v2/torrents/%d/files?limit=200", multi()), map[string]string{"Authorization": "Bearer " + p.nextAPI()}, []int{200}}
+	case "rss":
+		if rng.IntN(2) == 0 {
+			return harnessReq{cls, "/api/v2/feeds/latest.rss?feed_token=" + p.nextRSS() + "&page=" + strconv.Itoa(1+rng.IntN(3)), nil, []int{200}}
+		}
+		return harnessReq{cls, "/api/v1/feed/rss/last?api-token=" + p.nextRSS(), nil, []int{200}}
 	}
-	e, fails = harnessDrainEnv(t, dsn, 1500*time.Millisecond)
-	start = time.Now()
-	e.drain()
-	if took := time.Since(start); took > 6*time.Second {
-		t.Fatalf("a blocked statement outlived the deadline: drain took %s", took)
+	return harnessReq{"magnet", "/magnet/" + hex.EncodeToString(sha1Sum(strconv.Itoa(rng.IntN(1000000)))), nil, []int{307}}
+}
+
+func sha1Sum(s string) []byte { h := sha1.Sum([]byte(s)); return h[:] }
+
+// ---- accumulators -------------------------------------------------------------------
+
+type harnessAcc struct {
+	mu   sync.Mutex
+	n    map[string]int            // outcome -> count
+	durs map[string][]float32      // class -> ms (ok only)
+	cls  map[string]map[string]int // class -> outcome -> count
+}
+
+func newHarnessAcc() *harnessAcc {
+	return &harnessAcc{n: map[string]int{}, durs: map[string][]float32{}, cls: map[string]map[string]int{}}
+}
+
+func (a *harnessAcc) add(class, outcome string, d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.n[outcome]++
+	if a.cls[class] == nil {
+		a.cls[class] = map[string]int{}
 	}
-	if len(*fails) == 0 || !strings.Contains((*fails)[0], "-1: unknown") {
-		t.Fatalf("a blocked queue query was not reported as unknown depth: %v", *fails)
+	a.cls[class][outcome]++
+	if outcome == oOK {
+		a.durs[class] = append(a.durs[class], float32(d.Seconds()*1000))
 	}
 }
+
+func pct(v []float32, p float64) float64 {
+	if len(v) == 0 {
+		return 0
+	}
+	c := append([]float32(nil), v...)
+	sort.Slice(c, func(i, j int) bool { return c[i] < c[j] })
+	return float64(c[min(len(c)-1, int(math.Ceil(p/100*float64(len(c))))-1)])
+}
+
+type harnessClassStat struct {
+	N        int            `json:"n"`
+	Outcomes map[string]int `json:"outcomes"`
+	P50      float64        `json:"p50_ms"`
+	P95      float64        `json:"p95_ms"`
+	P99      float64        `json:"p99_ms"`
+	Max      float64        `json:"max_ms"`
+}
+
+func (a *harnessAcc) stats() (total map[string]int, classes map[string]harnessClassStat) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	total = map[string]int{}
+	for k, v := range a.n {
+		total[k] = v
+	}
+	classes = map[string]harnessClassStat{}
+	for c, o := range a.cls {
+		st := harnessClassStat{Outcomes: map[string]int{}}
+		for k, v := range o {
+			st.Outcomes[k] = v
+			st.N += v
+		}
+		d := a.durs[c]
+		st.P50, st.P95, st.P99 = pct(d, 50), pct(d, 95), pct(d, 99)
+		for _, x := range d {
+			st.Max = max(st.Max, float64(x))
+		}
+		classes[c] = st
+	}
+	return
+}
+
+// ---- load generation ----------------------------------------------------------------
+
+type harnessLoad struct {
+	// noContinuation switches the paging follow-ups off (MAGNETICO_BENCH_NO_CONTINUATION=1):
+	// the workload of the earlier campaign, for comparisons across revisions.
+	noContinuation bool
+	addr           string
+	pools          *harnessPools
+	hc             *http.Client
+}
+
+func newHarnessLoad(addr string, pools *harnessPools) *harnessLoad {
+	tr := &http.Transport{MaxIdleConnsPerHost: 256, MaxConnsPerHost: 0, IdleConnTimeout: 90 * time.Second}
+	return &harnessLoad{noContinuation: os.Getenv("MAGNETICO_BENCH_NO_CONTINUATION") == "1", addr: addr, pools: pools, hc: &http.Client{Transport: tr, Timeout: harnessClientTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+// harnessFullTreeSlug identifies the one 422 the workload expects: the documented
+// "complete tree unavailable, browse by directory" answer. Any other 422
+// (notably index-too-complex) is a file-index failure and must stay visible.
+const harnessFullTreeSlug = "full-tree-unavailable"
+
+// harnessBodyKeep is how much of a response body the client keeps for classification
+// and link extraction; the rest is still read, to detect truncation.
+const harnessBodyKeep = 4 << 20
+
+// readBody reads the whole body. A read error (truncation, reset, a timeout
+// while the body is transferred) is returned, never swallowed: the caller counts
+// it as a transport failure.
+func readBody(r io.Reader) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(r, harnessBodyKeep)); err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// fetch performs one request and returns the outcome class and the body.
+func (l *harnessLoad) fetch(rq harnessReq, id *harnessIdent) (string, []byte, time.Duration) {
+	req, err := http.NewRequest("GET", "http://"+l.addr+rq.path, nil)
+	if err != nil {
+		return oTransport, nil, 0
+	}
+	req.Header.Set("X-Forwarded-For", id.xff)
+	for k, v := range rq.hdr {
+		req.Header.Set(k, v)
+	}
+	start := time.Now()
+	resp, err := l.hc.Do(req)
+	if err != nil {
+		return oTransport, nil, time.Since(start)
+	}
+	defer resp.Body.Close()
+	body, err := readBody(resp.Body)
+	if err != nil {
+		return oTransport, nil, time.Since(start)
+	}
+	return classify(resp.StatusCode, body, rq.expect), body, time.Since(start)
+}
+
+// nextPageRe finds the "Next" link of a search results page.
+var nextPageRe = regexp.MustCompile(`href="([^"]+)" rel="next"`)
+
+// nextPage returns the continuation request of a search page, if it has one.
+func nextPage(body []byte, ses map[string]string) (harnessReq, bool) {
+	m := nextPageRe.FindSubmatch(body)
+	if m == nil {
+		return harnessReq{}, false
+	}
+	href := html.UnescapeString(string(m[1]))
+	if !strings.HasPrefix(href, "/torrents?") || !strings.Contains(href, "cursor=") {
+		return harnessReq{}, false
+	}
+	return harnessReq{class: "searchpage", path: href, hdr: ses, expect: []int{200}}, true
+}
+
+func classify(status int, body []byte, expect []int) string {
+	for _, e := range expect {
+		if status != e {
+			continue
+		}
+		if status == http.StatusUnprocessableEntity && !bytes.Contains(body, []byte(harnessFullTreeSlug)) {
+			return oUnexpect
+		}
+		return oOK
+	}
+	switch {
+	case status == 429:
+		return o429
+	case status == 503:
+		b := string(body)
+		switch {
+		case strings.Contains(b, "timed out"):
+			return oTimeout
+		case strings.Contains(b, "busy"):
+			return oBusy
+		}
+		return oOther5xx
+	case status >= 500:
+		return oOther5xx
+	}
+	return oUnexpect
+}
+
+// run drives conc workers for d and returns what they saw. A worker stops
+// starting requests at the deadline and finishes the one in flight.
+func (l *harnessLoad) run(conc int, d time.Duration, think time.Duration, acc *harnessAcc) {
+	stop := time.Now().Add(d)
+	var wg sync.WaitGroup
+	for i := 0; i < conc; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewPCG(uint64(i)+1, uint64(time.Now().UnixNano())))
+			id := l.pools.idents[i%len(l.pools.idents)]
+			for time.Now().Before(stop) {
+				rq := l.pools.pick(rng, id)
+				outcome, body, d := l.fetch(rq, id)
+				acc.add(rq.class, outcome, d)
+				// A third of the searches continue like a user paging on: up to two
+				// keyset continuation requests from the page just received.
+				if rq.class == "search" && outcome == oOK && !l.noContinuation && rng.IntN(3) == 0 {
+					for depth := 0; depth < 2; depth++ {
+						next, ok := nextPage(body, rq.hdr)
+						if !ok {
+							break
+						}
+						outcome, body, d = l.fetch(next, id)
+						acc.add(next.class, outcome, d)
+						if outcome != oOK {
+							break
+						}
+					}
+				}
+				if think > 0 {
+					// An interactive user: an exponentially distributed pause (mean = think).
+					time.Sleep(time.Duration(rng.ExpFloat64() * float64(think)))
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// ---- ingest producer ----------------------------------------------------------------
+
+var (
+	harnessCommon = []string{"1080p", "720p", "x264", "x265", "bluray", "webrip", "complete", "season", "ubuntu", "linux", "multi", "remux"}
+	harnessMixes  = []struct {
+		class  string
+		weight int
+	}{{"search", 45}, {"details", 20}, {"dirs", 12}, {"tree", 5}, {"api", 10}, {"rss", 3}, {"magnet", 3}, {"apifiles", 2}}
+)

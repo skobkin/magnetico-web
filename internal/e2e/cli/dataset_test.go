@@ -1,3 +1,5 @@
+//go:build loadtest
+
 package cli
 
 // The W9 large synthetic dataset "w9-large-v1" (task 07J, stage S5). Nothing

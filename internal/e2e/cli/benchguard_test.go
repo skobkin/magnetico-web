@@ -27,6 +27,9 @@ const (
 	harnessTokenLabel = "w9" // label of every credential the harness mints
 )
 
+// harnessLoadUsers is the number of generated benchmark identities (w9u00 … w9u31).
+const harnessLoadUsers = 32
+
 // harnessMarker is the database comment that identifies a benchmark database. The
 // seeder sets it before it writes the first row; nothing else does.
 const harnessMarker = "magnetico-w9-benchmark:w9-large-v1"
