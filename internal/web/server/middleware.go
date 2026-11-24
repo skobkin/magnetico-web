@@ -107,6 +107,12 @@ func accessLog(log *slog.Logger) func(http.Handler) http.Handler {
 			}
 			level := slog.LevelInfo
 			switch {
+			case sw.status == http.StatusServiceUnavailable && sw.Header().Get("Retry-After") != "":
+				// Deliberate backpressure (a saturated resource gate, a deadline,
+				// storage briefly unavailable): the service answers 503 with a
+				// retry hint. Under overload that is one line per shed request, so
+				// it must not look like a fault to an operator who alerts on ERROR.
+				level = slog.LevelWarn
 			case sw.status >= 500:
 				level = slog.LevelError
 			case route == "GET /healthz" || route == "GET /readyz":

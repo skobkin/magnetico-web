@@ -310,6 +310,48 @@ func TestAccessLogIsSecretSafe(t *testing.T) {
 	}
 }
 
+// A 503 that carries a retry hint is deliberate backpressure and is logged as a
+// warning (an overload sheds one request per line); every other 5xx, including a
+// 503 without a hint, is an error. Found by the W9 overload run, which logged
+// 554,756 errors for 554,756 deliberate sheds.
+func TestBackpressureIsLoggedAsAWarningAndFaultsAsErrors(t *testing.T) {
+	f := newFixture(t, nil)
+	h := func(status int, retry bool) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if retry {
+				w.Header().Set("Retry-After", "5")
+			}
+			w.WriteHeader(status)
+		}
+	}
+	f.srv.Router().Handle("GET /t/shed", KindRequest, Public, h(503, true))
+	f.srv.Router().Handle("GET /t/down", KindRequest, Public, h(503, false))
+	f.srv.Router().Handle("GET /t/boom", KindRequest, Public, h(500, false))
+	f.srv.Router().Handle("GET /t/boom-retry", KindRequest, Public, h(500, true))
+	for _, p := range []string{"/t/shed", "/t/down", "/t/boom", "/t/boom-retry"} {
+		f.get(p)
+	}
+	level := map[string]string{}
+	for _, line := range strings.Split(f.log.String(), "\n") {
+		for _, route := range []string{"/t/shed", "/t/down", "/t/boom-retry", "/t/boom"} {
+			if strings.Contains(line, `route="GET `+route+`"`) {
+				for _, l := range []string{"WARN", "ERROR", "INFO"} {
+					if strings.Contains(line, "level="+l) {
+						level[route] = l
+					}
+				}
+				break
+			}
+		}
+	}
+	want := map[string]string{"/t/shed": "WARN", "/t/down": "ERROR", "/t/boom": "ERROR", "/t/boom-retry": "ERROR"}
+	for route, w := range want {
+		if level[route] != w {
+			t.Errorf("%s logged at %q, want %s\n%s", route, level[route], w, f.log.String())
+		}
+	}
+}
+
 func TestProbesLogAtDebugOnly(t *testing.T) {
 	buf := &syncBuf{}
 	f := newFixture(t, func(c *Config) {

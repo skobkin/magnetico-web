@@ -26,6 +26,8 @@ Precedence: **command line > `MAGNETICO_WEB_*` environment > YAML file > default
 
 Durations use Go syntax (`30s`, `12h`; there is no `d` unit). Each setting also has a long flag (`--request-timeout`, …).
 
+**Log levels and volume.** Every request is one access-log line at `INFO` (probes at `DEBUG`). A `503` that carries a `Retry-After` header — deliberate backpressure from a saturated resource gate, a deadline or briefly unavailable storage — is logged at `WARN`; any other status of 500 or above is logged at `ERROR`, so an alert on `ERROR` means a fault, not load shedding. Under sustained overload the service sheds one request per log line (about 1,000 per second in the W9 overload runs); set `MAGNETICO_WEB_LOG_LEVEL=warn` to keep only warnings and errors.
+
 **Secrets are environment-only.** The SMTP password is `MAGNETICO_WEB_SMTP_PASSWORD` (no flag, no file key). A database URL **containing a password** is refused on `--database` (process listings) and in the file (`databaseURL`); put it in `MAGNETICO_WEB_DATABASE`.
 
 ```yaml
