@@ -248,6 +248,7 @@ func (o *OpFlags) applyYamlConfig(data []byte, explicit map[string]bool) error {
 	if _, found := present[migrateDatabaseYamlKey]; found && !explicit["database"] {
 		o.Migrate.SchemaInit.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.IngestSchemaInit.DatabaseURL = file.MigrateDatabaseURL
+		o.Migrate.StatsSchemaInit.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.WebSchemaInit.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.Torrents.DatabaseURL = file.MigrateDatabaseURL
 		o.Migrate.VerifyDecode.DatabaseURL = file.MigrateDatabaseURL
@@ -332,6 +333,7 @@ func (o *OpFlags) applyEnvMigrateConfig(explicit map[string]bool) error {
 		if value, ok := os.LookupEnv(migrateDatabaseEnvName); ok && value != "" {
 			o.Migrate.SchemaInit.DatabaseURL = value
 			o.Migrate.IngestSchemaInit.DatabaseURL = value
+			o.Migrate.StatsSchemaInit.DatabaseURL = value
 			o.Migrate.WebSchemaInit.DatabaseURL = value
 			o.Migrate.Torrents.DatabaseURL = value
 			o.Migrate.VerifyDecode.DatabaseURL = value

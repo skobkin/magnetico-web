@@ -58,6 +58,8 @@ func Main() {
 			runMigrateSchemaInit(&opFlags.Migrate.SchemaInit)
 		case "ingest-schema-init":
 			runMigrateIngestSchemaInit(&opFlags.Migrate.IngestSchemaInit)
+		case "stats-schema-init":
+			runMigrateStatsSchemaInit(&opFlags.Migrate.StatsSchemaInit)
 		case "web-schema-init":
 			runMigrateWebSchemaInit(&opFlags.Migrate.WebSchemaInit)
 		case "torrents":
@@ -78,7 +80,7 @@ func Main() {
 			runMigrateCleanup(&opFlags.Migrate.Cleanup)
 		default:
 			// parseArgs guarantees a subcommand; this is defense in depth.
-			log.Fatalln("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, web-schema-init, torrents, users, verify-decode, verify-content, errors, cleanup (see --help)")
+			log.Fatalln("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, stats-schema-init, web-schema-init, torrents, users, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 	}
 }

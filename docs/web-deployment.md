@@ -92,6 +92,32 @@ GRANT INSERT, UPDATE, DELETE ON magnetico_web.trackers TO magnetico_web_op;
 
 These statements are executed verbatim by the integration tests, which start the real service as the restricted role and check that revoking any of them (for example `SELECT` on `magneticod.schema_version`) makes startup fail with a controlled message.
 
+### Optional: ingestion statistics and the administrator pages (`magnetico_stats`)
+
+The administrator section reads the optional `magnetico_stats` schema (created once by
+`magnetico migrate stats-schema-init`; non-destructive, idempotent, refuses a structurally different schema and never repairs
+one — statistics are disposable: `DROP SCHEMA magnetico_stats CASCADE;` and initialise again). `ingest` and `web` **start without
+it**; the dashboard then says "statistics schema not initialised". Grants, for the default single account none are needed:
+
+<!-- stats-grants:begin -->
+```sql
+-- the ingest role writes statistics (its own role; it also needs SELECT on magnetico_ingest.crawlers)
+GRANT USAGE ON SCHEMA magnetico_stats TO magnetico_ingest_rt;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA magnetico_stats TO magnetico_ingest_rt;
+
+-- the web role reads statistics, and only the safe columns of the crawler registry and the quarantine
+GRANT USAGE ON SCHEMA magnetico_stats TO magnetico_web_rt;
+GRANT SELECT ON ALL TABLES IN SCHEMA magnetico_stats TO magnetico_web_rt;
+GRANT USAGE ON SCHEMA magnetico_ingest TO magnetico_web_rt;
+GRANT SELECT (crawler_id, name, enabled, created_at, token_rotated_at, disabled_at) ON magnetico_ingest.crawlers TO magnetico_web_rt;
+GRANT SELECT (id, reason_code, detail, attempts, payload_bytes, received_at, quarantined_at) ON magnetico_ingest.quarantine TO magnetico_web_rt;
+```
+<!-- stats-grants:end -->
+
+The web role never needs `token_hash` (crawler credential digests) or the quarantine `payload` and `info_hash` columns; a missing grant, a
+missing or incompatible ingest schema, or a missing statistics schema degrades only the affected administrator page — the web
+service always starts.
+
 ## 5. Administrator commands (W2)
 
 `magnetico web user …` and `magnetico web tracker …` administer accounts, invitations and the public tracker list. They use the same database settings as the service (`--database` without a password, or `MAGNETICO_WEB_DATABASE`, or the `web:` file section), open two connections, and refuse to run unless the `magnetico_web` schema is exactly the supported version and the role holds the operator grants of §4. Commands that print absolute links (`user add`, `user reset-password`, `user invite add|list`) also need the public URL (`MAGNETICO_WEB_PUBLIC_URL`); the other commands validate only what they use. Results and requested links go to stdout, failures to stderr with exit status 1; nothing secret is printed except the link you asked for.
