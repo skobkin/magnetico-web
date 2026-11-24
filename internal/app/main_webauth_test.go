@@ -23,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
+	"github.com/skobkin/magnetico-web/internal/testkit"
 )
 
 // webAuthRoles creates the documented runtime and operator roles (the exact
@@ -77,7 +78,7 @@ type runningWeb struct {
 	addr   string
 	cmd    *exec.Cmd
 	exited chan error
-	out    *syncBuf // read while the process may still run: goroutine-safe
+	out    *testkit.SyncBuffer // read while the process may still run: goroutine-safe
 }
 
 // startWeb launches `magnetico web` and waits for /readyz.
@@ -90,7 +91,7 @@ func startWeb(t *testing.T, bin, dsn, publicURLScheme string, extraEnv ...string
 		pub = "https://magnet.example.org"
 	}
 	cmd.Env = webEnv(append([]string{"MAGNETICO_WEB_DATABASE=" + dsn, "MAGNETICO_WEB_LISTEN=" + addr, "MAGNETICO_WEB_PUBLIC_URL=" + pub}, extraEnv...)...)
-	out := &syncBuf{}
+	out := &testkit.SyncBuffer{}
 	cmd.Stderr, cmd.Stdout = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

@@ -39,6 +39,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
 	"github.com/skobkin/magnetico-web/internal/oastest"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
+	"github.com/skobkin/magnetico-web/internal/testkit"
 	"github.com/skobkin/magnetico-web/internal/web/apidocs"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -93,7 +94,7 @@ func w9AppAccount(t *testing.T) string {
 // w9Proc is a running binary with captured output.
 type w9Proc struct {
 	cmd    *exec.Cmd
-	out    *syncBuf
+	out    *testkit.SyncBuffer
 	exited chan error
 }
 
@@ -101,7 +102,7 @@ func w9Start(t *testing.T, bin string, env []string, args ...string) *w9Proc {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
 	cmd.Env = webEnv(env...)
-	out := &syncBuf{}
+	out := &testkit.SyncBuffer{}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

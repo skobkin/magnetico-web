@@ -52,6 +52,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
+	"github.com/skobkin/magnetico-web/internal/testkit"
 	"github.com/skobkin/magnetico-web/internal/web/benchkit"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -84,7 +85,7 @@ const (
 type w9Scoped struct {
 	name   string
 	cmd    *exec.Cmd
-	out    *syncBuf
+	out    *testkit.SyncBuffer
 	exited chan error
 	pid    int
 	cg     string
@@ -101,7 +102,7 @@ func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, b
 		"-p", "MemoryMax=" + mem, "-p", "MemorySwapMax=0", "-p", "CPUQuota=" + strconv.Itoa(cpuPercent) + "%", bin}
 	cmd := exec.Command(sd[0], append(sd[1:], args...)...)
 	cmd.Env = env
-	out := &syncBuf{}
+	out := &testkit.SyncBuffer{}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)

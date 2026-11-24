@@ -26,6 +26,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/migration/state"
 	"github.com/skobkin/magnetico-web/internal/migration/target"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
+	"github.com/skobkin/magnetico-web/internal/testkit"
 	"github.com/skobkin/magnetico-web/opflags"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -76,13 +77,7 @@ func execSmokeSQL(t *testing.T, dsn, sql string) {
 
 func buildBinary(t *testing.T) string {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "magnetico")
-	cmd := exec.Command("go", "build", "-o", bin, "../../cmd/magnetico")
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
-	return bin
+	return testkit.Binary(t)
 }
 
 // runMigrateTorrentsBinary runs one `migrate torrents` invocation. When

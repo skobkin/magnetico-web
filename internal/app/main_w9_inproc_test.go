@@ -6,43 +6,24 @@ package app
 // readable so a sweep cannot miss a route.
 
 import (
-	"bytes"
 	"context"
 	"net/http"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/skobkin/magnetico-web/internal/testkit"
 	"github.com/skobkin/magnetico-web/internal/web/assemble"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	"github.com/skobkin/magnetico-web/internal/web/webdb"
 	"github.com/skobkin/magnetico-web/opflags"
 )
 
-// syncBuf is a goroutine-safe log sink.
-type syncBuf struct {
-	mu sync.Mutex
-	b  bytes.Buffer
-}
-
-func (s *syncBuf) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
-}
-
-func (s *syncBuf) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
-}
-
 type inprocWeb struct {
 	t      *testing.T
 	srv    *server.Server
 	addr   string
-	logs   *syncBuf
+	logs   *testkit.SyncBuffer
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -62,7 +43,7 @@ func startInprocWeb(t *testing.T, dsn string, mod func(o *opflags.WebOptions)) *
 	if mod != nil {
 		mod(o)
 	}
-	logs := &syncBuf{}
+	logs := &testkit.SyncBuffer{}
 	logger, err := server.NewLogger(logs, o.LogLevel, o.LogFormat)
 	if err != nil {
 		t.Fatal(err)

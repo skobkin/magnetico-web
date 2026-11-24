@@ -40,6 +40,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/internal/testkit"
 	"github.com/skobkin/magnetico-web/internal/web/benchkit"
 	"github.com/skobkin/magnetico-web/internal/web/synth"
 )
@@ -346,7 +347,7 @@ func startServer(t *testing.T, bin, rtDSN, adminDSN string, extra []string) *ser
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = env
-	out := &syncBuf{}
+	out := &testkit.SyncBuffer{}
 	cmd.Stderr, cmd.Stdout = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
