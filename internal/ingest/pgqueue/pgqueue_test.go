@@ -688,7 +688,8 @@ func TestConsumerStorageErrorBacksOffWithoutTouchingRow(t *testing.T) {
 	}
 }
 
-// advisoryHolders lists the backend pids holding the consumer lock.
+// advisoryHolders lists the backend pids holding the consumer lock in the
+// database of e (pg_locks is server-wide, see TestAdvisoryHoldersIgnoreOtherDatabases).
 func advisoryHolders(t *testing.T, e *env) []int32 {
 	t.Helper()
 	pool, err := pgxpool.New(context.Background(), e.dsn)
@@ -698,6 +699,7 @@ func advisoryHolders(t *testing.T, e *env) []int32 {
 	defer pool.Close()
 	rows, err := pool.Query(context.Background(), `
 SELECT pid FROM pg_locks WHERE locktype='advisory' AND granted AND objsubid=1
+  AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
   AND ((classid::bigint << 32) | objid::bigint) = $1`, consumerLockKey)
 	if err != nil {
 		t.Fatal(err)
@@ -815,5 +817,33 @@ func TestConsumerOwnershipCheckFailsClosed(t *testing.T) {
 	conn.Close(ctx)
 	if c.verifyOwnership(ctx, conn) {
 		t.Fatal("a closed connection must fail closed")
+	}
+}
+
+// pg_locks is server-wide. The holder list must therefore be scoped to the
+// database under test: a consumer running in another test database of the same
+// disposable server (another package's tests run concurrently) holds the same
+// advisory-lock key without conflicting, and must not be counted.
+func TestAdvisoryHoldersIgnoreOtherDatabases(t *testing.T) {
+	cluster := pgtest.IntegrationCluster(t)
+	other := cluster.TestDatabase(t)
+	ours := cluster.TestDatabase(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, consumerLockKey); err != nil {
+		t.Fatal(err)
+	}
+
+	if pids := advisoryHolders(t, &env{dsn: ours}); len(pids) != 0 {
+		t.Fatalf("holders of another database were counted: %v", pids)
+	}
+	if pids := advisoryHolders(t, &env{dsn: other}); len(pids) != 1 {
+		t.Fatalf("the holder in its own database was not found: %v", pids)
 	}
 }
