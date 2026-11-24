@@ -25,7 +25,7 @@
 4. **Added runs:** memory-floor probes at 768, 640 and 512 MiB (the plan named one), and a "knee" profile that varies the number of search slots.
 5. `internal/oastest` lives outside `internal/web` (the web import-boundary test forbids the JSON Schema library in any web package); `assembleWeb` takes no context.
 6. The diagnostic run's goroutine grouping by creation site came out empty (a regular expression expected spaces where the profile uses tabs; fixed afterwards and not re-run). The goroutine **counts** and the in-use heap by allocation site were captured and are what the conclusions rest on.
-7. `govulncheck` is pinned to `v1.10.0` (released 2026-11-17, seven days before use: the only stable release newer than `v1.9.0`).
+7. `govulncheck` is pinned to `v1.10.0` (released 2026-11-17, seven days before use, the newest release), run with `GOTOOLCHAIN=go1.27.4` (a checker built by an older Go cannot analyse this code). Its findings led to finding F10 and a toolchain/dependency pin change, which the plan did not anticipate.
 
 ## 2. Coverage matrix
 
@@ -86,8 +86,9 @@ Severity: **P0/P1** blocks the release candidate; **P2** a real defect or gap wi
 | F7 | P3 | **Search capacity knee.** All gate saturation comes from the search gate (four slots by default), not from file decoding (which shed < 0.1 % even at 800 users). With four slots the 5 % busy bound holds to between 150 and 400 interactive users; with eight it holds at 400 (4.5 %) and breaks at 800. | steps and knee runs (§5) | sizing: an instance with more than ~150 simultaneous heavy interactive users sheds searches | **documented** as a tuning knob (`MAGNETICO_WEB_SEARCH_CONCURRENCY`, at most the pool size minus 2); the default is unchanged (the right value depends on the database and CPU of the deployment). |
 | F8 | P3 | Rendered feed pages stay allocated after their 60 s TTL until overwritten: ~25 MiB retained (13 objects) at the end of the load and after the idle phase. | diagnostic run, in-use heap by site | bounded (at most 10 pages × 2 feeds); no growth | none; recorded. |
 | F9 | P3 | **Soak heap trend, inconclusive.** Over the 90-minute steady window of the soak, heap-after-GC rose by +6.3 MiB/h (least squares, +3.5 %/h) / +5.5 MiB/h (Theil–Sen, +3.1 %/h), above the 2 %/h screening threshold; RSS was flat (+0.3 %/h, Theil–Sen +0.7 %/h). The diagnostic run did **not** reproduce it (−0.3 %/h over 45 min) and showed goroutines flat at 43 (12 at start, **11 at the end of idle**) and a retained heap fully explained by the bounded caches. | `soak-summary.md`, `diag-summary.md` | cannot exclude growth of a few MiB per hour; the block medians (175–194 MiB) are noisy | not a leak verdict either way; a ≥ 24 h soak with the real image is in the RC0 checklist. |
+| F10 | P2 | **Reachable security advisories in the pinned toolchain and one dependency.** `govulncheck` on go1.27.0 and `brotli v1.2.6` reported 15: 14 in the standard library (`net/http` and its HTTP/2 server and client, `net/textproto`, `crypto/tls`, `crypto/x509` including the distrusted-intermediate-certificates list that matters to the strict-TLS SMTP client, `html/template`; fixed in go1.27.2 through go1.27.4) and GO-2026-6888 in `brotli` (excessive memory allocation on crafted streams, reachable through the codec's decoder). | `07J-measurements/govulncheck-go1.27.0.txt` | denial of service of the HTTP server or decoder; the services run behind a reverse proxy and the decoder reads data written by ingest after validation, which limits exposure | **fixed** in two separate, revertible commits: `brotli` v1.2.6 → v1.2.7 (`b1c7caaa`) and `toolchain go1.27.4` (`bd4bbbeb`; the module's `go 1.26.0` is unchanged). The full suite, the race suite and every pinned codec vector pass unchanged on the new pins; `govulncheck` now reports none. **Owner attention:** this is a toolchain and dependency pin change made inside a review task; if it is unwanted it reverts with those two commits, and the CI image must use go1.27.4 or newer. |
 
-**No P0 or P1 finding was made or remains open.** P2: F3 fixed; F5 is open and needs an owner decision (index policy), not an in-scope fix.
+**No P0 or P1 finding was made or remains open.** P2: F3 and F10 are fixed; F5 is open and needs an owner decision (index policy), not an in-scope fix.
 
 ### Secret-leak scanning model
 
@@ -209,7 +210,26 @@ The floor was **not reached**: even 512 MiB survived this workload, at the price
 
 ## 7. Verification
 
-@@VERIFY@@
+Final tree (the commit before the report commit), Go **1.27.4**, Docker `postgres:17` available (the PostgreSQL integration tests and the real-binary tests **ran**; none of the new integration tests skipped).
+
+| Check | Command | Result |
+|---|---|---|
+| formatting | `gofmt -l .` | empty, exit 0 |
+| build | `go build ./...` | exit 0 |
+| vet | `go vet ./...` and `go vet -tags w9diag ./...` | exit 0, exit 0 |
+| lint | `golangci-lint run --max-issues-per-linter 0 --max-same-issues 0` (v2.15.0, repository config) | exit 1 with **219 findings, identical to the 219 of the accepted baseline `ec973a18`** (compared as a multiset: zero new); none in the 21 Go files this task added. By linter: errcheck 139, gci 41, gosec 13, unused 11, staticcheck 10, ineffassign 5, others 5 — all in code this task did not author (existing tests and `internal/e2e/ingestd`) |
+| tests | `go test ./... -count=1 -timeout 40m` | exit 0 in 160 s, every package ok |
+| race | `go test -race ./... -count=1 -timeout 60m` | exit 0 in 247 s. (An earlier run found **two data races in the new tests' helpers**, reading a process's output while it ran; fixed in `1160ac83`. No product code raced.) |
+| vulnerabilities | `GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...` | **No vulnerabilities found.** (On the previous pins, go1.27.0 and brotli v1.2.6, it reported 15: finding F10; output kept in `07J-measurements/govulncheck-go1.27.0.txt`.) |
+| links | relative-link check over `README.md`, `AGENTS.md`, `UPGRADE.md`, `docs/**/*.md` | 0 broken |
+| OpenAPI | `internal/web/apidocs`, `internal/web/apiv2` tests, plus `TestW9RealBinaryResponsesMatchOpenAPI` | pass |
+| fuzz | `FuzzDecodeCursor` and `FuzzParsePath`, 40 s each (seed corpora also run in the ordinary suite) | 3.1 M and 6.5 M executions, no failure |
+| load | gated profiles of `TestW9Load` | §5 |
+
+**Skipped, by design (gated or child-process tests, all pre-existing except the two W9 harnesses):** `TestW9SeedLargeDataset` and `TestW9Load` (need `MAGNETICO_BENCH_LARGE=1`, run manually, results in §5), `TestWebLoad`, `TestWebDemoServer`, `TestFrontendSelfTestsInBrowser` (`MAGNETICO_TEST_BROWSER` unset), the `Measure*` benchmarks, the e2e stress/profile runs (`MAGNETICO_E2E_*`), and the hostile-peer child-process helpers.
+
+**Tooling not available or not approved, recorded:** a real browser (the available one refuses loopback); Mermaid CLI (not approved: the seven diagrams of `docs/projects_differences.md` were checked by hand for balanced brackets and quotes, quoted edge labels and no unquoted `;`, which is a weaker check than rendering them); `markdownlint`, `lychee`, `staticcheck` as separate tools (none installed; `golangci-lint` includes staticcheck).
+
 
 ## 8. Remaining limitations and unresolved findings
 
@@ -217,7 +237,7 @@ The floor was **not reached**: even 512 MiB survived this workload, at the price
 - **No real-browser acceptance** (§3); no real reverse proxy, real SMTP provider, live DHT or real user data was exercised.
 - The measurements are single-host, synthetic and typical-shape; the file-list blob share of the dataset (~0.6 % of rows) is far below the real library's (~65 %); cold figures mean "cold PostgreSQL buffers, OS page cache warm" (no root to drop caches); the soak is 2.5 hours, so slow growth below the noise (F9) cannot be excluded.
 - The performance campaign ran on commits `0efd2b7d`/`cc7f6bf0`/`f96be7fc`; later runtime changes: the access-log level of 503 backpressure (`5e7ae22f`, measured afterwards by the 8-slot knee run) and the persistent-notice `role` removal. Neither changes the request path or memory behaviour, so the long campaigns were not repeated.
-- Pre-existing `golangci-lint` findings (see §7) remain in files this task did not author.
+- The 219 pre-existing `golangci-lint` findings (§7) remain: none is in code this task added and the count equals the accepted baseline's.
 - HTTP connection admission is limited only by the gates and the connection pool (no general connection cap exists); not changed.
 - Queue saturation of the mail queue is tested at package level only.
 
@@ -227,4 +247,34 @@ Added to `rc0-acceptance-checklist.md`: browser/device/accessibility checks (inc
 
 ## 10. Commits (branch `refactor/0.8.0-unify-and-new-storage`, since the accepted `ec973a18`)
 
-@@COMMITS@@
+- `757a9fe1` docs: 07I network wording and file-browser limits
+- `6a6137dc` docs: 07J plan
+- `6989634b` docs: 07I wording corrections
+- `828bc61e` docs: W9 documentation and milestone housekeeping
+- `0df962b2` feat(accounts): remove email and cancel recovery links
+- `d4532e29` feat(web/account): unverified email explanation and email removal
+- `6d404b12` test(e2e): W9 cross-service integration and real-binary OpenAPI validation
+- `77485e98` test(web): full-router access, CSRF, credential and session regression
+- `e853c676` test(web): forged Host/forwarding headers, trusted-proxy boundary, fuzz targets
+- `988bd026` fix(feed): omit the invalid channel author from the v2 feed; test hostile names in HTML, JSON and XML
+- `6a99f477` test(search): exact 40-hex boundary, name-search SQL shape, keyset pagination under inserts
+- `d14056c7` test(web): secret-leak scanner with intentional channels, service output scans
+- `84c8f280` test(web): malformed, oversized and unsupported input; slow header connections
+- `cc6517aa` test(web): SMTP failure containment and indistinguishable authentication failures
+- `6e94f54b` test(load): W9 large dataset seeder, load/soak harness, diagnostic build tag
+- `0efd2b7d` test(load): overload and interactive load models, recovery segment
+- `fa29adb8` docs: projects_differences.md and its maintenance rule
+- `94fcde75` docs: RC0 checklist additions from W9, release presentation topics
+- `cc7f6bf0` test(load): diag profile, segment windows, run summariser
+- `b1c6060e` docs: 07J measurements README and the closed-loop/overload/interactive steps run
+- `ec88e8a3` fix(web/ui): persistent recovery-state notices are not live regions
+- `f96be7fc` docs: 07J soak measurements (2 h 30 min, 16 closed-loop clients plus ingest)
+- `bc4fced0` test(load): heap breakdown in the diag build, token cleanup, goroutine grouping fix, memfloor as overload
+- `5e7ae22f` fix(web/server): log deliberate 503 backpressure at WARN, not ERROR
+- `f9fa32a9` docs: 07J memory-floor (768/640/512 MiB cgroups) and knee (4 and 8 search slots) runs
+- `f7b85ce0` chore: lint cleanups in the 07J tests and harness
+- `1160ac83` test: goroutine-safe process output buffers in the real-binary helpers
+- `b1c7caaa` fix(deps): brotli v1.2.6 -> v1.2.7 (GO-2026-6888)
+- `bd4bbbeb` fix(deps): pin toolchain go1.27.4 (14 standard-library advisories)
+- (this report and the final index updates are in the commit that follows)
+

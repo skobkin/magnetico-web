@@ -39,4 +39,6 @@ No real proxy was exercised. With the proxy actually chosen for production (Trae
 - [ ] **Live-DHT acceptance** of crawler → ingest → PostgreSQL → web with CI-built images on a separate DHT-capable host (never from the development VM).
 - [ ] **User migration** dry-run on a copy of the real PHP accounts (password-hash audit, unsupported-hash count, email handling), then the offline cutover checklist of `docs/web-deployment.md` §10.
 - [ ] After the first `migrate users` on real data, an administrator is promoted with `web user set-role` and the removal of a migrated historical email address is checked by the owner of such an account.
+- [ ] **A soak of at least 24 hours** with the real image under the recommended limits and a representative mix (07J's soak was 2.5 hours and left the heap-after-GC trend of finding F9 inconclusive: +3 %/h over 90 minutes, not reproduced in the 45-minute diagnostic window): heap-after-GC, RSS, goroutines and descriptors must be flat after the cache fill, and the idle phase must release memory.
+- [ ] **Toolchain**: the CI/OCI build uses Go **1.27.4 or newer** (`go.mod` pins `toolchain go1.27.4` after the standard-library advisories of finding F10), and `govulncheck` is part of the pipeline (run with the same toolchain: a checker built by an older Go cannot analyse this code).
 
