@@ -1,0 +1,103 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/goreleaser/goreleaser/v2.20.1/www/docs/static/schema.json
+version: 2
+
+project_name: magnetico-web
+
+# The executable is built once (`goreleaser release --clean --skip=publish`),
+# qualified from dist/, and uploaded unchanged by `goreleaser publish`; see
+# .woodpecker/release.yaml. Native artifacts go to Forgejo releases only.
+builds:
+  - id: magnetico
+    main: ./cmd/magnetico
+    binary: magnetico
+    env:
+      - CGO_ENABLED=0
+    # Linux only: the crawler queue lock has Unix and "other" implementations and
+    # no other platform's behaviour (UDP crawler, file locking, cgroups) has been
+    # demonstrated. No -tags: the diagnostic listener (tag diag) and the heavy test
+    # harness (tag loadtest) must never be part of a release build.
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    # Reproducible: the binary's timestamp is the commit's.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # The same linker values as the Dockerfile: internal/buildinfo.
+    ldflags:
+      - -s -w -X github.com/skobkin/magnetico-web/internal/buildinfo.Version={{ .Version }} -X github.com/skobkin/magnetico-web/internal/buildinfo.Commit={{ .FullCommit }}
+
+archives:
+  - id: magnetico
+    ids:
+      - magnetico
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Reproducible archives: every entry carries the commit date, so two builds of
+    # the same tag produce byte-identical archives and checksums.
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: COPYING
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: UPGRADE.md
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: third_party/swagger-ui-dist-5.34.1/LICENSE
+        dst: licenses/swagger-ui-LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: third_party/swagger-ui-dist-5.34.1/NOTICE
+        dst: licenses/swagger-ui-NOTICE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: third_party/swagger-ui-dist-5.34.1/swagger-ui-bundle.js.LICENSE.txt
+        dst: licenses/swagger-ui-bundle.js.LICENSE.txt
+        info:
+          mtime: "{{ .CommitDate }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+changelog:
+  # Entries are assigned to groups in array order (breaking first), `order` only
+  # controls rendering. Same grouping as the owner's other projects.
+  groups:
+    - title: BC Breaking
+      regexp: '^[[:word:]]+(\([^)]*\))?!:'
+      order: 0
+    - title: Features
+      regexp: '^feat(\([^)]*\))?!?:'
+      order: 1
+    - title: Fixes
+      regexp: '^fix(\([^)]*\))?!?:'
+      order: 2
+    - title: Other changes
+      order: 999
+  filters:
+    exclude:
+      - '^docs(\([^)]*\))?!?:'
+      - '^test(\([^)]*\))?!?:'
+      - '^style(\([^)]*\))?!?:'
+      - '^ci(\([^)]*\))?!?:'
+
+release:
+  # A tag with a prerelease part (0.8.0-rc.0) is published as a prerelease, never
+  # promoted to a stable release.
+  prerelease: auto
+  gitea:
+    owner: "{{ .Env.CI_REPO_OWNER }}"
+    name: "{{ .Env.CI_REPO_NAME }}"
+
+# Forgejo is Gitea-compatible; the URLs come from the CI forge URL.
+gitea_urls:
+  api: "{{ .Env.CI_FORGE_URL }}/api/v1"
+  download: "{{ .Env.CI_FORGE_URL }}"

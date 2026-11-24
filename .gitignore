@@ -26,3 +26,5 @@ vendor/
 
 # 04D campaign evidence and scratch outputs (never commit).
 /.scratch/
+# GoReleaser output
+/dist/
