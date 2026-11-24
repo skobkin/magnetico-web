@@ -2,10 +2,11 @@
 // for manual testing of the web UI (`magnetico dev seed-torrents`) and writes
 // it through the production persistence API.
 //
-// Nothing here touches the network: infohashes are derived from fixed keys,
-// every name, path, size and timestamp comes from a fixed-seed generator, and
-// no torrent metadata is ever downloaded. The dataset is bit-for-bit stable
-// for a given Version; any change to the generator must bump Version.
+// Generating the dataset needs no network at all: infohashes are derived from
+// fixed keys, every name, path, size and timestamp comes from a fixed-seed
+// generator, and no torrent metadata is ever downloaded. (Writing it needs
+// PostgreSQL access only; see Seed.) The dataset is bit-for-bit stable for a
+// given Version; any change to the generator must bump Version.
 package devseed
 
 import (
@@ -438,8 +439,10 @@ const LargeKey = "large/10000"
 //   - one flat directory of 1,500 files (several pages at the page-size cap);
 //   - 500 files spread over a 6-level nested hierarchy.
 //
-// 10,000 files exceed the full-tree limit, so the web UI serves it in the
-// paginated directory mode (the smaller torrents use the full tree).
+// 10,000 files exceed the full-tree file-count limit, so the web UI serves it in
+// the paginated directory mode. Whether a smaller torrent gets the full tree
+// also depends on the estimate and serialized-size limits (fileview.Decide),
+// not on its file count alone.
 func largeFixture(r *rng) Fixture {
 	const root = "Large archive 10000 files — Большой архив — 大規模アーカイブ"
 	files := make([]persistence.File, 0, LargeTorrentFiles)

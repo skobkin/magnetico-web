@@ -74,8 +74,9 @@ type Result struct {
 // The torrent-count check and the inserts are not one transaction. The
 // advisory lock stops two seeders racing each other, but a concurrent writer
 // (a running ingest) can still add torrents; use a database nothing else
-// writes to. No DHT, BitTorrent, tracker or other unrelated network activity is performed;
-// the only connections are to the PostgreSQL server named by rawURL.
+// writes to. Network contract: PostgreSQL access only. No DHT, BitTorrent,
+// tracker or other unrelated external network activity is performed; the only
+// connections are to the PostgreSQL server named by rawURL.
 func Seed(ctx context.Context, rawURL string, dryRun bool) (Result, error) {
 	return seed(ctx, rawURL, Dataset(), dryRun)
 }

@@ -356,7 +356,7 @@ type UsersVerifyOptions struct {
 // DevOptions carries the `dev` command group. SeedTorrents is its only
 // subcommand; bare `dev` is a usage error.
 type DevOptions struct {
-	SeedTorrents SeedTorrentsOptions `command:"seed-torrents" description:"Add the deterministic synthetic torrent dataset (101 torrents, one with 10,000 files) to an initialized 0.8.0 database, through the production persistence API. Refuses any database that holds other torrents; never updates or deletes anything; no DHT, BitTorrent or other unrelated network activity (it connects only to the PostgreSQL server you name). Development only (docs/development-fixtures.md)."`
+	SeedTorrents SeedTorrentsOptions `command:"seed-torrents" description:"Add the deterministic synthetic torrent dataset (101 torrents, one with 10,000 files) to an initialized 0.8.0 database, through the production persistence API. Refuses any database that holds other torrents; never updates or deletes anything; PostgreSQL access only: no DHT, BitTorrent, tracker or other unrelated external network activity (it connects only to the PostgreSQL server you name). Development only (docs/development-fixtures.md)."`
 }
 
 // DevDatabaseEnvName is the environment variable of the dev target DSN.
