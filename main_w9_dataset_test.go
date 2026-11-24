@@ -2,7 +2,8 @@ package main
 
 // The W9 large synthetic dataset "w9-large-v1" (task 07J, stage S5). Nothing
 // here runs in the ordinary suite: it needs MAGNETICO_BENCH_LARGE=1,
-// MAGNETICO_W9_DSN (the owner DSN of a disposable database whose torrent schema
+// MAGNETICO_W9_CONFIRM_DISPOSABLE_DB (the database name, an explicit statement that
+// it is disposable), MAGNETICO_W9_DSN (the owner DSN of a disposable database whose torrent schema
 // already exists) and MAGNETICO_W9_DATADIR (the directory holding that
 // database's files, for the free-space guard). Synthetic data only.
 //
@@ -48,6 +49,10 @@ func TestW9SeedLargeDataset(t *testing.T) {
 	dsn, dir := os.Getenv("MAGNETICO_W9_DSN"), os.Getenv("MAGNETICO_W9_DATADIR")
 	if dsn == "" || dir == "" {
 		t.Fatal("MAGNETICO_W9_DSN and MAGNETICO_W9_DATADIR are required")
+	}
+	// The seeder writes millions of rows: only into the confirmed, local database.
+	if err := w9CheckTarget(dsn, os.Getenv(w9ConfirmEnv)); err != nil {
+		t.Fatalf("refusing to seed MAGNETICO_W9_DSN: %v", err)
 	}
 	scale := 1.0
 	if v := os.Getenv("MAGNETICO_W9_SCALE"); v != "" {

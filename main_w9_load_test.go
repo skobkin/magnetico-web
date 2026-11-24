@@ -5,6 +5,7 @@ package main
 //
 //	MAGNETICO_BENCH_LARGE=1
 //	MAGNETICO_W9_DSN       owner DSN of the seeded dataset database (TestW9SeedLargeDataset)
+//	MAGNETICO_W9_CONFIRM_DISPOSABLE_DB  the database name from the DSN: confirms it is disposable
 //	MAGNETICO_W9_OUT       output directory for the JSONL results (created)
 //	MAGNETICO_W9_PROFILE   "steps" | "soak" | "memfloor"   (what to run)
 //
@@ -29,6 +30,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"math"
 	"math/rand/v2"
@@ -62,6 +64,8 @@ const (
 	w9IngestRate     = 20 // records per second during the steady phase
 	w9DrainDeadline  = 10 * time.Minute
 	w9SampleInterval = 10 * time.Second
+	w9QueryTimeout   = 5 * time.Second  // one monitoring query
+	w9VerifyTimeout  = 10 * time.Minute // the post-drain storage verification, as a whole
 )
 
 // outcome classes, reported separately and never merged.
@@ -164,8 +168,11 @@ type w9Sampler struct {
 	mu      sync.Mutex
 	samples []w9Sample
 	queue   []w9Point // ingest queue depth
-	stop    chan struct{}
-	wg      sync.WaitGroup
+	// qTries counts the queue samples attempted; qFails those that produced no
+	// reading (no connection, a failed or timed-out query). Both are reported.
+	qTries, qFails int
+	stop           chan struct{}
+	wg             sync.WaitGroup
 }
 
 type w9Point struct {
@@ -200,20 +207,32 @@ func startSampler(procs []*w9Scoped, dsn string) *w9Sampler {
 					CgroupMiB: float64(readUint(p.cg+"/memory.current")) / (1 << 20), CPUSec: cgCPUSeconds(p.cg), Threads: th, FDs: countFDs(p.pid)})
 			}
 			s.mu.Unlock()
+			s.mu.Lock()
+			s.qTries++
+			s.mu.Unlock()
+			qctx, cancel := context.WithTimeout(context.Background(), w9QueryTimeout)
 			if conn == nil {
-				conn, _ = pgx.Connect(context.Background(), dsn)
+				conn, _ = pgx.Connect(qctx, dsn)
 			}
+			got := false
 			if conn != nil {
 				var n int
 				// The queue table is bounded by the admission quota: a cheap count.
-				if err := conn.QueryRow(context.Background(), `SELECT count(*) FROM magnetico_ingest.queue`).Scan(&n); err == nil {
+				if err := conn.QueryRow(qctx, `SELECT count(*) FROM magnetico_ingest.queue`).Scan(&n); err == nil {
 					s.mu.Lock()
 					s.queue = append(s.queue, w9Point{now, float64(n)})
 					s.mu.Unlock()
+					got = true
 				} else {
 					conn.Close(context.Background())
 					conn = nil
 				}
+			}
+			cancel()
+			if !got {
+				s.mu.Lock()
+				s.qFails++
+				s.mu.Unlock()
 			}
 		}
 	}()
@@ -430,11 +449,77 @@ func newW9Load(addr string, pools *w9Pools) *w9Load {
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
+// w9FullTreeSlug identifies the one 422 the workload expects: the documented
+// "complete tree unavailable, browse by directory" answer. Any other 422
+// (notably index-too-complex) is a file-index failure and must stay visible.
+const w9FullTreeSlug = "full-tree-unavailable"
+
+// w9BodyKeep is how much of a response body the client keeps for classification
+// and link extraction; the rest is still read, to detect truncation.
+const w9BodyKeep = 4 << 20
+
+// readBody reads the whole body. A read error (truncation, reset, a timeout
+// while the body is transferred) is returned, never swallowed: the caller counts
+// it as a transport failure.
+func readBody(r io.Reader) ([]byte, error) {
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, io.LimitReader(r, w9BodyKeep)); err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// fetch performs one request and returns the outcome class and the body.
+func (l *w9Load) fetch(rq w9Req, id *w9Ident) (string, []byte, time.Duration) {
+	req, err := http.NewRequest("GET", "http://"+l.addr+rq.path, nil)
+	if err != nil {
+		return oTransport, nil, 0
+	}
+	req.Header.Set("X-Forwarded-For", id.xff)
+	for k, v := range rq.hdr {
+		req.Header.Set(k, v)
+	}
+	start := time.Now()
+	resp, err := l.hc.Do(req)
+	if err != nil {
+		return oTransport, nil, time.Since(start)
+	}
+	defer resp.Body.Close()
+	body, err := readBody(resp.Body)
+	if err != nil {
+		return oTransport, nil, time.Since(start)
+	}
+	return classify(resp.StatusCode, body, rq.expect), body, time.Since(start)
+}
+
+// nextPageRe finds the "Next" link of a search results page.
+var nextPageRe = regexp.MustCompile(`href="([^"]+)" rel="next"`)
+
+// nextPage returns the continuation request of a search page, if it has one.
+func nextPage(body []byte, ses map[string]string) (w9Req, bool) {
+	m := nextPageRe.FindSubmatch(body)
+	if m == nil {
+		return w9Req{}, false
+	}
+	href := html.UnescapeString(string(m[1]))
+	if !strings.HasPrefix(href, "/torrents?") || !strings.Contains(href, "cursor=") {
+		return w9Req{}, false
+	}
+	return w9Req{class: "searchpage", path: href, hdr: ses, expect: []int{200}}, true
+}
+
 func classify(status int, body []byte, expect []int) string {
 	for _, e := range expect {
-		if status == e {
-			return oOK
+		if status != e {
+			continue
 		}
+		if status == http.StatusUnprocessableEntity && !bytes.Contains(body, []byte(w9FullTreeSlug)) {
+			return oUnexpect
+		}
+		return oOK
 	}
 	switch {
 	case status == 429:
@@ -467,21 +552,23 @@ func (l *w9Load) run(conc int, d time.Duration, think time.Duration, acc *w9Acc)
 			id := l.pools.idents[i%len(l.pools.idents)]
 			for time.Now().Before(stop) {
 				rq := l.pools.pick(rng, id)
-				req, _ := http.NewRequest("GET", "http://"+l.addr+rq.path, nil)
-				req.Header.Set("X-Forwarded-For", id.xff)
-				for k, v := range rq.hdr {
-					req.Header.Set(k, v)
+				outcome, body, d := l.fetch(rq, id)
+				acc.add(rq.class, outcome, d)
+				// A third of the searches continue like a user paging on: up to two
+				// keyset continuation requests from the page just received.
+				if rq.class == "search" && outcome == oOK && rng.IntN(3) == 0 {
+					for depth := 0; depth < 2; depth++ {
+						next, ok := nextPage(body, rq.hdr)
+						if !ok {
+							break
+						}
+						outcome, body, d = l.fetch(next, id)
+						acc.add(next.class, outcome, d)
+						if outcome != oOK {
+							break
+						}
+					}
 				}
-				start := time.Now()
-				resp, err := l.hc.Do(req)
-				if err != nil {
-					acc.add(rq.class, oTransport, time.Since(start))
-					continue
-				}
-				body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-				_, _ = io.Copy(io.Discard, resp.Body)
-				resp.Body.Close()
-				acc.add(rq.class, classify(resp.StatusCode, body, rq.expect), time.Since(start))
 				if think > 0 {
 					// An interactive user: an exponentially distributed pause (mean = think).
 					time.Sleep(time.Duration(rng.ExpFloat64() * float64(think)))
@@ -550,9 +637,14 @@ func startProducer(addr, token string, rate int) *w9Producer {
 			resp, err := p.hc.Do(req)
 			code := 0
 			if err == nil {
-				_, _ = io.Copy(io.Discard, resp.Body)
+				// An acknowledgement whose body cannot be read to the end is not
+				// counted as one: it is recorded under -1 and fails the run's gate.
+				if _, rerr := readBody(resp.Body); rerr == nil {
+					code = resp.StatusCode
+				} else {
+					code = -1
+				}
 				resp.Body.Close()
-				code = resp.StatusCode
 			}
 			p.mu.Lock()
 			if code == 202 {
@@ -608,13 +700,17 @@ func w9Accounts(t *testing.T, bin, dsn string) {
 		}
 	}
 	// Tokens of earlier runs (kept, never deleted by design) are revoked so the
-	// per-user cap of 50 unrevoked tokens leaves room for this run's pools.
+	// per-user cap of 50 unrevoked tokens leaves room for this run's pools. Only the
+	// exact generated identities and only credentials carrying the harness label are
+	// touched.
+	names := w9UserNames()
 	for _, tbl := range []string{"api_tokens", "rss_tokens"} {
-		sqlExec(t, dsn, `UPDATE magnetico_web.`+tbl+` SET revoked_at = now() WHERE revoked_at IS NULL AND user_id IN (SELECT id FROM magnetico_web.users WHERE username LIKE 'w9u%')`)
+		sqlExec(t, dsn, `UPDATE magnetico_web.`+tbl+` SET revoked_at = now() WHERE revoked_at IS NULL AND label = $2 AND user_id IN (SELECT id FROM magnetico_web.users WHERE username = ANY($1))`, names, w9TokenLabel)
 	}
-	have := sqlCount(t, dsn, `SELECT count(*) FROM magnetico_web.users WHERE username LIKE 'w9u%'`)
-	for i := have; i < w9LoadUsers; i++ {
-		name := fmt.Sprintf("w9u%02d", i)
+	for _, name := range names {
+		if sqlCount(t, dsn, `SELECT count(*) FROM magnetico_web.users WHERE username = $1`, name) == 1 {
+			continue
+		}
 		if out, errOut, code := runWebAdminBinary(t, bin, dsn, "", nil, "user", "add", name); code != 0 {
 			t.Fatalf("user add: %d %s%s", code, out, errOut)
 		}
@@ -628,7 +724,7 @@ func w9Identities(t *testing.T, addr, dsn string) *w9Pools {
 	t.Helper()
 	p := &w9Pools{}
 	for i := 0; i < w9LoadUsers; i++ {
-		name := fmt.Sprintf("w9u%02d", i)
+		name := w9UserNames()[i]
 		xff := fmt.Sprintf("10.77.%d.%d", i, 1)
 		b := newBrowser(t, addr)
 		b.get("/login", "X-Forwarded-For", xff)
@@ -643,7 +739,7 @@ func w9Identities(t *testing.T, addr, dsn string) *w9Pools {
 					tab, path = "rss", "/account/rss-tokens"
 				}
 				b.get("/account?tab="+tab, "X-Forwarded-For", xff)
-				if resp := b.post(path, url.Values{"label": {"w9"}, "csrf_token": {b.token()}}, "X-Forwarded-For", xff); resp.StatusCode != 200 {
+				if resp := b.post(path, url.Values{"label": {w9TokenLabel}, "csrf_token": {b.token()}}, "X-Forwarded-For", xff); resp.StatusCode != 200 {
 					t.Fatalf("mint %s for %s: %d", kind, name, resp.StatusCode)
 				}
 				m := tokenInPage.FindStringSubmatch(b.body)
@@ -709,6 +805,11 @@ type w9Env struct {
 	failed    []string
 	producers []*w9Producer
 	diagAddr  string
+
+	// drainDeadline overrides w9DrainDeadline (tests only); onFail, when set,
+	// receives gate failures instead of the test (tests of the harness itself).
+	drainDeadline time.Duration
+	onFail        func(string)
 }
 
 func (e *w9Env) startWeb() {
@@ -784,6 +885,10 @@ func (e *w9Env) gate(cond bool, format string, args ...any) {
 	if !cond {
 		msg := fmt.Sprintf(format, args...)
 		e.failed = append(e.failed, msg)
+		if e.onFail != nil {
+			e.onFail(msg)
+			return
+		}
 		e.t.Errorf("GATE FAILED: %s", msg)
 	}
 }
@@ -862,28 +967,56 @@ type segGates struct {
 	think                        time.Duration
 }
 
-// drain stops nothing: it waits for the ingest queue to empty within the deadline
-// and then verifies that every acknowledged record is stored.
+// drain stops nothing: it waits for the ingest queue to empty within the
+// deadline and then verifies that every acknowledged record is stored. Every
+// query error is a gate failure (never read as "queue empty"), and every query
+// runs under a context, so a blocked statement cannot outlive the deadline.
 func (e *w9Env) drain() {
 	e.t.Helper()
 	start := time.Now()
-	conn, err := pgx.Connect(context.Background(), e.dsn)
+	limit := w9DrainDeadline
+	if e.drainDeadline > 0 {
+		limit = e.drainDeadline
+	}
+	waitCtx, cancelWait := context.WithDeadline(context.Background(), start.Add(limit))
+	defer cancelWait()
+	conn, err := pgx.Connect(waitCtx, e.dsn)
 	if err != nil {
-		e.t.Fatal(err)
+		e.gate(false, "drain: cannot connect: %v", err)
+		return
 	}
 	defer conn.Close(context.Background())
-	var depth int
-	for time.Since(start) < w9DrainDeadline {
-		_ = conn.QueryRow(context.Background(), `SELECT count(*) FROM magnetico_ingest.queue`).Scan(&depth)
+	depth := -1 // unknown until a query succeeds
+	for {
+		var n int
+		if err := conn.QueryRow(waitCtx, `SELECT count(*) FROM magnetico_ingest.queue`).Scan(&n); err != nil {
+			if waitCtx.Err() != nil {
+				break // the deadline; depth keeps its last known value
+			}
+			e.gate(false, "drain: the queue depth query failed: %v", err)
+			return
+		}
+		depth = n
 		if depth == 0 {
 			break
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-waitCtx.Done():
+		case <-time.After(time.Second):
+		}
+		if waitCtx.Err() != nil {
+			break
+		}
 	}
 	took := time.Since(start)
-	e.gate(depth == 0, "drain: the ingest queue still holds %d rows after %s (deadline %s)", depth, took.Round(time.Second), w9DrainDeadline)
+	e.gate(depth == 0, "drain: the ingest queue holds %d rows (-1: unknown) after %s (deadline %s)", depth, took.Round(time.Second), limit)
+	verifyCtx, cancelVerify := context.WithTimeout(context.Background(), w9VerifyTimeout)
+	defer cancelVerify()
 	var quarantined int
-	_ = conn.QueryRow(context.Background(), `SELECT count(*) FROM magnetico_ingest.quarantine`).Scan(&quarantined)
+	if err := conn.QueryRow(verifyCtx, `SELECT count(*) FROM magnetico_ingest.quarantine`).Scan(&quarantined); err != nil {
+		e.gate(false, "drain: the quarantine count query failed: %v", err)
+		return
+	}
 	e.gate(quarantined == 0, "drain: %d quarantined records", quarantined)
 	// Every acknowledged record is stored: batched index lookups, once.
 	var all [][]byte
@@ -894,15 +1027,25 @@ func (e *w9Env) drain() {
 		}
 		p.mu.Unlock()
 	}
-	missing := 0
+	missing, unverified := 0, 0
 	for i := 0; i < len(all); i += 1000 {
 		chunk := all[i:min(i+1000, len(all))]
 		var found int
-		_ = conn.QueryRow(context.Background(), `SELECT count(*) FROM magneticod.torrents WHERE info_hash = ANY($1)`, chunk).Scan(&found)
+		if err := conn.QueryRow(verifyCtx, `SELECT count(*) FROM magneticod.torrents WHERE info_hash = ANY($1)`, chunk).Scan(&found); err != nil {
+			// The chunk is neither found nor missing: it stays unverified and fails the gate.
+			unverified += len(chunk)
+			e.gate(false, "drain: the storage verification query failed: %v", err)
+			if verifyCtx.Err() != nil {
+				unverified += len(all) - min(i+1000, len(all))
+				break
+			}
+			continue
+		}
 		missing += len(chunk) - found
 	}
 	e.gate(missing == 0, "drain: %d of %d acknowledged records are not stored", missing, len(all))
-	e.write("drain", map[string]any{"drain_seconds": took.Seconds(), "queue_left": depth, "acked": len(all), "missing": missing, "quarantined": quarantined})
+	e.gate(unverified == 0, "drain: %d of %d acknowledged records could not be verified", unverified, len(all))
+	e.write("drain", map[string]any{"drain_seconds": took.Seconds(), "queue_left": depth, "acked": len(all), "missing": missing, "unverified": unverified, "quarantined": quarantined})
 }
 
 // finish stops the services, collects gc and cache information and writes the
@@ -912,7 +1055,12 @@ func (e *w9Env) finish(prefix string) {
 	e.samp.finish()
 	e.samp.mu.Lock()
 	samples, queue := append([]w9Sample(nil), e.samp.samples...), append([]w9Point(nil), e.samp.queue...)
+	qTries, qFails := e.samp.qTries, e.samp.qFails
 	e.samp.mu.Unlock()
+	// Missing queue samples are reported, and too many of them fail the run: a
+	// queue-depth series with holes cannot support the backlog-slope gate.
+	e.write("queue_samples", map[string]any{"attempted": qTries, "missing": qFails, "taken": len(queue)})
+	e.gate(qTries < 3 || qFails*10 <= qTries, "queue-depth sampling: %d of %d samples are missing", qFails, qTries)
 	for _, p := range []*w9Scoped{e.web, e.ingest} {
 		rep := map[string]any{"proc": p.name}
 		_, hwm, _ := readStatusOf(p.pid)
@@ -1000,6 +1148,9 @@ func newW9Env(t *testing.T) *w9Env {
 	if dsn == "" || out == "" {
 		t.Fatal("MAGNETICO_W9_DSN and MAGNETICO_W9_OUT are required")
 	}
+	// Before anything is built, started or mutated: the target must be the
+	// confirmed, local, benchmark-shaped database (see main_w9_safety_test.go).
+	w9RequireDisposable(t, dsn)
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
