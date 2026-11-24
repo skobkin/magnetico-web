@@ -7,7 +7,7 @@ package main
 //	MAGNETICO_W9_DSN       owner DSN of the seeded dataset database (TestW9SeedLargeDataset)
 //	MAGNETICO_W9_CONFIRM_DISPOSABLE_DB  the database name from the DSN: confirms it is disposable
 //	MAGNETICO_W9_OUT       output directory for the JSONL results (created)
-//	MAGNETICO_W9_PROFILE   "steps" | "soak" | "memfloor"   (what to run)
+//	MAGNETICO_W9_PROFILE   "steps" | "soak" | "memfloor" | "knee" | "diag" | "regress"   (what to run)
 //
 // Optional: MAGNETICO_W9_LABEL, MAGNETICO_W9_WEB_MEM (cgroup MemoryMax, default
 // 1G), MAGNETICO_W9_WEB_GOMEMLIMIT (default 768MiB), MAGNETICO_W9_STEP_SECONDS
@@ -438,14 +438,17 @@ func (a *w9Acc) stats() (total map[string]int, classes map[string]w9ClassStat) {
 // ---- load generation ----------------------------------------------------------------
 
 type w9Load struct {
-	addr  string
-	pools *w9Pools
-	hc    *http.Client
+	// noContinuation switches the paging follow-ups off (MAGNETICO_W9_NO_CONTINUATION=1):
+	// the workload of the earlier campaign, for comparisons across revisions.
+	noContinuation bool
+	addr           string
+	pools          *w9Pools
+	hc             *http.Client
 }
 
 func newW9Load(addr string, pools *w9Pools) *w9Load {
 	tr := &http.Transport{MaxIdleConnsPerHost: 256, MaxConnsPerHost: 0, IdleConnTimeout: 90 * time.Second}
-	return &w9Load{addr: addr, pools: pools, hc: &http.Client{Transport: tr, Timeout: w9ClientTimeout,
+	return &w9Load{noContinuation: os.Getenv("MAGNETICO_W9_NO_CONTINUATION") == "1", addr: addr, pools: pools, hc: &http.Client{Transport: tr, Timeout: w9ClientTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
@@ -556,7 +559,7 @@ func (l *w9Load) run(conc int, d time.Duration, think time.Duration, acc *w9Acc)
 				acc.add(rq.class, outcome, d)
 				// A third of the searches continue like a user paging on: up to two
 				// keyset continuation requests from the page just received.
-				if rq.class == "search" && outcome == oOK && rng.IntN(3) == 0 {
+				if rq.class == "search" && outcome == oOK && !l.noContinuation && rng.IntN(3) == 0 {
 					for depth := 0; depth < 2; depth++ {
 						next, ok := nextPage(body, rq.hdr)
 						if !ok {
@@ -1263,6 +1266,23 @@ func TestW9Load(t *testing.T) {
 			}
 			e.finish(fmt.Sprintf("series%d", series))
 		}
+	case "regress":
+		// A short, representative re-run on the final dependency pins (07J review):
+		// one series of the step profile at a shorter step, the same segments and
+		// gates as "steps" for the tiers that matter, plus a short ingest-on segment
+		// and the checked drain. Compared against the "steps" baseline by label.
+		e.begin()
+		for _, c := range []int{4, 16} {
+			e.segment(fmt.Sprintf("regress-c%d", c), c, step, false, segGates{noTimeouts: true, noBusy: true})
+		}
+		e.segment("regress-c32-overload", 32, step, false, segGates{noTimeouts: true, overload: true})
+		e.segment("regress-recovery-c4", 4, 30*time.Second, false, segGates{noTimeouts: true, noBusy: true})
+		for _, users := range []int{50, 150} {
+			e.segment(fmt.Sprintf("regress-interactive-u%d", users), users, step, false, segGates{noTimeouts: true, think: time.Second})
+		}
+		e.segment("regress-ingest-c16", 16, 2*step, true, segGates{noTimeouts: true, noBusy: true})
+		e.drain()
+		e.finish("regress")
 	case "memfloor":
 		e.begin()
 		e.segment("memfloor-c32", 32, 3*step, false, segGates{noTimeouts: true, overload: true})

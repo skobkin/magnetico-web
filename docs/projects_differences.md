@@ -68,7 +68,7 @@ The lineage above is the history of the *code*. The system the maintainer runs i
 | Executables | `magneticod`, `magneticow` | one binary, crawler + web | **one binary**, services chosen by subcommand: `crawl`, `ingest`, `web`, `migrate`, `dev` |
 | Storage | SQLite (default), PostgreSQL (crawler only), stdout | SQLite (FTS5), PostgreSQL, CockroachDB | **PostgreSQL only** |
 | File lists | one row per file | one row per file (PostgreSQL: 100 hash partitions and a trigram index on paths) | **one compact, versioned blob per torrent**; single-file torrents with no blob |
-| Crawler → storage | the crawler writes the database directly | the crawler writes the database directly | crawler has **no database**: durable local queue → HTTP → ingest → PostgreSQL queue → single consumer |
+| Crawler → storage | the crawler writes the database directly | the crawler writes the database directly | crawler has **no PostgreSQL access**: durable local SQLite queue → HTTP → ingest → PostgreSQL queue → single consumer |
 | Several crawlers | each needs database access | each needs database access | any number of crawler hosts deliver to one ingest endpoint over HTTPS |
 | Web access | Basic Auth from a credentials file; no accounts | (upstream web UI, Basic Auth) | **private, authenticated**; accounts, sessions, invitation-only registration |
 | Search | SQLite FTS5 (the PostgreSQL engine has no web interface) | trigram index on names (PostgreSQL), FTS5 (SQLite) | case-insensitive substring match on names; keyset pagination; no result count |
@@ -76,7 +76,7 @@ The lineage above is the history of the *code*. The system the maintainer runs i
 | API | REST (SwaggerHub-documented) | upstream `/api/v0.1` | REST **API v2** (bearer tokens, embedded OpenAPI 3.2); legacy JSON API **not** restored |
 | Feeds | none | RSS | RSS **v2** (own token) and **v1** kept for existing clients |
 | Schema changes | automatic migration in the crawler | automatic migration v0→v1 | **never automatic**: explicit `schema-init` commands; fail closed |
-| Moving old data | — | — | offline, resumable `migrate torrents` and `migrate users`, two verifications, forensic export |
+| Moving old data | — | — | offline `migrate torrents` (checkpointed, resumable) and `migrate users` (one transaction: all or nothing, not resumable), two verifications, forensic export |
 | Deployment | binaries, Docker images | OCI image on GHCR | binaries; images **not yet published** (CI/OCI is a later task) |
 
 ---
@@ -96,7 +96,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   subgraph DHT["crawler host(s)"]
-    D2[(BitTorrent DHT)] --> C2["magnetico crawl<br/>no database"]
+    D2[(BitTorrent DHT)] --> C2["magnetico crawl<br/>no PostgreSQL access"]
     C2 --> Q2[("SQLite WAL queue<br/>on local disk")]
   end
   Q2 -->|"HTTPS, bearer token,<br/>POST /api/ingest/v1/torrents"| I2["magnetico ingest"]
@@ -139,14 +139,14 @@ flowchart LR
   end
   subgraph BLOB["0.8.0: one blob per torrent"]
     TB["torrents<br/>id · info_hash · name · total_size · discovered_on · file_count"]
-    BB["torrent_file_blobs<br/>torrent_id · data<br/>(12-byte header, then a compressed payload)"]
+    BB["torrent_file_blobs<br/>torrent_id · data<br/>(2-byte header, raw-length uvarint if compressed, then the payload)"]
     TB --- BB
     NB["single-file torrent whose path equals its name:<br/>no blob row at all"]
     TB -.- NB
   end
 ```
 
-**What changed.** The file list of a torrent is stored as **one blob** in a versioned binary format (`docs/specs/wire-format-v1.md`): a small header, then a payload that is a plain list, a **prefix-delta** list or a **trie**, compressed with Zstd or Brotli according to a **codec profile** (`balanced`: prefix-delta + Zstd; `compact`, the default: prefix-delta or trie + Brotli q9; `maximum`: Brotli q11). The encoder tries the candidates and keeps the smallest. A torrent whose only file has a path equal to its name and a size equal to the total (the very common single-file case) is stored **without any blob**. The name search and listing never touch blobs.
+**What changed.** The file list of a torrent is stored as **one blob** in a versioned binary format (`docs/specs/wire-format-v1.md`): a two-byte header (version; serializer and compressor IDs), a raw-length `uvarint` only when the payload is compressed, then a payload that is a plain list, a **prefix-delta** list or a **trie**, compressed with Zstd or Brotli according to a **codec profile** (`balanced`: prefix-delta + Zstd; `compact`, the default: prefix-delta or trie + Brotli q9; `maximum`: Brotli q11). The encoder tries the candidates and keeps the smallest. A torrent whose only file has a path equal to its name and a size equal to the total (the very common single-file case) is stored **without any blob**. The name search and listing never touch blobs.
 
 **Why.** On the lab sample of the real library the file table dominates the storage and index cost, and a search engine for *names* never needs it in the hot path. A blob that is read only when a torrent is opened removes the file table, its partitions and its path index.
 
@@ -173,16 +173,20 @@ flowchart LR
 ```mermaid
 sequenceDiagram
   autonumber
+  participant D as DHT
   participant C as crawl (host A, B, …)
-  participant L as local SQLite WAL queue
   participant I as ingest
+  participant L as local SQLite WAL queue
   participant P as PostgreSQL queue
   participant K as single consumer
   participant T as torrents + blobs
+  D->>C: announced info hash
+  C->>I: POST exists (batched hashes), before any metadata fetch
+  I-->>C: exists / missing / unknown
+  Note over C: exists: skipped. missing and unknown: admitted (unknown = fail-open)
+  C->>D: fetch metadata from peers (admission gate: leech slot and queue room)
   C->>L: metadata record, committed (synchronous=FULL)
-  L->>I: POST exists (batched hashes)
-  I-->>L: exists / missing / unknown
-  L->>I: POST torrents (only the missing)
+  L->>I: POST torrents (the admitted records)
   I->>P: INSERT, quota check, COMMIT
   I-->>L: 202 Accepted (durable)
   Note over L: record deleted locally only after 202
@@ -194,13 +198,13 @@ sequenceDiagram
 
 **Direct persistence versus the durable pipeline.** In the upstream projects the crawler opens the database and writes each torrent as it is discovered. In 0.8.0:
 
-1. **Crawler-local durable queue.** `crawl` keeps discovered metadata in a **SQLite database in WAL mode with `synchronous=FULL`** on its own disk. A record counts as admitted only once it is committed there, and is deleted only after the ingest service answered `202`. A DHT crawler therefore survives restarts, network outages and database downtime without losing what it has fetched. (SQLite is used here, *only* as the crawler's local queue; it is not a storage backend of the product.)
-2. **Centralised ingest.** Many crawlers may deliver to one `ingest` service over authenticated HTTPS (bearer token from the environment). `ingest` answers existence checks (so a crawler does not refetch what is stored) and accepts records all-or-nothing.
+1. **Crawler-local durable queue.** `crawl` keeps discovered metadata in a **SQLite database in WAL mode with `synchronous=FULL`** on its own disk. A record counts as admitted only once it is committed there, and is deleted only after the ingest service answered `202`. A DHT crawler therefore survives restarts, network outages and database downtime without losing any **durably admitted** record. Metadata that was only in memory (leeches in flight, a full local queue, the last seconds before a shutdown) is not covered: it is dropped, counted and logged, and the torrent can be discovered again. (SQLite is used here, *only* as the crawler's local queue; it is not a storage backend of the product.)
+2. **Centralised ingest.** Many crawlers may deliver to one `ingest` service over authenticated HTTPS (bearer token from the environment). `ingest` answers existence checks, which the crawler asks **before it fetches metadata** (and so before local queue admission), so it does not refetch what is already stored; a lookup that fails is reported as `unknown` and the crawler treats it as not stored (**fail-open**: the duplicate work is harmless because storage is idempotent). It accepts records all-or-nothing.
 3. **PostgreSQL ingest queue, consumer and quarantine.** `202` is sent only after the record is committed to `magnetico_ingest.queue`, under a transactional **byte quota**. A **single consumer** (a PostgreSQL advisory lock guarantees there is only one) validates, encodes and stores torrents in batches; records that can never be stored go to `quarantine`; transient I/O errors back off.
 
 **Ingest existence cache.** `ingest` keeps a process-local cache in front of the existence lookup: a **plain LRU** (not CLOCK, SIEVE or TinyLFU) over 20-byte hashes, with an **8 MiB default budget** (about 87,000 entries at 96 B each). A positive entry ("stored") **never expires**: the torrent store is append-only, so the answer cannot become false; only eviction (or a restart) removes it. A negative entry ("missing") lives about **20 seconds** so a torrent stored moments later is noticed. Errors are never cached, and a late "missing" never downgrades a positive entry. *Why:* simple, bounded and predictable memory that matches append-only data; smarter admission policies were deliberately deferred. *Trade-off:* the cache can only help with hashes seen recently, and a positive answer says nothing about the database being reachable right now.
 
-**Why the pipeline.** Delivery guarantees (crash-safe on both sides), several crawlers, a crawler without database credentials, and bounded memory on the ingest side (the quota and queue bound what a burst can cost).
+**Why the pipeline.** Delivery guarantees for durably admitted records (crash-safe on both sides, at-least-once; best-effort before admission), several crawlers, a crawler without PostgreSQL credentials, and bounded memory on the ingest side (the quota and queue bound what a burst can cost).
 
 **Trade-offs and limits.** More components and failure modes than direct writes; at-least-once delivery means the same torrent can be offered twice (stored idempotently by info hash); the queue quota must be sized for the longest expected database outage. **Live-DHT acceptance of the whole chain has not been run** (it is part of the release-candidate phase); the pipeline was qualified on synthetic data with 2-hour soaks, large-record and multi-crawler runs (`docs/wip/06-crawler-ingest-results.md`).
 
@@ -270,8 +274,8 @@ A path is decimal components joined by `_` (`""` is the root, `1_1_0` is the fir
 ### 7.4 REST API v2, RSS and credential separation
 
 - **API v2** (`/api/v2`) is read-only JSON for search, details and the two file views, authenticated by a **bearer API token** only (never a cookie or a query parameter), with RFC 9457 problem responses and an embedded **OpenAPI 3.2** document that is validated against the official schema and kept equal to the routes by tests. The vendored Swagger UI works without external requests; "Try it out" is limited to `GET`.
-- **RSS.** The new feed `/api/v2/feeds/latest.rss?feed_token=…` uses a **separate RSS token**. The legacy `GET /api/v1/feed/rss/last` is kept (deprecated) so existing torrent clients keep working with their existing URLs; migrated legacy tokens work there and **only** there.
-- **Credential separation.** API tokens, RSS tokens, legacy tokens and sessions are four different credentials with four different stores and verifiers: an RSS token never opens the JSON API, an API token never opens a feed, a session never authenticates a bearer endpoint. Disabling an account **suspends** (does not revoke) its tokens and invitations; a password reset revokes sessions, API tokens and RSS tokens.
+- **RSS.** The new feed `/api/v2/feeds/latest.rss?feed_token=…` uses a **separate RSS token**. The legacy `GET /api/v1/feed/rss/last` is kept (deprecated) so existing torrent clients keep working with their existing URLs; migrated legacy tokens are RSS tokens and are accepted by **both** RSS versions (v1 `api-token` and v2 `feed_token`), and by nothing else.
+- **Credential separation.** Sessions, API tokens and RSS tokens are three different credential kinds with three stores (`sessions`, `api_tokens`, `rss_tokens`); migrated legacy tokens are rows of `rss_tokens` (flagged `legacy`) and share the RSS verifier and rules. An RSS token (new or legacy) never opens the JSON API, an API token never opens a feed, a session never authenticates a bearer endpoint. Disabling an account **suspends** (does not revoke) its tokens and invitations; a password reset revokes sessions, API tokens and RSS tokens.
 - **Not restored.** The legacy JSON API (`/api/v1/torrents` and friends) is **not** brought back.
 
 *Trade-offs:* feed URLs carry a credential in the query string (so reverse-proxy access logs must not record it) because torrent clients cannot send headers; legacy tokens remain valid until revoked or reset.

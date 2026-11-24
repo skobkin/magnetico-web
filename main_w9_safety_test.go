@@ -69,8 +69,8 @@ func w9CheckTarget(dsn, confirm string) error {
 
 // w9CheckDataset reads (never writes) the database and refuses it unless it is a
 // W9 benchmark database: the confirmed name is the connected database, it holds
-// the generated torrent population (multi-file rows are all benchmark-named, and
-// there are enough rows), and every existing web account is a generated identity.
+// the generated torrent population (every multi-file row is named by the W9 seeder
+// (" multi ") or by the harness's own ingest producer (" w9ing ")), and every existing web account is a generated identity.
 func w9CheckDataset(ctx context.Context, dsn, confirm string) error {
 	if err := w9CheckTarget(dsn, confirm); err != nil {
 		return err
@@ -96,7 +96,7 @@ func w9CheckDataset(ctx context.Context, dsn, confirm string) error {
 	}
 	var multi, foreignMulti int64
 	// Exact counts over the multi-file rows only (a small fraction of the table).
-	if err := conn.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE name NOT LIKE '% multi %') FROM magneticod.torrents WHERE file_count > 1`).Scan(&multi, &foreignMulti); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE name NOT LIKE '% multi %' AND name NOT LIKE '% w9ing %') FROM magneticod.torrents WHERE file_count > 1`).Scan(&multi, &foreignMulti); err != nil {
 		return err
 	}
 	if multi == 0 || foreignMulti != 0 {
@@ -189,6 +189,7 @@ func TestW9CheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 
 	exec(`DELETE FROM magneticod.torrents`)
 	exec(`INSERT INTO magneticod.torrents (name, file_count) SELECT '1080p x264 multi small ' || i, 12 FROM generate_series(1, 50) i`)
+	exec(`INSERT INTO magneticod.torrents (name, file_count) VALUES ('1080p ingest w9ing 00000042', 3)`) // the harness's own producer
 	if err := w9CheckDataset(ctx, dsn, name); err != nil {
 		t.Fatalf("refused the benchmark-shaped dataset: %v", err)
 	}
