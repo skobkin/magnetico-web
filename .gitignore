@@ -28,3 +28,4 @@ vendor/
 /.scratch/
 # GoReleaser output
 /dist/
+/.ci/

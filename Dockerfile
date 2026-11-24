@@ -29,7 +29,8 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
       -ldflags "-s -w -X github.com/skobkin/magnetico-web/internal/buildinfo.Version=${VERSION} -X github.com/skobkin/magnetico-web/internal/buildinfo.Commit=${COMMIT}" \
       -o /out/magnetico ./cmd/magnetico \
- && go version -m /out/magnetico | grep -q 'CGO_ENABLED=0'
+ && go version -m /out/magnetico >/tmp/buildinfo.txt \
+ && grep -q 'CGO_ENABLED=0' /tmp/buildinfo.txt
 
 # Native-architecture helper: it only prepares text files and empty directories,
 # so the final stage needs no RUN instruction and building the arm64 image needs

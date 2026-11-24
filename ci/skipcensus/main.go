@@ -38,7 +38,11 @@ type allowEntry struct {
 
 func main() {
 	allowPath := flag.String("allow", "", "allow-list file: test-regexp<TAB>reason-regexp<TAB>why, one per line")
+	failures := flag.Bool("failures", false, "instead of the census, print the output of every failed test and broken package")
 	flag.Parse()
+	if *failures {
+		os.Exit(runFailures(os.Stdin, os.Stdout))
+	}
 	var allowR io.Reader = strings.NewReader("")
 	if *allowPath != "" {
 		f, err := os.Open(*allowPath)
@@ -169,6 +173,45 @@ func run(stream, allowlist io.Reader, out io.Writer) int {
 	if unexpected > 0 {
 		fmt.Fprintln(out, "skipcensus: FAIL: tests were skipped for reasons that are not on the allow-list; a required database or tool may be missing")
 		return 1
+	}
+	return 0
+}
+
+// runFailures prints the captured output of every failed test and of every
+// failed package (build errors), which `go test -json > file` would otherwise
+// hide in the file. It only reports: the exit status of the test run decides.
+func runFailures(stream io.Reader, out io.Writer) int {
+	type key struct{ pkg, test string }
+	outputs := map[key][]string{}
+	var failed []key
+	sc := bufio.NewScanner(stream)
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		var e event
+		if err := json.Unmarshal([]byte(strings.TrimSpace(sc.Text())), &e); err != nil {
+			continue
+		}
+		k := key{e.Package, e.Test}
+		switch e.Action {
+		case "output":
+			outputs[k] = append(outputs[k], strings.TrimRight(e.Output, "\n"))
+		case "fail":
+			failed = append(failed, k)
+		}
+	}
+	for _, k := range failed {
+		if k.test == "" {
+			fmt.Fprintf(out, "FAIL package %s\n", k.pkg)
+		} else {
+			fmt.Fprintf(out, "FAIL %s %s\n", k.pkg, k.test)
+		}
+		lines := outputs[k]
+		if len(lines) > 80 {
+			lines = append(lines[:40:40], append([]string{"    ... (output truncated) ..."}, lines[len(lines)-40:]...)...)
+		}
+		for _, l := range lines {
+			fmt.Fprintf(out, "    %s\n", l)
+		}
 	}
 	return 0
 }

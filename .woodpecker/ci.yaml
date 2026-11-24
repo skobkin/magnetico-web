@@ -1,32 +1,175 @@
-# Placeholder pipeline for the unified Go project (Magnetico 0.8.0).
-# To be adapted properly in a later task; publishing stays disabled until then.
-# Docker publish secrets below are kept for reuse once the Go images are ready.
+# Verification workflow: lint, vet, build, the whole test suite against a disposable
+# PostgreSQL 17, OpenAPI consistency, GoReleaser and Dockerfile checks.
+#
+# It runs for pull requests, pushes to the default branch and to the active 0.8.0
+# development branch, release tags and manual runs. It holds NO secrets, uses NO
+# privileged execution and never touches a registry: pull-request code runs here.
+# Publication lives in release.yaml, which depends on this workflow.
+#
+# Events:
+#   push          master and the 0.8.0 branch only (remove the branch after the 0.8.0
+#                 merge). Every other branch is verified by its pull request alone, so
+#                 a feature branch does not get two pipelines.
+#   pull_request  always, never restricted: merged-state verification is kept (see the
+#                 merge-target step). While a pull request from the 0.8.0 branch is
+#                 open that branch has a push and a pull-request pipeline: the one
+#                 accepted duplication.
+#   tag           release tags only (MAJOR.MINOR.PATCH[-rc.N]).
+#   manual        on demand (also the base of a manual release pre-flight).
 when:
-  - event: [push, tag]
+  - event: push
+    branch:
+      - master
+      - refactor/0.8.0-unify-and-new-storage
+  - event: pull_request
+  - event: manual
+  - event: tag
+    evaluate: 'CI_COMMIT_TAG matches "^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?$"'
+
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      depth: 0
+
+services:
+  # Disposable server of the integration tests. The test harness derives role DSNs
+  # without a password, so the server uses trust authentication; it is reachable only
+  # on the pipeline's private network.
+  - name: postgres
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
 
 steps:
-  build-and-test:
-    image: golang:1.27-alpine
+  # Pull requests: test the merged state (target branch + the pull request), not the
+  # pull request alone. A conflict fails the pipeline. For every other event this
+  # step does nothing. (A private repository needs the clone credentials here too.)
+  - name: merge-target
+    image: alpine/git:v2.54.1
     commands:
-      - go build ./...
-      - go test ./...
+      - |
+        if [ "$CI_PIPELINE_EVENT" != "pull_request" ]; then
+          echo "not a pull request: nothing to merge"
+          exit 0
+        fi
+        git config --global --add safe.directory "$CI_WORKSPACE"
+        git config user.email ci@woodpecker.invalid
+        git config user.name woodpecker
+        git fetch --no-tags origin "$CI_COMMIT_TARGET_BRANCH"
+        git merge --no-edit FETCH_HEAD
+        git log -1 --oneline
 
-  # docker-publish:
-  #   image: woodpeckerci/plugin-docker-buildx:6
-  #   settings:
-  #     # Release builds must resolve the base image from the registry, never from
-  #     # a cached (possibly unpatched) tag
-  #     pull_image: true
-  #     username:
-  #       from_secret: DOCKER_LOGIN
-  #     password:
-  #       from_secret: DOCKER_TOKEN
-  #     repo:
-  #       from_secret: DOCKER_REPO
-  #     dockerfile: Dockerfile
-  #     tags:
-  #       - ${CI_COMMIT_TAG}
-  #       - latest
-  #   when:
-  #     - event: tag
-  #   depends_on: [build-and-test]
+  - name: fmt
+    image: golangci/golangci-lint:v2.15-alpine
+    depends_on: [merge-target]
+    environment:
+      XDG_CACHE_HOME: /tmp/.cache
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      - golangci-lint fmt --diff ./...
+
+  - name: lint
+    image: golangci/golangci-lint:v2.15-alpine
+    depends_on: [merge-target]
+    environment:
+      XDG_CACHE_HOME: /tmp/.cache
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      - golangci-lint run ./...
+
+  - name: vet
+    image: golang:1.27.4-alpine
+    depends_on: [merge-target]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      - go vet ./...
+      # The opt-in code (benchmark harness, diagnostic listener) must stay compilable.
+      - go vet -tags loadtest,diag ./...
+
+  - name: build
+    image: golang:1.27.4-alpine
+    depends_on: [merge-target]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      - CGO_ENABLED=0 go build -trimpath -o /tmp/magnetico ./cmd/magnetico
+      - /tmp/magnetico --version
+
+  - name: wait-postgres
+    image: postgres:17-alpine
+    depends_on: [merge-target]
+    commands:
+      - sh ci/wait-postgres.sh postgres 5432 60
+
+  # The whole suite (unit, PostgreSQL integration, real-binary end-to-end, security
+  # regression, fault injection, fuzz seed corpora). -p 3 is the verified
+  # configuration (docs/engineering-standards.md); at the default parallelism the
+  # timing-sensitive tests of issues #52/#53 are unreliable on a busy host.
+  # MAGNETICO_TEST_REQUIRE_POSTGRES=1 makes an unreachable database a failure, and
+  # skipcensus fails the run when any test was skipped for a reason that is not on
+  # ci/skip-allowlist.txt: a green run cannot be a run of silently skipped tests.
+  - name: test
+    image: golang:1.27.4-alpine
+    depends_on: [wait-postgres]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
+    commands:
+      - |
+        go test -p 3 -count=1 -json ./... > /tmp/test.json || {
+          echo "go test failed; failures:"
+          go run ./ci/skipcensus --failures < /tmp/test.json
+          exit 1
+        }
+      - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/test.json
+
+  # The OpenAPI documents are validated by the existing tests (the document itself,
+  # and the real binary's responses against it); named separately for visibility.
+  - name: openapi
+    image: golang:1.27.4-alpine
+    depends_on: [wait-postgres]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
+    commands:
+      - go test -count=1 ./internal/web/apidocs/...
+      - go test -count=1 -run OpenAPI ./internal/e2e/cli
+
+  # A snapshot build of the native archives (no tag, no upload, no secrets). The
+  # GoReleaser image ships Go 1.27.3 with GOTOOLCHAIN=local, which would silently
+  # ignore go.mod's toolchain line: the floor is enforced explicitly.
+  - name: release-dry-run
+    image: goreleaser/goreleaser:v2.20.1
+    depends_on: [merge-target]
+    environment:
+      GOTOOLCHAIN: go1.27.4+auto
+    commands:
+      - goreleaser check
+      - goreleaser release --snapshot --clean --skip=publish
+      - (cd dist && sha256sum -c checksums.txt)
+
+  - name: dockerfile-lint
+    image: hadolint/hadolint:v2.14.0-alpine
+    depends_on: [merge-target]
+    commands:
+      - hadolint Dockerfile
+
+  # The workflow files' own security invariants and the CI tools' tests.
+  - name: workflow-invariants
+    image: golang:1.27.4-alpine
+    depends_on: [merge-target]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      - go test -count=1 ./internal/repocheck ./ci/...

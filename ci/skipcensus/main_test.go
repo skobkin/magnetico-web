@@ -117,3 +117,29 @@ func TestSummaryCountsAndStaleAllowEntries(t *testing.T) {
 	}
 	_ = code
 }
+
+func TestFailuresFlagPrintsTheOutputOfFailedTestsAndBrokenPackages(t *testing.T) {
+	stream := ev("run", "p", "TestBroken", "") +
+		ev("output", "p", "TestBroken", "=== RUN   TestBroken\n") +
+		ev("output", "p", "TestBroken", "    thing_test.go:42: got 1, want 2\n") +
+		ev("output", "p", "TestBroken", "--- FAIL: TestBroken (0.00s)\n") +
+		ev("fail", "p", "TestBroken", "") +
+		ev("output", "q", "", "# q [q.test]\n") +
+		ev("output", "q", "", "q/x.go:3:1: undefined: y\n") +
+		ev("fail", "q", "", "") +
+		ev("pass", "p", "TestFine", "")
+	var out bytes.Buffer
+	code := runFailures(strings.NewReader(stream), &out)
+	got := out.String()
+	for _, want := range []string{"FAIL p TestBroken", "got 1, want 2", "FAIL package q", "undefined: y"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "TestFine") {
+		t.Errorf("a passing test must not be listed:\n%s", got)
+	}
+	if code != 0 {
+		t.Errorf("--failures only reports; the exit status of the run decides (got %d)", code)
+	}
+}
