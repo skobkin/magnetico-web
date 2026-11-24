@@ -1,0 +1,37 @@
+# Trivy scan of the locally built multi-platform OCI image (Task 08)
+# image: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb   input: OCI layout directory of the build (index sha256:0db622202d0b…)   flags: --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --scanners vuln
+
+## linux/amd64
+Unable to find image 'aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb' locally
+44136fa355b3: Already exists
+7b229517ed22: Pull complete
+9f087194f4fe: Pull complete
+d7953b8bb0ca: Pull complete
+ac09fd37397a: Pull complete
+Digest: sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+Report Summary
+┌─────────────────────────┬──────────┬─────────────────┐
+│         Target          │   Type   │ Vulnerabilities │
+├─────────────────────────┼──────────┼─────────────────┤
+│ /in (alpine 3.24.4)     │  alpine  │        0        │
+├─────────────────────────┼──────────┼─────────────────┤
+│ usr/local/bin/magnetico │ gobinary │        0        │
+└─────────────────────────┴──────────┴─────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+trivy exit: 0
+
+## linux/arm64
+Report Summary
+┌─────────────────────────┬──────────┬─────────────────┐
+│         Target          │   Type   │ Vulnerabilities │
+├─────────────────────────┼──────────┼─────────────────┤
+│ /in (alpine 3.24.4)     │  alpine  │        0        │
+├─────────────────────────┼──────────┼─────────────────┤
+│ usr/local/bin/magnetico │ gobinary │        0        │
+└─────────────────────────┴──────────┴─────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+trivy exit: 0

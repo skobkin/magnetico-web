@@ -52,7 +52,14 @@ cleanup() {
 trap cleanup EXIT
 
 echo "== image metadata ($IMAGE)"
-insp() { docker image inspect --format "$1" "$IMAGE"; }
+# A reference that is not local yet (a digest in a registry) is pulled first, for
+# the requested platform: `docker image inspect` does not pull.
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+	# shellcheck disable=SC2086
+	docker pull $PLAT_FLAG --quiet "$IMAGE" >/dev/null || fail "cannot pull $IMAGE"
+fi
+# shellcheck disable=SC2086
+insp() { docker image inspect $PLAT_FLAG --format "$1" "$IMAGE"; }
 [ "$(insp '{{.Config.User}}')" = "10001:10001" ] && pass "runs as 10001:10001" || fail "user is $(insp '{{.Config.User}}'), want 10001:10001"
 [ "$(insp '{{json .Config.Entrypoint}}')" = '["/usr/local/bin/magnetico"]' ] && pass "exec-form entrypoint" || fail "entrypoint is $(insp '{{json .Config.Entrypoint}}')"
 [ "$(insp '{{json .Config.Cmd}}')" = "null" ] && pass "no default command" || fail "a default command is set: $(insp '{{json .Config.Cmd}}')"

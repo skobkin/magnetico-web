@@ -1,0 +1,266 @@
+# Release workflow: the gates, the single build that is qualified, and publication.
+#
+# Runs for release tags (MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N) and for manual
+# pre-flight runs. A manual run executes ci.yaml and every gate and publishes
+# nothing: all publication steps below are tag-only.
+#
+# Publication needs, in this order:
+#   1. the verification workflow (ci.yaml) of the SAME commit has succeeded:
+#      `depends_on: [ci]` below, and require-verification (ci/ciguard) which asks the
+#      forge for the commit statuses of exactly CI_COMMIT_SHA and refuses anything
+#      else: a failed, never-run, filtered-out or foreign verification, or a pending
+#      one after the timeout;
+#   2. the gates: the race-enabled test suite, govulncheck, the container smoke test
+#      and the image scan on the image, the native artifact smoke test;
+#   3. publication of exactly what the gates qualified:
+#        image     built ONCE by image-build into an OCI layout (.ci/image), smoke-tested
+#                  and scanned there, and pushed UNCHANGED to both registries by
+#                  ci/promote-image.sh (crane push of that layout: same digest);
+#        archives  built by native-build, qualified, and uploaded by release-forgejo
+#                  (GoReleaser rebuilds; the build is reproducible, and verify-native
+#                  requires the published checksums.txt to equal the qualified one).
+#   4. read-only verification of what was published.
+#
+# Secrets (Woodpecker, restricted to the tag event and this repository on the server;
+# see docs/release-engineering.md): DOCKER_LOGIN, DOCKER_TOKEN, GHCR_LOGIN, GHCR_TOKEN
+# (promote-image only) and GITEA_TOKEN (release-forgejo only). No registry cache is
+# configured anywhere. latest is never applied; the owner enables it deliberately
+# (see the commented entry in the promotion step).
+when:
+  - event: tag
+    evaluate: 'CI_COMMIT_TAG matches "^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?$"'
+  - event: manual
+
+depends_on:
+  - ci
+
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      depth: 0
+
+services:
+  - name: postgres
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+  # Docker daemon for the smoke tests (they run the image). Privileged: the repository
+  # must be trusted for this workflow; it exists in this workflow only, never in the
+  # pull-request one.
+  - name: dind
+    image: docker:29-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+
+steps:
+  # ---- the second line of defence behind `depends_on: [ci]` ----
+  - name: require-verification
+    image: golang:1.27.4-alpine
+    when:
+      - event: tag
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      # The status context Woodpecker posts for the ci workflow of a tag pipeline
+      # (WOODPECKER_STATUS_CONTEXT_FORMAT default: <context>/<event>/<workflow>). An
+      # operator who changes the format breaks this guard closed: nothing publishes.
+      - go run ./ci/ciguard require-verification --context ci/woodpecker/tag/ci
+
+  # ---- gates ----
+  - name: wait-postgres
+    image: postgres:17-alpine
+    commands:
+      - sh ci/wait-postgres.sh postgres 5432 60
+
+  - name: race
+    image: golang:1.27.4-trixie
+    depends_on: [wait-postgres]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
+    commands:
+      - |
+        go test -race -p 3 -count=1 -json ./... > /tmp/race.json || {
+          echo "go test -race failed; failures:"
+          go run ./ci/skipcensus --failures < /tmp/race.json
+          exit 1
+        }
+      - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/race.json
+
+  - name: govulncheck
+    image: golang:1.27.4-alpine
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      GOTOOLCHAIN: local
+    commands:
+      # Pinned checker, run by the toolchain of the step (a checker built by an
+      # older Go cannot analyse this code).
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags loadtest,diag ./...
+
+  # The ONLY image build. dry_run + an OCI layout output: nothing is pushed (the
+  # repository is a non-routable .invalid name), the result is the directory
+  # .ci/image: one index holding linux/amd64, linux/arm64 and their attestations.
+  # Every later step reads that directory. The plugin needs privileged execution
+  # (its own Docker daemon): the server must list woodpeckerci/plugin-docker-buildx:6
+  # in WOODPECKER_PLUGINS_PRIVILEGED. Its automatic labels are off: they would
+  # replace the Dockerfile's org.opencontainers.image.source (the GitHub mirror, which
+  # links the GHCR package to the repository) with the Forgejo URL.
+  - name: image-build
+    image: woodpeckerci/plugin-docker-buildx:6
+    privileged: true
+    settings:
+      dry_run: true
+      repo: staged.invalid/magnetico-web
+      tags:
+        - staged
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
+      pull_image: true
+      default_labels: false
+      sbom: true
+      provenance: mode=max
+      build_args:
+        - VERSION=${CI_COMMIT_TAG=0.0.0-manual}
+        - COMMIT=${CI_COMMIT_SHA}
+      output: type=oci,tar=false,dest=${CI_WORKSPACE}/.ci/image,name=staged.invalid/magnetico-web:staged
+
+  - name: image-smoke
+    image: docker:29-cli
+    depends_on: [image-build]
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      PG_IMAGE: postgres:17-alpine
+    commands:
+      - |
+        n=0
+        until docker info >/dev/null 2>&1; do
+          n=$((n + 1))
+          [ "$n" -lt 60 ] || { echo "the Docker daemon service did not come up"; exit 1; }
+          sleep 1
+        done
+      - tar -C .ci/image -cf - . | docker load
+      - sh ci/image-smoke.sh --platform linux/amd64 staged.invalid/magnetico-web:staged
+
+  # arm64 is built and scanned here but not executed: the agents are assumed to have
+  # no emulation (the build itself needs none).
+  - name: image-scan
+    image: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+    depends_on: [image-build]
+    commands:
+      - |
+        for platform in linux/amd64 linux/arm64; do
+          trivy image --input .ci/image --platform "$platform" --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --scanners vuln --skip-version-check
+        done
+
+  # The native archives. A tag builds the release; a manual run builds a snapshot.
+  - name: native-build
+    image: goreleaser/goreleaser:v2.20.1
+    environment:
+      # The image ships Go 1.27.3 with GOTOOLCHAIN=local, which silently ignores
+      # go.mod's toolchain line: the security floor is enforced explicitly.
+      GOTOOLCHAIN: go1.27.4+auto
+    commands:
+      - mkdir -p .ci
+      - |
+        if [ -n "$CI_COMMIT_TAG" ]; then
+          goreleaser release --clean --skip=publish
+        else
+          goreleaser release --snapshot --clean --skip=publish
+        fi
+      - cp dist/checksums.txt .ci/qualified-checksums.txt
+
+  - name: native-smoke
+    image: golang:1.27.4-alpine
+    depends_on: [native-build]
+    environment:
+      GOFLAGS: -buildvcs=false
+    commands:
+      - sh ci/native-smoke.sh dist ${CI_COMMIT_TAG}
+
+  # ---- publication (tag events only; secrets only here) ----
+  - name: promote-image
+    image: golang:1.27.4-alpine
+    when:
+      - event: tag
+    depends_on: [require-verification, race, govulncheck, image-smoke, image-scan, native-smoke]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      DOCKER_LOGIN:
+        from_secret: DOCKER_LOGIN
+      DOCKER_TOKEN:
+        from_secret: DOCKER_TOKEN
+      GHCR_LOGIN:
+        from_secret: GHCR_LOGIN
+      GHCR_TOKEN:
+        from_secret: GHCR_TOKEN
+    commands:
+      # Pushes the qualified layout, unchanged, to docker.io/skobkin/magnetico-web and
+      # ghcr.io/skobkin/magnetico-web under exactly the release tag, and fails unless
+      # both report the qualified digest. Intentionally disabled for every release until
+      # the owner explicitly enables it (planned around the stable 0.8.0 or 0.8.1
+      # release): a second, floating tag. Enabling it means promoting the same layout
+      # under that tag and updating internal/repocheck deliberately.
+      # - latest
+      - sh ci/promote-image.sh .ci/image "$CI_COMMIT_TAG"
+
+  - name: release-forgejo
+    image: goreleaser/goreleaser:v2.20.1
+    when:
+      - event: tag
+    depends_on: [require-verification, race, govulncheck, image-smoke, image-scan, native-smoke]
+    environment:
+      GOTOOLCHAIN: go1.27.4+auto
+      GORELEASER_FORCE_TOKEN: gitea
+      GITEA_TOKEN:
+        from_secret: GITEA_TOKEN
+    commands:
+      - test -n "$CI_FORGE_URL" || (echo "CI_FORGE_URL is empty. Cannot derive Forgejo URLs for GoReleaser." && exit 1)
+      - goreleaser release --clean
+
+  # ---- read-only verification of what was published (no secrets) ----
+  - name: verify-published
+    image: golang:1.27.4-alpine
+    when:
+      - event: tag
+    depends_on: [promote-image]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+    commands:
+      - sh ci/verify-published.sh "$(grep -Eo 'sha256:[0-9a-f]{64}' .ci/image/index.json | head -n 1)" "$CI_COMMIT_TAG"
+
+  - name: verify-published-smoke
+    image: docker:29-cli
+    when:
+      - event: tag
+    depends_on: [verify-published]
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      PG_IMAGE: postgres:17-alpine
+    commands:
+      - |
+        n=0
+        until docker info >/dev/null 2>&1; do
+          n=$((n + 1))
+          [ "$n" -lt 60 ] || { echo "the Docker daemon service did not come up"; exit 1; }
+          sleep 1
+        done
+      - sh ci/image-smoke.sh --platform linux/amd64 "docker.io/skobkin/magnetico-web@$(grep -Eo 'sha256:[0-9a-f]{64}' .ci/image/index.json | head -n 1)"
+
+  - name: verify-native
+    image: golang:1.27.4-alpine
+    when:
+      - event: tag
+    depends_on: [release-forgejo]
+    commands:
+      - sh ci/verify-native.sh "$CI_COMMIT_TAG" .ci/qualified-checksums.txt

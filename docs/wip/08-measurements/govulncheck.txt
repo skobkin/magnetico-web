@@ -1,0 +1,6 @@
+# govulncheck on the Task 08 tree (commit 3cdd08b9 + working changes), 2026-11-24
+$ GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+No vulnerabilities found.
+
+$ ... -tags loadtest,diag ./...   (the opt-in code)
+No vulnerabilities found.
