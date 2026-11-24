@@ -1,0 +1,37 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- cold ----
+Limit  (cost=1.00..14.57 rows=51 width=63) (actual time=9.173..9.178 rows=51 loops=1)
+  Buffers: shared hit=112 read=302
+  ->  Incremental Sort  (cost=1.00..291478.28 rows=1095898 width=63) (actual time=9.172..9.174 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 34kB  Peak Memory: 34kB
+        Buffers: shared hit=112 read=302
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..261686.85 rows=1095898 width=63) (actual time=0.035..8.868 rows=3823 loops=1)
+              Filter: (name ~~* '%1080p%'::text)
+              Rows Removed by Filter: 16104
+              Buffers: shared hit=105 read=300
+Planning:
+  Buffers: shared hit=157 read=34 dirtied=1
+Planning Time: 1.221 ms
+Execution Time: 9.207 ms
+
+---- warm3 ----
+Limit  (cost=1.00..14.57 rows=51 width=63) (actual time=7.506..7.511 rows=51 loops=1)
+  Buffers: shared hit=414
+  ->  Incremental Sort  (cost=1.00..291478.28 rows=1095898 width=63) (actual time=7.505..7.507 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 34kB  Peak Memory: 34kB
+        Buffers: shared hit=414
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..261686.85 rows=1095898 width=63) (actual time=0.012..7.204 rows=3823 loops=1)
+              Filter: (name ~~* '%1080p%'::text)
+              Rows Removed by Filter: 16104
+              Buffers: shared hit=405
+Planning:
+  Buffers: shared hit=196
+Planning Time: 0.712 ms
+Execution Time: 7.538 ms

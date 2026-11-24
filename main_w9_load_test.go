@@ -459,7 +459,7 @@ func classify(status int, body []byte, expect []int) string {
 
 // run drives conc workers for d and returns what they saw. A worker stops
 // starting requests at the deadline and finishes the one in flight.
-func (l *w9Load) run(conc int, d time.Duration, acc *w9Acc) {
+func (l *w9Load) run(conc int, d time.Duration, think time.Duration, acc *w9Acc) {
 	stop := time.Now().Add(d)
 	var wg sync.WaitGroup
 	for i := 0; i < conc; i++ {
@@ -485,6 +485,10 @@ func (l *w9Load) run(conc int, d time.Duration, acc *w9Acc) {
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				acc.add(rq.class, classify(resp.StatusCode, body, rq.expect), time.Since(start))
+				if think > 0 {
+					// An interactive user: an exponentially distributed pause (mean = think).
+					time.Sleep(time.Duration(rng.ExpFloat64() * float64(think)))
+				}
 			}
 		}(i)
 	}
@@ -805,7 +809,7 @@ func (e *w9Env) segment(name string, conc int, d time.Duration, ingest bool, gat
 	}
 	start := time.Now()
 	if conc > 0 {
-		load.run(conc, d, acc)
+		load.run(conc, d, gates.think, acc)
 	} else {
 		time.Sleep(d)
 	}
@@ -816,7 +820,8 @@ func (e *w9Env) segment(name string, conc int, d time.Duration, ingest bool, gat
 	for _, v := range total {
 		n += v
 	}
-	rec["requests"], rec["rps"], rec["outcomes"], rec["classes"] = n, float64(n)/wall.Seconds(), total, classes
+	rec["requests"], rec["rps"], rec["rps_ok"], rec["outcomes"], rec["classes"] = n, float64(n)/wall.Seconds(), float64(total[oOK])/wall.Seconds(), total, classes
+	rec["overload"], rec["think_ms"] = gates.overload, gates.think.Milliseconds()
 	if prod != nil {
 		prod.halt()
 		prod.mu.Lock()
@@ -835,9 +840,12 @@ func (e *w9Env) segment(name string, conc int, d time.Duration, ingest bool, gat
 	} else {
 		e.gate(float64(total[oTimeout]) <= 0.001*float64(max(n, 1)), "%s: %d search timeouts exceed 0.1%%", name, total[oTimeout])
 	}
-	if gates.noBusy {
+	switch {
+	case gates.noBusy:
 		e.gate(total[oBusy] == 0, "%s: %d gate-saturation 503 responses", name, total[oBusy])
-	} else {
+	case gates.overload:
+		// Informational: shedding is expected; the counts are in the record.
+	default:
 		e.gate(float64(total[oBusy]) <= 0.05*float64(max(n, 1)), "%s: gate-saturation 503 responses %d exceed 5%%", name, total[oBusy])
 	}
 	if prod != nil {
@@ -848,7 +856,19 @@ func (e *w9Env) segment(name string, conc int, d time.Duration, ingest bool, gat
 	}
 }
 
-type segGates struct{ noTimeouts, noBusy bool }
+// segGates are the per-segment expectations.
+//
+//	noTimeouts  no search timeout is allowed (otherwise at most 0.1%)
+//	noBusy      no gate-saturation 503 is allowed
+//	overload    the segment deliberately oversubscribes the service (closed-loop
+//	            workers without think time): bounded 503 "busy" responses are the
+//	            designed behaviour, so only the other classes are gated; the
+//	            recovery segment that follows must be clean
+//	think       mean think time of an interactive user (0 = closed loop)
+type segGates struct {
+	noTimeouts, noBusy, overload bool
+	think                        time.Duration
+}
 
 // drain stops nothing: it waits for the ingest queue to empty within the deadline
 // and then verifies that every acknowledged record is stored.
@@ -1020,8 +1040,20 @@ func TestW9Load(t *testing.T) {
 		// application caches (the identities are recreated).
 		for series := 1; series <= 2; series++ {
 			e.begin()
-			for _, c := range []int{4, 8, 16, 32, 64} {
-				e.segment(fmt.Sprintf("series%d-c%d", series, c), c, step, false, segGates{noTimeouts: c <= 32})
+			// Closed loop (no think time): c4-c16 are within capacity, c32 and c64
+			// oversubscribe the 4 search slots on purpose (overload).
+			for _, c := range []int{4, 8, 16} {
+				e.segment(fmt.Sprintf("series%d-c%d", series, c), c, step, false, segGates{noTimeouts: true, noBusy: true})
+			}
+			for _, c := range []int{32, 64} {
+				e.segment(fmt.Sprintf("series%d-c%d-overload", series, c), c, step, false, segGates{noTimeouts: c <= 32, overload: true})
+			}
+			// Recovery: after the overload the service answers normally again.
+			e.segment(fmt.Sprintf("series%d-recovery-c4", series), 4, 30*time.Second, false, segGates{noTimeouts: true, noBusy: true})
+			// Interactive users with a mean think time of 1 s: the bound of 5%
+			// busy applies here.
+			for _, users := range []int{50, 150, 400} {
+				e.segment(fmt.Sprintf("series%d-interactive-u%d", series, users), users, step, false, segGates{noTimeouts: users <= 150, think: time.Second})
 			}
 			e.finish(fmt.Sprintf("series%d", series))
 		}

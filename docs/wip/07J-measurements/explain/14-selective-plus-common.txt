@@ -1,0 +1,39 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%w123456%' AND name ILIKE '%1080p%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- cold ----
+Limit  (cost=891.60..891.72 rows=51 width=63) (actual time=3.633..3.637 rows=5 loops=1)
+  Buffers: shared hit=117 read=132
+  ->  Sort  (cost=891.60..891.87 rows=110 width=63) (actual time=3.632..3.636 rows=5 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=117 read=132
+        ->  Bitmap Heap Scan on torrents  (cost=462.93..887.93 rows=110 width=63) (actual time=3.582..3.614 rows=5 loops=1)
+              Recheck Cond: ((name ~~* '%w123456%'::text) AND (name ~~* '%1080p%'::text))
+              Heap Blocks: exact=5
+              Buffers: shared hit=111 read=132
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..462.90 rows=110 width=0) (actual time=3.564..3.564 rows=5 loops=1)
+                    Index Cond: ((name ~~* '%w123456%'::text) AND (name ~~* '%1080p%'::text))
+                    Buffers: shared hit=111 read=127
+Planning:
+  Buffers: shared hit=157 read=34
+Planning Time: 0.896 ms
+Execution Time: 3.696 ms
+
+---- warm3 ----
+Limit  (cost=891.60..891.72 rows=51 width=63) (actual time=2.769..2.770 rows=5 loops=1)
+  Buffers: shared hit=249
+  ->  Sort  (cost=891.60..891.87 rows=110 width=63) (actual time=2.768..2.769 rows=5 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=249
+        ->  Bitmap Heap Scan on torrents  (cost=462.93..887.93 rows=110 width=63) (actual time=2.737..2.743 rows=5 loops=1)
+              Recheck Cond: ((name ~~* '%w123456%'::text) AND (name ~~* '%1080p%'::text))
+              Heap Blocks: exact=5
+              Buffers: shared hit=243
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..462.90 rows=110 width=0) (actual time=2.729..2.729 rows=5 loops=1)
+                    Index Cond: ((name ~~* '%w123456%'::text) AND (name ~~* '%1080p%'::text))
+                    Buffers: shared hit=238
+Planning:
+  Buffers: shared hit=196
+Planning Time: 0.679 ms
+Execution Time: 2.819 ms

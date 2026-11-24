@@ -1,0 +1,51 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' ORDER BY name ASC, id ASC LIMIT 51
+
+---- cold ----
+Limit  (cost=72584.29..72590.24 rows=51 width=63) (actual time=358.761..366.019 rows=51 loops=1)
+  Buffers: shared hit=310 read=43786
+  ->  Gather Merge  (cost=72584.29..179137.32 rows=913248 width=63) (actual time=358.759..366.013 rows=51 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=310 read=43786
+        ->  Sort  (cost=71584.26..72725.82 rows=456624 width=63) (actual time=356.365..356.367 rows=40 loops=3)
+              Sort Key: name, id
+              Sort Method: top-N heapsort  Memory: 36kB
+              Buffers: shared hit=310 read=43786
+              Worker 0:  Sort Method: top-N heapsort  Memory: 36kB
+              Worker 1:  Sort Method: top-N heapsort  Memory: 36kB
+              ->  Parallel Bitmap Heap Scan on torrents  (cost=7450.51..56350.31 rows=456624 width=63) (actual time=85.380..309.205 rows=374943 loops=3)
+                    Recheck Cond: (name ~~* '%1080p%'::text)
+                    Heap Blocks: exact=14631
+                    Buffers: shared hit=280 read=43786
+                    ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..7176.54 rows=1095898 width=0) (actual time=83.282..83.282 rows=1124830 loops=1)
+                          Index Cond: (name ~~* '%1080p%'::text)
+                          Buffers: shared hit=280 read=594
+Planning:
+  Buffers: shared hit=171 read=33
+Planning Time: 0.841 ms
+Execution Time: 366.114 ms
+
+---- warm3 ----
+Limit  (cost=72584.29..72590.24 rows=51 width=63) (actual time=307.823..316.329 rows=51 loops=1)
+  Buffers: shared hit=44096
+  ->  Gather Merge  (cost=72584.29..179137.32 rows=913248 width=63) (actual time=307.821..316.324 rows=51 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=44096
+        ->  Sort  (cost=71584.26..72725.82 rows=456624 width=63) (actual time=305.502..305.504 rows=40 loops=3)
+              Sort Key: name, id
+              Sort Method: top-N heapsort  Memory: 36kB
+              Buffers: shared hit=44096
+              Worker 0:  Sort Method: top-N heapsort  Memory: 36kB
+              Worker 1:  Sort Method: top-N heapsort  Memory: 36kB
+              ->  Parallel Bitmap Heap Scan on torrents  (cost=7450.51..56350.31 rows=456624 width=63) (actual time=84.055..258.322 rows=374943 loops=3)
+                    Recheck Cond: (name ~~* '%1080p%'::text)
+                    Heap Blocks: exact=14313
+                    Buffers: shared hit=44066
+                    ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..7176.54 rows=1095898 width=0) (actual time=81.990..81.991 rows=1124830 loops=1)
+                          Index Cond: (name ~~* '%1080p%'::text)
+                          Buffers: shared hit=874
+Planning:
+  Buffers: shared hit=209
+Planning Time: 0.960 ms
+Execution Time: 316.439 ms

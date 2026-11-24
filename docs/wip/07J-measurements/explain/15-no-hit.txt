@@ -1,0 +1,37 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%zzqxj%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- cold ----
+Limit  (cost=1494.70..1494.82 rows=51 width=63) (actual time=0.053..0.053 rows=0 loops=1)
+  Buffers: shared hit=12 read=4
+  ->  Sort  (cost=1494.70..1495.57 rows=350 width=63) (actual time=0.052..0.052 rows=0 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=12 read=4
+        ->  Bitmap Heap Scan on torrents  (cost=176.76..1483.02 rows=350 width=63) (actual time=0.032..0.033 rows=0 loops=1)
+              Recheck Cond: (name ~~* '%zzqxj%'::text)
+              Buffers: shared hit=6 read=4
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..176.67 rows=350 width=0) (actual time=0.030..0.031 rows=0 loops=1)
+                    Index Cond: (name ~~* '%zzqxj%'::text)
+                    Buffers: shared hit=6 read=4
+Planning:
+  Buffers: shared hit=157 read=34
+Planning Time: 0.856 ms
+Execution Time: 0.111 ms
+
+---- warm3 ----
+Limit  (cost=1494.70..1494.82 rows=51 width=63) (actual time=0.029..0.030 rows=0 loops=1)
+  Buffers: shared hit=16
+  ->  Sort  (cost=1494.70..1495.57 rows=350 width=63) (actual time=0.028..0.029 rows=0 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=16
+        ->  Bitmap Heap Scan on torrents  (cost=176.76..1483.02 rows=350 width=63) (actual time=0.009..0.010 rows=0 loops=1)
+              Recheck Cond: (name ~~* '%zzqxj%'::text)
+              Buffers: shared hit=10
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..176.67 rows=350 width=0) (actual time=0.007..0.007 rows=0 loops=1)
+                    Index Cond: (name ~~* '%zzqxj%'::text)
+                    Buffers: shared hit=10
+Planning:
+  Buffers: shared hit=196
+Planning Time: 0.681 ms
+Execution Time: 0.081 ms

@@ -1,0 +1,39 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%w123456%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- cold ----
+Limit  (cost=1611.31..1611.44 rows=51 width=63) (actual time=3.087..3.090 rows=14 loops=1)
+  Buffers: shared hit=69 read=90
+  ->  Sort  (cost=1611.31..1612.19 rows=350 width=63) (actual time=3.086..3.087 rows=14 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 26kB
+        Buffers: shared hit=69 read=90
+        ->  Bitmap Heap Scan on torrents  (cost=293.37..1599.64 rows=350 width=63) (actual time=2.959..3.062 rows=14 loops=1)
+              Recheck Cond: (name ~~* '%w123456%'::text)
+              Heap Blocks: exact=14
+              Buffers: shared hit=63 read=90
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..293.29 rows=350 width=0) (actual time=2.930..2.931 rows=14 loops=1)
+                    Index Cond: (name ~~* '%w123456%'::text)
+                    Buffers: shared hit=63 read=76
+Planning:
+  Buffers: shared hit=157 read=34
+Planning Time: 0.910 ms
+Execution Time: 3.153 ms
+
+---- warm3 ----
+Limit  (cost=1611.31..1611.44 rows=51 width=63) (actual time=2.212..2.214 rows=14 loops=1)
+  Buffers: shared hit=159
+  ->  Sort  (cost=1611.31..1612.19 rows=350 width=63) (actual time=2.211..2.212 rows=14 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 26kB
+        Buffers: shared hit=159
+        ->  Bitmap Heap Scan on torrents  (cost=293.37..1599.64 rows=350 width=63) (actual time=2.167..2.186 rows=14 loops=1)
+              Recheck Cond: (name ~~* '%w123456%'::text)
+              Heap Blocks: exact=14
+              Buffers: shared hit=153
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..293.29 rows=350 width=0) (actual time=2.160..2.160 rows=14 loops=1)
+                    Index Cond: (name ~~* '%w123456%'::text)
+                    Buffers: shared hit=139
+Planning:
+  Buffers: shared hit=196
+Planning Time: 0.674 ms
+Execution Time: 2.282 ms

@@ -1,0 +1,37 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' AND name ILIKE '%x264%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- cold ----
+Limit  (cost=6.78..320.49 rows=51 width=63) (actual time=1952.190..1952.195 rows=51 loops=1)
+  Buffers: shared hit=3444083 read=50097
+  ->  Incremental Sort  (cost=6.78..272372.39 rows=44279 width=63) (actual time=1952.188..1952.191 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=3444083 read=50097
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..270436.36 rows=44279 width=63) (actual time=0.113..1952.089 rows=391 loops=1)
+              Filter: ((name ~~* '%1080p%'::text) AND (name ~~* '%x264%'::text))
+              Rows Removed by Filter: 3499533
+              Buffers: shared hit=3444076 read=50095
+Planning:
+  Buffers: shared hit=157 read=34
+Planning Time: 0.885 ms
+Execution Time: 1952.220 ms
+
+---- warm3 ----
+Limit  (cost=6.78..320.49 rows=51 width=63) (actual time=1772.219..1772.225 rows=51 loops=1)
+  Buffers: shared hit=3494180
+  ->  Incremental Sort  (cost=6.78..272372.39 rows=44279 width=63) (actual time=1772.217..1772.220 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=3494180
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..270436.36 rows=44279 width=63) (actual time=0.079..1772.133 rows=391 loops=1)
+              Filter: ((name ~~* '%1080p%'::text) AND (name ~~* '%x264%'::text))
+              Rows Removed by Filter: 3499533
+              Buffers: shared hit=3494171
+Planning:
+  Buffers: shared hit=196
+Planning Time: 0.699 ms
+Execution Time: 1772.251 ms

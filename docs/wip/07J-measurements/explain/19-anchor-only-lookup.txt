@@ -1,0 +1,19 @@
+SELECT discovered_on FROM magneticod.torrents WHERE id = 1750000
+
+---- cold ----
+Index Scan using torrents_pkey on torrents  (cost=0.43..8.45 rows=1 width=8) (actual time=0.028..0.028 rows=1 loops=1)
+  Index Cond: (id = 1750000)
+  Buffers: shared read=4
+Planning:
+  Buffers: shared hit=100 read=26
+Planning Time: 0.392 ms
+Execution Time: 0.053 ms
+
+---- warm3 ----
+Index Scan using torrents_pkey on torrents  (cost=0.43..8.45 rows=1 width=8) (actual time=0.013..0.014 rows=1 loops=1)
+  Index Cond: (id = 1750000)
+  Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=131
+Planning Time: 0.335 ms
+Execution Time: 0.044 ms

@@ -1,0 +1,21 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents ORDER BY id DESC LIMIT 1000 OFFSET 9000
+
+---- cold ----
+Limit  (cost=345.25..383.56 rows=1000 width=63) (actual time=1.967..2.423 rows=1000 loops=1)
+  Buffers: shared hit=27 read=170
+  ->  Index Scan Backward using torrents_pkey on torrents  (cost=0.43..134088.47 rows=3499803 width=63) (actual time=0.032..2.126 rows=10000 loops=1)
+        Buffers: shared hit=27 read=170
+Planning:
+  Buffers: shared hit=149 read=29
+Planning Time: 0.486 ms
+Execution Time: 2.472 ms
+
+---- warm3 ----
+Limit  (cost=345.25..383.56 rows=1000 width=63) (actual time=0.923..1.043 rows=1000 loops=1)
+  Buffers: shared hit=197
+  ->  Index Scan Backward using torrents_pkey on torrents  (cost=0.43..134088.47 rows=3499803 width=63) (actual time=0.012..0.779 rows=10000 loops=1)
+        Buffers: shared hit=197
+Planning:
+  Buffers: shared hit=183
+Planning Time: 0.326 ms
+Execution Time: 1.084 ms

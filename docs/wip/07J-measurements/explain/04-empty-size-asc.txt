@@ -1,0 +1,33 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents ORDER BY total_size ASC, id ASC LIMIT 51
+
+---- cold ----
+Limit  (cost=0.54..6.43 rows=51 width=63) (actual time=18.495..18.500 rows=51 loops=1)
+  Buffers: shared hit=6 read=2887
+  ->  Incremental Sort  (cost=0.54..403798.98 rows=3499803 width=63) (actual time=18.494..18.496 rows=51 loops=1)
+        Sort Key: total_size, id
+        Presorted Key: total_size
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=6 read=2887
+        ->  Index Scan using idx_torrents_total_size on torrents  (cost=0.43..273959.84 rows=3499803 width=63) (actual time=0.032..18.133 rows=2976 loops=1)
+              Buffers: shared read=2883
+Planning:
+  Buffers: shared hit=151 read=29
+Planning Time: 0.472 ms
+Execution Time: 18.522 ms
+
+---- warm3 ----
+Limit  (cost=0.54..6.43 rows=51 width=63) (actual time=3.507..3.512 rows=51 loops=1)
+  Buffers: shared hit=2893
+  ->  Incremental Sort  (cost=0.54..403798.98 rows=3499803 width=63) (actual time=3.506..3.508 rows=51 loops=1)
+        Sort Key: total_size, id
+        Presorted Key: total_size
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 33kB  Peak Memory: 33kB
+        Pre-sorted Groups: 1  Sort Method: top-N heapsort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=2893
+        ->  Index Scan using idx_torrents_total_size on torrents  (cost=0.43..273959.84 rows=3499803 width=63) (actual time=0.015..3.226 rows=2976 loops=1)
+              Buffers: shared hit=2883
+Planning:
+  Buffers: shared hit=185
+Planning Time: 0.326 ms
+Execution Time: 3.537 ms
