@@ -5,7 +5,7 @@ This repository is a unified Go implementation of
 **0.8.0** milestone: one Go codebase with a single CLI providing separate
 `crawl`, `web` and `migrate` commands, PostgreSQL as the only storage backend,
 a compact versioned torrent file-list storage format, and a private,
-authenticated web UI to be implemented later.
+authenticated web UI (implemented; see below).
 
 > **Status: under active development — not deployable.**
 > Nothing in this branch is production-ready yet, and no production migration
@@ -101,11 +101,12 @@ global option that must precede the subcommand.
 ## Development status and remaining work
 
 The storage layer (codec + PostgreSQL persistence), the crawler/ingest delivery,
-the migration toolchain, the web UI and API (milestones W1–W7) and the user
-migration (W8) are implemented; reviews of the latest milestones are tracked in
-[`docs/wip/`](docs/wip/). Not done: milestone W9, CI and OCI image publishing,
-release-candidate testing (including live-DHT acceptance) and the production
-cutover. No 0.8.0 release exists yet.
+the migration toolchain, the web UI and API (milestones W1–W7), the user
+migration (W8) and the development fixtures and operator guides (07I) are
+implemented and accepted by the owner; the W9 integration, security and
+regression task (07J) is tracked in [`docs/wip/`](docs/wip/). Not done: CI and
+OCI image publishing, release-candidate testing (including live-DHT
+acceptance) and the production cutover. No 0.8.0 release exists yet.
 
 ## Build and test
 
@@ -160,6 +161,6 @@ MIT licensed; no relicensing of third-party work is claimed or performed.
 
 ## Repository
 
-- Canonical source: [git.skobk.in/skobkin/magnetico-web](https://git.skobk.in/skobkin/magnetico-web) (Forgejo).
-- Go module path: `github.com/skobkin/magnetico-web` (the public GitHub mirror; importable once a version is tagged).
-- No production container image has been published for the unified version.
+- Primary repository: [git.skobk.in/skobkin/magnetico-web](https://git.skobk.in/skobkin/magnetico-web) (Forgejo). GitHub is a mirror.
+- Go module path: `github.com/skobkin/magnetico-web` (served from the GitHub mirror; importable once a version is tagged).
+- The intended build system is Woodpecker CI and the intended OCI registry is Docker Hub (GHCR may be added later). Forgejo is not an OCI publication target. None of this is set up yet: no production container image has been published for the unified version.

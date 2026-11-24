@@ -36,7 +36,7 @@ Marks: **[R]** reversible (you can undo it and the legacy system is untouched) �
 
 ### Discontinued functionality
 
-- Searching by **file path** (removed in 0.8.0; names only), the legacy JSON listing API, the admin-less PHP UI pages and their URLs, `api-token` in the query string for anything but the deprecated RSS feed, reCAPTCHA, Font Awesome/PicoCSS/Redis/Sentry integrations, PHP sessions and remember-me cookies.
+- **File-path search** (the historical PHP interface only ever searched torrent names, and 0.8.0 does the same; the upstream Go `magneticow` UI could search file paths, which 0.8.0 does not carry over), the legacy JSON listing API, the admin-less PHP UI pages and their URLs, `api-token` in the query string for anything but the deprecated RSS feed, reCAPTCHA, Font Awesome/PicoCSS/Redis/Sentry integrations, PHP sessions and remember-me cookies.
 - The **legacy automatic database migrations** of the old Go crawler fork are gone: 0.8.0 never upgrades an old schema in place. Torrent data moves only through `migrate torrents` into a fresh database.
 - There is no administration UI yet: accounts, invitations and trackers are managed with the `magnetico web user …` and `web tracker …` commands ([`docs/web-deployment.md`](web-deployment.md) §5).
 
