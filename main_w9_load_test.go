@@ -630,6 +630,11 @@ func w9Accounts(t *testing.T, bin, dsn string) {
 			t.Fatalf("migrate %s: %d %s", cmd, code, out)
 		}
 	}
+	// Tokens of earlier runs (kept, never deleted by design) are revoked so the
+	// per-user cap of 50 unrevoked tokens leaves room for this run's pools.
+	for _, tbl := range []string{"api_tokens", "rss_tokens"} {
+		sqlExec(t, dsn, `UPDATE magnetico_web.`+tbl+` SET revoked_at = now() WHERE revoked_at IS NULL AND user_id IN (SELECT id FROM magnetico_web.users WHERE username LIKE 'w9u%')`)
+	}
 	have := sqlCount(t, dsn, `SELECT count(*) FROM magnetico_web.users WHERE username LIKE 'w9u%'`)
 	for i := have; i < w9LoadUsers; i++ {
 		name := fmt.Sprintf("w9u%02d", i)
@@ -1069,6 +1074,20 @@ func (e *w9Env) poll(label string) {
 	}
 	v["label"], v["t"] = label, time.Since(e.samp.start).Seconds()
 	e.write("diag", v)
+	// The in-use heap breakdown at the points that matter.
+	if label == "baseline-after-start" || label == "after-load" || label == "idle-end" {
+		hresp, err := http.Get("http://" + e.diagAddr + "/heap")
+		if err != nil {
+			e.t.Fatalf("diag heap: %v", err)
+		}
+		defer hresp.Body.Close()
+		var h map[string]any
+		if err := json.NewDecoder(hresp.Body).Decode(&h); err != nil {
+			e.t.Fatal(err)
+		}
+		h["label"], h["t"] = label, time.Since(e.samp.start).Seconds()
+		e.write("heap", h)
+	}
 }
 
 // pollEvery polls every d until stop is closed.
@@ -1118,7 +1137,7 @@ func TestW9Load(t *testing.T) {
 		}
 	case "memfloor":
 		e.begin()
-		e.segment("memfloor-c32", 32, 3*step, false, segGates{noTimeouts: true})
+		e.segment("memfloor-c32", 32, 3*step, false, segGates{noTimeouts: true, overload: true})
 		e.finish("memfloor")
 	case "soak":
 		scale, _ := strconv.ParseFloat(envOr("MAGNETICO_W9_SOAK_SCALE", "1"), 64)

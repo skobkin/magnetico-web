@@ -30,9 +30,9 @@ Drain: {'acked': 108035, 'drain_seconds': 0.004117709, 'missing': 0, 'quarantine
 
 ## Memory windows (web), steady window 30–120 min
 
-- RSS MiB: block medians [422, 446, 429, 425, 429, 431, 450, 423, 430]; slope +1.2 MiB/h = +0.3 % of the plateau per hour
-- cgroup MiB: block medians [502, 570, 550, 529, 532, 540, 540, 555, 561]; slope +18.0 MiB/h = +3.3 % of the plateau per hour
-- heap-after-GC MiB: block medians [175, 183, 178, 176, 179, 176, 194, 182, 184]; slope +6.3 MiB/h = +3.5 % of the plateau per hour
+- RSS MiB: block medians [422, 446, 429, 425, 429, 431, 450, 423, 430]; least-squares slope +1.2 MiB/h = +0.3 % of the plateau per hour; Theil-Sen +2.9 MiB/h = +0.7 %
+- cgroup MiB: block medians [502, 570, 550, 529, 532, 540, 540, 555, 561]; least-squares slope +18.0 MiB/h = +3.3 % of the plateau per hour; Theil-Sen +34.2 MiB/h = +6.3 %
+- heap-after-GC MiB: block medians [175, 183, 178, 176, 179, 176, 194, 182, 184]; least-squares slope +6.3 MiB/h = +3.5 % of the plateau per hour; Theil-Sen +5.5 MiB/h = +3.1 %
 - file descriptors 7–55, threads 8–9 (whole run)
 - idle phase: RSS 464 → 257 MiB, cgroup 594 → 464 MiB, fds 33 → 7, threads 9 → 9
 - ingest queue depth in the steady window: max 1, median 0, slope +0.0 rows/h

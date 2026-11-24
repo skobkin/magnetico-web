@@ -25,6 +25,11 @@ def slope(xs, ys):
     den = sum((x-mx)**2 for x in xs)
     return sum((x-mx)*(y-my) for x, y in zip(xs, ys))/den if den else 0.0
 
+def theil_sen(xs, ys):
+    """Median of the pairwise slopes: robust against a single outlier block."""
+    sl = [(ys[j]-ys[i])/(xs[j]-xs[i]) for i in range(len(xs)) for j in range(i+1, len(xs)) if xs[j] != xs[i]]
+    return st.median(sl) if sl else 0.0
+
 def blocks(points, t0, t1, width):
     """Median of values per block of `width` seconds in [t0, t1)."""
     out = []
@@ -80,16 +85,18 @@ def main():
             pts = [(x['t'], x[key]) for x in web]
             bl = blocks(pts, t0, t1, wd)
             sl = slope([b[0] for b in bl], [b[1] for b in bl]) * 3600
+            ts = theil_sen([b[0] for b in bl], [b[1] for b in bl]) * 3600
             plateau = st.median([b[1] for b in bl]) if bl else 0
-            print(f"- {label}: block medians {[round(b[1]) for b in bl]}; slope {sl:+.1f} MiB/h = {100*sl/plateau if plateau else 0:+.1f} % of the plateau per hour")
+            print(f"- {label}: block medians {[round(b[1]) for b in bl]}; least-squares slope {sl:+.1f} MiB/h = {100*sl/plateau if plateau else 0:+.1f} % of the plateau per hour; Theil-Sen {ts:+.1f} MiB/h = {100*ts/plateau if plateau else 0:+.1f} %")
         age = start.get('web_age_at_sampler_start_s', 0)
         gc = next((d for d in procs if d['proc'] == 'web'), {}).get('gc_series', [])
         pts = [(g['T'] - age, g['LiveMB']) for g in gc]
         bl = blocks(pts, t0, t1, wd)
         if bl:
             sl = slope([b[0] for b in bl], [b[1] for b in bl]) * 3600
+            ts = theil_sen([b[0] for b in bl], [b[1] for b in bl]) * 3600
             plateau = st.median([b[1] for b in bl])
-            print(f"- heap-after-GC MiB: block medians {[round(b[1]) for b in bl]}; slope {sl:+.1f} MiB/h = {100*sl/plateau if plateau else 0:+.1f} % of the plateau per hour")
+            print(f"- heap-after-GC MiB: block medians {[round(b[1]) for b in bl]}; least-squares slope {sl:+.1f} MiB/h = {100*sl/plateau if plateau else 0:+.1f} % of the plateau per hour; Theil-Sen {ts:+.1f} MiB/h = {100*ts/plateau if plateau else 0:+.1f} %")
         fds = [x['fds'] for x in web]; th = [x['threads'] for x in web]
         print(f"- file descriptors {min(fds)}–{max(fds)}, threads {min(th)}–{max(th)} (whole run)")
         if idle:
@@ -109,7 +116,29 @@ def main():
             fc = d.get('file_cache', {}); pool = d.get('pool', {})
             print(f"| {d['label']} | {d['t']/60:.1f} | {d['goroutines']} | {d['heap_inuse']/2**20:.0f} | {d['heap_alloc']/2**20:.0f} | {fc.get('Bytes',0)/2**20:.0f} / {fc.get('Entries','-')} | {pool.get('acquired')}/{pool.get('idle')}/{pool.get('total')} |")
         first, last = diags[0], diags[-1]
-        print(f"\nGoroutines by creation site, first reading: {[(g['where'], g['n']) for g in first['goroutine_groups'][:8]]}")
-        print(f"\nGoroutines by creation site, last reading: {[(g['where'], g['n']) for g in last['goroutine_groups'][:8]]}")
+        print(f"\nGoroutines by creation site, first reading: {[(g['where'], g['n']) for g in (first.get('goroutine_groups') or [])[:8]]}")
+        print(f"\nGoroutines by creation site, last reading: {[(g['where'], g['n']) for g in (last.get('goroutine_groups') or [])[:8]]}")
+
+
+def heaps(rows):
+    hs = [r['data'] for r in rows if r['kind'] == 'heap']
+    if not hs: return
+    print("\n## In-use heap by allocation site (after a forced GC)\n")
+    for h in hs:
+        print(f"**{h['label']}** (t = {h['t']/60:.1f} min)\n")
+        print("| leaf function | in-use MiB | objects |\n|---|---|---|")
+        merged = {}
+        for x in h['top_inuse']:
+            k = x['func'].split('+0x')[0]
+            b, o = merged.get(k, (0, 0))
+            merged[k] = (b + x['inuse_bytes'], o + x['inuse_objects'])
+        for k, (b, o) in sorted(merged.items(), key=lambda kv: -kv[1][0])[:10]:
+            print(f"| `{k}` | {b/2**20:.1f} | {o} |")
+        print()
+
+_main = main
+def main():
+    _main()
+    heaps(load(sys.argv[1]))
 
 main()
