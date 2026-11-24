@@ -1,4 +1,4 @@
-package app
+package cli
 
 // W9 load steps and soak (task 07J, stage S6). Gated like the other heavy
 // harnesses: nothing here runs in the ordinary suite.
@@ -1158,14 +1158,11 @@ func newW9Env(t *testing.T) *w9Env {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"build"}
-	if tags := os.Getenv("MAGNETICO_W9_TAGS"); tags != "" {
-		args = append(args, "-tags", tags)
+	var tags []string
+	if v := os.Getenv("MAGNETICO_W9_TAGS"); v != "" {
+		tags = []string{v}
 	}
-	bin := filepath.Join(t.TempDir(), "magnetico")
-	if b, err := exec.Command("go", append(args, "-o", bin, "../../cmd/magnetico")...).CombinedOutput(); err != nil {
-		t.Fatalf("build: %v\n%s", err, b)
-	}
+	bin := testkit.Binary(t, tags...)
 	e := &w9Env{t: t, bin: bin, dsn: dsn, outDir: out, label: envOr("MAGNETICO_W9_LABEL", "w9"),
 		webMem: envOr("MAGNETICO_W9_WEB_MEM", "1G"), goMem: envOr("MAGNETICO_W9_WEB_GOMEMLIMIT", "768MiB")}
 	w9Accounts(t, bin, dsn)

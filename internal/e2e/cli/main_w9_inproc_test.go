@@ -1,4 +1,4 @@
-package app
+package cli
 
 // An in-process web service for the W9 security sweeps: the exact wiring of the
 // binary (assemble.Web + Run, the same code path as runWeb), over a disposable

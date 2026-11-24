@@ -1,4 +1,4 @@
-package app
+package cli
 
 // Safety checks of the W9 benchmark harness. The harness creates accounts,
 // revokes credentials and starts services against MAGNETICO_W9_DSN, so before it

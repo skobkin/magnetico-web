@@ -1,4 +1,4 @@
-package app
+package cli
 
 // W9 cross-service integration (task 07J, stage S3): the real `magnetico`
 // binaries on one disposable PostgreSQL database, driven only through their
@@ -1091,7 +1091,7 @@ func TestW9RealBinaryResponsesMatchOpenAPI(t *testing.T) {
 // The shipped binary links neither the test-only OpenAPI validator nor its
 // dependencies, and carries no profiling endpoint.
 func TestW9BinaryDoesNotLinkTestSupport(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "../../cmd/magnetico").CombinedOutput()
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "../../../cmd/magnetico").CombinedOutput()
 	if err != nil {
 		t.Fatalf("go list: %v\n%s", err, out)
 	}
@@ -1121,7 +1121,7 @@ func TestW9DiagTagIsAbsentFromTheDefaultBuild(t *testing.T) {
 		if tags != "" {
 			args = append(args, "-tags", tags)
 		}
-		out, err := exec.Command("go", append(args, ".")...).CombinedOutput()
+		out, err := exec.Command("go", append(args, "../../app")...).CombinedOutput()
 		if err != nil {
 			t.Fatalf("go list: %v\n%s", err, out)
 		}

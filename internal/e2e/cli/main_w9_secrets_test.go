@@ -1,4 +1,4 @@
-package app
+package cli
 
 // W9 secret-leak regression. A secret is a unique value the test created. Each
 // kind of secret has intentional delivery channels, which are NOT scanned

@@ -1,4 +1,4 @@
-package app
+package cli
 
 // W9 security regression: forged Host and forwarding headers, canonical public
 // URLs, and the trusted-proxy boundary.

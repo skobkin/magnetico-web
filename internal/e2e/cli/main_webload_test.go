@@ -1,4 +1,4 @@
-package app
+package cli
 
 // Explicit load and soak measurements of the completed W4 HTTP/cache path
 // against the real binary (docs/wip/07E-web-search-details-report.md §Step 8).

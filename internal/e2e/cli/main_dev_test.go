@@ -1,4 +1,4 @@
-package app
+package cli
 
 // Real-binary test of `magnetico dev seed-torrents`: disposable PostgreSQL
 // only, synthetic data only, no network beyond the loopback database.

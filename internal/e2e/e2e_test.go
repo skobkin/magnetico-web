@@ -54,7 +54,7 @@ func binaries(t *testing.T) (magnetico, crawlerd string) {
 		}
 		root, _ := filepath.Abs("../..")
 		for _, b := range []struct{ out, pkg string }{
-			{"magnetico", "."}, {"crawlerd", "./internal/e2e/crawlerd"},
+			{"magnetico", "./cmd/magnetico"}, {"crawlerd", "./internal/e2e/crawlerd"},
 		} {
 			cmd := exec.Command("go", "build", "-o", filepath.Join(binDir, b.out), b.pkg)
 			cmd.Dir = root

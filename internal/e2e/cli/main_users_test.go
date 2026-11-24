@@ -1,4 +1,4 @@
-package app
+package cli
 
 // Real-binary test of W8 (`migrate users`): the legacy PHP accounts are
 // imported from a synthetic legacy database into a disposable magnetico_web
@@ -28,7 +28,7 @@ type usersFixture struct{ name, hash, pw, email string }
 // short ordinary password.
 func usersFixtureHash(t *testing.T, params string) (hash, pw string) {
 	t.Helper()
-	raw, err := os.ReadFile("../../internal/web/password/testdata/php/fixtures.json")
+	raw, err := os.ReadFile("../../../internal/web/password/testdata/php/fixtures.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestMigrateUsersBinaryEndToEnd(t *testing.T) {
 
 	// Synthetic legacy database (the five Doctrine migrations replayed).
 	legacy := cl.TestDatabase(t)
-	ddl, err := os.ReadFile("../../internal/migration/users/testdata/legacy_users.sql")
+	ddl, err := os.ReadFile("../../../internal/migration/users/testdata/legacy_users.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
