@@ -1,7 +1,7 @@
 package app
 
 // W9 security regression (task 07J, stage S4). The web service runs in-process
-// with the exact production wiring (assembleWeb), so every sweep walks the
+// with the exact production wiring (assemble.Web), so every sweep walks the
 // route table that actually serves requests: a route added without an
 // expectation here fails the test.
 //

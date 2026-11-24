@@ -1,7 +1,7 @@
 package app
 
 // An in-process web service for the W9 security sweeps: the exact wiring of the
-// binary (assembleWeb + Run, the same code path as runWeb), over a disposable
+// binary (assemble.Web + Run, the same code path as runWeb), over a disposable
 // database, with the log captured so tests can scan it and the route table
 // readable so a sweep cannot miss a route.
 
@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skobkin/magnetico-web/internal/web/assemble"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	"github.com/skobkin/magnetico-web/internal/web/webdb"
 	"github.com/skobkin/magnetico-web/opflags"
@@ -72,7 +73,7 @@ func startInprocWeb(t *testing.T, dsn string, mod func(o *opflags.WebOptions)) *
 		cancel()
 		t.Fatal(err)
 	}
-	srv, err := assembleWeb(o, backend, logger)
+	srv, err := assemble.Web(o, backend, logger, nil)
 	if err != nil {
 		backend.Close()
 		cancel()
