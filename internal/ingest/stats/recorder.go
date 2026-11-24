@@ -126,8 +126,8 @@ func (r *Recorder) add(acc *hourAcc, now time.Time, c opstats.Counter, n int64) 
 // crawler returns the per-drain record of a crawler, or nil when id is empty or
 // the cap is reached (the overflow is counted; global counters are unaffected).
 func (r *Recorder) crawler(id string, now time.Time) *opstats.CrawlerDelta {
-	if id == "" {
-		return nil
+	if !validUUID(id) {
+		return nil // an identity that cannot be stored must never poison a batch
 	}
 	c, ok := r.crawlers[id]
 	if !ok {
@@ -433,4 +433,26 @@ func (r *Recorder) Windows() WindowSnapshot {
 		ws.Counts[i] = r.ring.sum(end, w)
 	}
 	return ws
+}
+
+// validUUID reports whether id is a canonical 36-character UUID (any version).
+func validUUID(id string) bool {
+	if len(id) != 36 {
+		return false
+	}
+	for i := 0; i < 36; i++ {
+		c := id[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			isHex := c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+			if !isHex {
+				return false
+			}
+		}
+	}
+	return true
 }

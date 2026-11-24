@@ -100,6 +100,9 @@ type Options struct {
 	// Shutdown budgets; zero selects the defaults above.
 	HTTPGrace, ConsumerGrace, AbortGrace, HandlerGrace time.Duration
 
+	// statsWriter, set by tests only, adjusts the statistics writer's options.
+	statsWriter func(*stats.WriterOptions)
+
 	// consumerStore, set by tests only, wraps the consumer's store.
 	consumerStore func(real pgqueue.Store) pgqueue.Store
 }
@@ -238,6 +241,31 @@ func Run(ctx context.Context, o Options) error {
 		ErrorLog:          lg,
 	}
 
+	// Statistics: a recorder (already feeding the handlers and the consumer) and a
+	// writer that persists it. A failing statistics database never reaches
+	// admission or authentication; the writer retries and logs.
+	var writer *stats.Writer
+	writerDone := make(chan struct{})
+	writerCtx, stopWriter := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWriter()
+	if rec != nil {
+		wopt := stats.WriterOptions{DSN: queueDSN, QuotaMaxBytes: o.QueueMaxBytes, Logger: lg}
+		if o.statsWriter != nil {
+			o.statsWriter(&wopt)
+		}
+		w, werr := stats.NewWriter(rec, consumer, wopt)
+		if werr != nil {
+			lg.Printf("WARNING: statistics are disabled: %v", werr)
+		} else {
+			writer = w
+		}
+	}
+	if writer != nil {
+		go func() { defer close(writerDone); writer.Run(writerCtx) }()
+	} else {
+		close(writerDone)
+	}
+
 	// Cancelling consumerCtx asks the consumer to stop after its current
 	// record; consumer.Abort() interrupts that record (see shutdown below).
 	consumerCtx, stopConsumer := context.WithCancel(context.WithoutCancel(ctx))
@@ -321,6 +349,16 @@ func Run(ctx context.Context, o Options) error {
 		stuck = append(stuck, fmt.Sprintf("%d HTTP request handler(s)", n))
 	}
 	<-summaryDone
+
+	// Every handler has returned, so everything is recorded: stop the statistics
+	// goroutines and make one last bounded flush before the pools close.
+	stopWriter()
+	<-writerDone
+	if writer != nil && len(stuck) == 0 {
+		fctx, fcancel := context.WithTimeout(context.Background(), 5*time.Second)
+		writer.Close(fctx)
+		fcancel()
+	}
 
 	if len(stuck) > 0 {
 		abandoned.Store(true)

@@ -5,6 +5,45 @@ import (
 	"time"
 )
 
+// StorageAgg aggregates the storage samples of one bucket. Measures that were
+// unavailable in a sample contribute nothing to it.
+type StorageAgg struct {
+	Last, Max, Sum, N   [NumMeasures]int64
+	LastValid, MaxValid [NumMeasures]bool
+	// BPTBytes and BPTTorrents accumulate the numerator and denominator of
+	// bytes-per-torrent from samples where both were known and the estimate was
+	// positive: the period value is the ratio of sums, never a mean of ratios.
+	BPTBytes, BPTTorrents int64
+	Samples               int64
+	Mismatches            int64 // samples whose categories did not reconcile with the total
+	LastAt                time.Time
+}
+
+// IsZero reports whether no sample contributed.
+func (s *StorageAgg) IsZero() bool { return s.Samples == 0 }
+
+// QueueState is the newest sampled state of the queue and quota: the single
+// shared row. A value that is not Valid is unavailable, never zero.
+type QueueState struct {
+	At       time.Time
+	Slot     int64
+	Values   [NumGauges]int64
+	Valid    [NumGauges]bool
+	QuotaMax int64
+	// CountsApprox: row counts are planner estimates; OldestApprox: the oldest
+	// age came from the lowest id; Backoff: the sampling interval was widened.
+	CountsApprox, OldestApprox, Backoff bool
+}
+
+// StorageState is the newest sampled storage state.
+type StorageState struct {
+	At         time.Time
+	Slot       int64
+	Values     [NumMeasures]int64
+	Valid      [NumMeasures]bool
+	Reconciled bool
+}
+
 // HourDelta is what one UTC hour accumulated since the last drain: event
 // counters, gauge aggregates and the minutes in which the process was running.
 type HourDelta struct {
@@ -13,6 +52,7 @@ type HourDelta struct {
 	Gauges      [NumGauges]GaugeAgg
 	GaugeLastAt time.Time // time of the newest gauge sample (zero: none)
 	Coverage    int64     // bit i: UTC minute i of the hour was observed
+	Storage     StorageAgg
 }
 
 // CrawlerDelta is the activity of one crawler since the last drain. It carries
@@ -44,11 +84,20 @@ type Delta struct {
 	// HoursDropped counts hour buckets discarded because more than MaxLiveHours
 	// were live (the writer stalled for over a day).
 	HoursDropped int64
+
+	// The shared-gauge part: samples taken by the instance that owns the queue
+	// consumer. The slot ranges guard against two instances contributing the
+	// same period (see Apply). Latest* hold the newest sample for shared_state.
+	QueueFirstSlot, QueueLastSlot     int64
+	StorageFirstSlot, StorageLastSlot int64
+	LatestQueue                       *QueueState
+	LatestStorage                     *StorageState
 }
 
 // IsEmpty reports whether the delta carries nothing worth persisting.
 func (d *Delta) IsEmpty() bool {
-	return len(d.Hours) == 0 && len(d.Crawlers) == 0 && d.CrawlersOverflow == 0
+	return len(d.Hours) == 0 && len(d.Crawlers) == 0 && d.CrawlersOverflow == 0 && d.HoursDropped == 0 &&
+		d.LatestQueue == nil && d.LatestStorage == nil
 }
 
 // MaxCrawlersPerDrain bounds the per-crawler map of one drain: memory and the

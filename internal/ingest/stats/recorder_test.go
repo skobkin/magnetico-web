@@ -32,6 +32,11 @@ func (c *fakeClock) Advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
+const (
+	cidA = "11111111-1111-4111-8111-111111111111"
+	cidB = "22222222-2222-4222-8222-222222222222"
+)
+
 var t0 = time.Date(2026, 11, 25, 10, 30, 0, 0, time.UTC)
 
 func newRec() (*Recorder, *fakeClock) {
@@ -51,7 +56,7 @@ func sum(d opstats.Delta) (t [opstats.NumCounters]int64) {
 
 func TestReceivedIsValidatedBeforeAdmission(t *testing.T) {
 	r, _ := newRec()
-	r.SubmitValidated("c1", netip.MustParseAddr("192.0.2.1"), 5)
+	r.SubmitValidated(cidA, netip.MustParseAddr("192.0.2.1"), 5)
 	if r.InFlight() != 5 {
 		t.Fatalf("in flight = %d, want 5", r.InFlight())
 	}
@@ -67,8 +72,8 @@ func TestReceivedIsValidatedBeforeAdmission(t *testing.T) {
 
 func TestAcknowledgedEqualsEnqueuedPlusDuplicates(t *testing.T) {
 	r, _ := newRec()
-	r.SubmitValidated("c1", netip.Addr{}, 10)
-	r.SubmitAcked("c1", 7, 3, 4096)
+	r.SubmitValidated(cidA, netip.Addr{}, 10)
+	r.SubmitAcked(cidA, 7, 3, 4096)
 	s := sum(r.Drain())
 	if s[opstats.CRecordsAcknowledged] != s[opstats.CRecordsEnqueued]+s[opstats.CAdmissionDuplicates] ||
 		s[opstats.CRecordsEnqueued] != 7 || s[opstats.CAdmissionDuplicates] != 3 || s[opstats.CBytesAccepted] != 4096 {
@@ -89,13 +94,13 @@ func TestReceivedEqualsAcknowledgedPlusRefusedPlusInFlight(t *testing.T) {
 			t.Fatalf("%s: received-acknowledged-refused = %d, in flight = %d", step, got, r.InFlight())
 		}
 	}
-	r.SubmitValidated("a", netip.Addr{}, 10)
+	r.SubmitValidated(cidA, netip.Addr{}, 10)
 	check("validated 10")
-	r.SubmitValidated("b", netip.Addr{}, 4)
+	r.SubmitValidated(cidB, netip.Addr{}, 4)
 	check("validated 4")
-	r.SubmitAcked("a", 6, 4, 100)
+	r.SubmitAcked(cidA, 6, 4, 100)
 	check("acked a")
-	r.SubmitRefused("b", 4, opstats.RejectQueueFull)
+	r.SubmitRefused(cidB, 4, opstats.RejectQueueFull)
 	check("refused b")
 	if r.InFlight() != 0 {
 		t.Fatalf("not at quiescence: %d", r.InFlight())
@@ -108,12 +113,12 @@ func TestReceivedEqualsAcknowledgedPlusRefusedPlusInFlight(t *testing.T) {
 
 func TestRejectedRequestsAndRefusedRecordsAreSeparateCounters(t *testing.T) {
 	r, _ := newRec()
-	r.SubmitValidated("a", netip.Addr{}, 5)
-	r.SubmitRefused("a", 5, opstats.RejectQueueFull)
-	r.SubmitValidated("a", netip.Addr{}, 3)
-	r.SubmitRefused("a", 3, NoReject) // client went away: refused records, no rejected request
+	r.SubmitValidated(cidA, netip.Addr{}, 5)
+	r.SubmitRefused(cidA, 5, opstats.RejectQueueFull)
+	r.SubmitValidated(cidA, netip.Addr{}, 3)
+	r.SubmitRefused(cidA, 3, NoReject) // client went away: refused records, no rejected request
 	r.RequestRejected(opstats.RejectMalformed, "")
-	r.RequestRejected(opstats.RejectTooLarge, "a")
+	r.RequestRejected(opstats.RejectTooLarge, cidA)
 	d := r.Drain()
 	s := sum(d)
 	if s[opstats.CRecordsRefused] != 8 || s[opstats.CRejectedQueueFull] != 1 || s[opstats.CRejectedMalformed] != 1 || s[opstats.CRejectedTooLarge] != 1 {
@@ -168,8 +173,8 @@ func TestProcessingDurationExcludesRejectedRows(t *testing.T) {
 
 func TestExistsOutcomesAndCacheKindsAreSplit(t *testing.T) {
 	r, _ := newRec()
-	r.ExistsRequest("c")
-	r.ExistsDone("c", netip.MustParseAddr("198.51.100.7"), ExistsOutcome{Hashes: 10, Found: 4, Missing: 5, Unknown: 1, CacheHitPositive: 3, CacheHitNegative: 2, CacheMiss: 5})
+	r.ExistsRequest(cidA)
+	r.ExistsDone(cidA, netip.MustParseAddr("198.51.100.7"), ExistsOutcome{Hashes: 10, Found: 4, Missing: 5, Unknown: 1, CacheHitPositive: 3, CacheHitNegative: 2, CacheMiss: 5})
 	d := r.Drain()
 	s := sum(d)
 	if s[opstats.CExistsRequests] != 1 || s[opstats.CExistsHashes] != 10 || s[opstats.CExistsFound] != 4 || s[opstats.CExistsMissing] != 5 ||
@@ -197,14 +202,14 @@ func TestAuthCounters(t *testing.T) {
 
 func TestNilRecorderIsNoOp(t *testing.T) {
 	var r *Recorder
-	r.SubmitAuthenticated("a")
-	r.RequestBytes("a", 5)
-	r.SubmitValidated("a", netip.Addr{}, 1)
-	r.SubmitAcked("a", 1, 0, 1)
-	r.SubmitRefused("a", 1, opstats.RejectBusy)
+	r.SubmitAuthenticated(cidA)
+	r.RequestBytes(cidA, 5)
+	r.SubmitValidated(cidA, netip.Addr{}, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
+	r.SubmitRefused(cidA, 1, opstats.RejectBusy)
 	r.RequestRejected(opstats.RejectAuth, "")
-	r.ExistsRequest("a")
-	r.ExistsDone("a", netip.Addr{}, ExistsOutcome{})
+	r.ExistsRequest(cidA)
+	r.ExistsDone(cidA, netip.Addr{}, ExistsOutcome{})
 	r.AuthHit()
 	r.ProcessAttempt()
 	r.TorrentCreated()
@@ -226,7 +231,7 @@ func TestRecorderConcurrentUpdatesNeverLoseCounts(t *testing.T) {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			id := fmt.Sprintf("c%d", g%8)
+			id := fmt.Sprintf("00000000-0000-4000-8000-%012d", g%8)
 			for i := 0; i < per; i++ {
 				r.SubmitValidated(id, netip.Addr{}, 2)
 				r.SubmitAcked(id, 1, 1, 10)
@@ -257,7 +262,7 @@ func TestRotationWithARecorderPausedInsideTheCriticalSection(t *testing.T) {
 		once.Do(func() { close(entered); <-release })
 	}
 	evDone := make(chan struct{})
-	go func() { defer close(evDone); r.SubmitAcked("c", 3, 2, 50) }()
+	go func() { defer close(evDone); r.SubmitAcked(cidA, 3, 2, 50) }()
 	<-entered
 	drained := make(chan opstats.Delta, 1)
 	go func() { drained <- r.Drain() }()
@@ -280,9 +285,9 @@ func TestRotationWithARecorderPausedInsideTheCriticalSection(t *testing.T) {
 
 func TestRotationWithARecorderPausedBeforeTheLock(t *testing.T) {
 	r, _ := newRec()
-	r.SubmitAcked("c", 1, 0, 1) // before the rotation
+	r.SubmitAcked(cidA, 1, 0, 1) // before the rotation
 	d1 := r.Drain()
-	r.SubmitAcked("c", 4, 0, 1) // arrives after the swap: the next delta
+	r.SubmitAcked(cidA, 4, 0, 1) // arrives after the swap: the next delta
 	d2 := r.Drain()
 	if sum(d1)[opstats.CRecordsEnqueued] != 1 || sum(d2)[opstats.CRecordsEnqueued] != 4 {
 		t.Fatalf("d1=%v d2=%v", sum(d1)[opstats.CRecordsEnqueued], sum(d2)[opstats.CRecordsEnqueued])
@@ -300,7 +305,7 @@ func TestRelatedCountersNeverSplitAcrossADrain(t *testing.T) {
 		wg.Add(1)
 		go func(g int) {
 			defer wg.Done()
-			id := fmt.Sprintf("c%d", g%4)
+			id := fmt.Sprintf("00000000-0000-4000-8000-%012d", g%4)
 			for i := 0; ; i++ {
 				select {
 				case <-stop:
@@ -350,12 +355,12 @@ func TestRelatedCountersNeverSplitAcrossADrain(t *testing.T) {
 
 func TestDrainedAccumulatorIsNeverWrittenAgain(t *testing.T) {
 	r, _ := newRec()
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	d := r.Drain()
 	before := sum(d)
 	hours := len(d.Hours)
 	for i := 0; i < 100; i++ {
-		r.SubmitAcked("c", 1, 0, 1)
+		r.SubmitAcked(cidA, 1, 0, 1)
 	}
 	if sum(d) != before || len(d.Hours) != hours || d.Crawlers[0].RecordsEnqueued != 1 {
 		t.Fatal("a drained delta changed after more events were recorded")
@@ -366,7 +371,7 @@ func TestTotalsAreConservedAcrossManyDrains(t *testing.T) {
 	r, c := newRec()
 	var total int64
 	for i := 0; i < 500; i++ {
-		r.SubmitAcked("c", 2, 1, 1)
+		r.SubmitAcked(cidA, 2, 1, 1)
 		c.Advance(7 * time.Minute) // crosses hours and days
 		total += sum(r.Drain())[opstats.CRecordsAcknowledged]
 	}
@@ -380,9 +385,9 @@ func TestTotalsAreConservedAcrossManyDrains(t *testing.T) {
 func TestEventHourIsTakenInsideTheCriticalSection(t *testing.T) {
 	r, c := newRec()
 	c.Set(time.Date(2026, 11, 25, 10, 59, 59, 0, time.UTC))
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	c.Set(time.Date(2026, 11, 25, 11, 0, 1, 0, time.UTC))
-	r.SubmitAcked("c", 2, 0, 1)
+	r.SubmitAcked(cidA, 2, 0, 1)
 	d := r.Drain()
 	if len(d.Hours) != 2 || d.Hours[0].Hour.Hour() != 10 || d.Hours[1].Hour.Hour() != 11 ||
 		d.Hours[0].Counters[opstats.CRecordsEnqueued] != 1 || d.Hours[1].Counters[opstats.CRecordsEnqueued] != 2 {
@@ -401,10 +406,10 @@ func TestLateDrainAfterTheHourBoundaryKeepsEventsInTheirOwnHour(t *testing.T) {
 	} {
 		c := newClock(boundary.Add(-2 * time.Second))
 		r := New(c.Now)
-		r.SubmitAcked("c", 1, 0, 1) // two seconds before the boundary
+		r.SubmitAcked(cidA, 1, 0, 1) // two seconds before the boundary
 		c.Set(boundary.Add(30 * time.Second))
-		r.SubmitAcked("c", 1, 0, 1) // thirty seconds after it, with no drain in between
-		d := r.Drain()              // a tick that fires late
+		r.SubmitAcked(cidA, 1, 0, 1) // thirty seconds after it, with no drain in between
+		d := r.Drain()               // a tick that fires late
 		if len(d.Hours) != 2 || !d.Hours[1].Hour.Equal(boundary) || !d.Hours[0].Hour.Equal(boundary.Add(-time.Hour)) ||
 			d.Hours[0].Counters[opstats.CRecordsEnqueued] != 1 || d.Hours[1].Counters[opstats.CRecordsEnqueued] != 1 {
 			t.Fatalf("boundary %v: %+v", boundary, d.Hours)
@@ -414,9 +419,9 @@ func TestLateDrainAfterTheHourBoundaryKeepsEventsInTheirOwnHour(t *testing.T) {
 
 func TestBackwardClockStepDoesNotCreateAnOlderHour(t *testing.T) {
 	r, c := newRec()
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	c.Advance(-3 * time.Hour)
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	d := r.Drain()
 	if len(d.Hours) != 1 || d.Hours[0].Counters[opstats.CRecordsEnqueued] != 2 || d.ClockAnomaly {
 		t.Fatalf("hours: %+v anomaly=%v", d.Hours, d.ClockAnomaly)
@@ -425,9 +430,9 @@ func TestBackwardClockStepDoesNotCreateAnOlderHour(t *testing.T) {
 
 func TestForwardStepLeavesNoRowsForSkippedHours(t *testing.T) {
 	r, c := newRec()
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	c.Advance(5 * time.Hour)
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	d := r.Drain()
 	if len(d.Hours) != 2 || d.Hours[1].Hour.Sub(d.Hours[0].Hour) != 5*time.Hour {
 		t.Fatalf("hours: %+v (skipped hours must simply be absent)", d.Hours)
@@ -436,17 +441,17 @@ func TestForwardStepLeavesNoRowsForSkippedHours(t *testing.T) {
 
 func TestHugeClockStepMarksAnomalyAndKeepsLatestHour(t *testing.T) {
 	r, c := newRec()
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	c.Advance(30 * time.Hour)
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	d := r.Drain()
 	if !d.ClockAnomaly || len(d.Hours) != 2 {
 		t.Fatalf("forward step: anomaly=%v hours=%d", d.ClockAnomaly, len(d.Hours))
 	}
 	r2, c2 := newRec()
-	r2.SubmitAcked("c", 1, 0, 1)
+	r2.SubmitAcked(cidA, 1, 0, 1)
 	c2.Advance(-30 * time.Hour)
-	r2.SubmitAcked("c", 1, 0, 1)
+	r2.SubmitAcked(cidA, 1, 0, 1)
 	d2 := r2.Drain()
 	if !d2.ClockAnomaly || len(d2.Hours) != 1 || d2.Hours[0].Counters[opstats.CRecordsEnqueued] != 2 {
 		t.Fatalf("backward step: anomaly=%v hours=%+v (must stay in the latest hour)", d2.ClockAnomaly, d2.Hours)
@@ -459,7 +464,7 @@ func TestMinuteCoverageBitsAreSetPerRunningMinute(t *testing.T) {
 	c.Set(time.Date(2026, 11, 25, 10, 17, 5, 0, time.UTC)) // goes back in the hour: still hour 10 (same hour)
 	r.MarkRunning()
 	c.Set(time.Date(2026, 11, 25, 10, 40, 0, 0, time.UTC))
-	r.SubmitAcked("c", 1, 0, 1) // an event covers its minute too
+	r.SubmitAcked(cidA, 1, 0, 1) // an event covers its minute too
 	d := r.Drain()
 	want := int64(1<<30 | 1<<17 | 1<<40)
 	if len(d.Hours) != 1 || d.Hours[0].Coverage != want {
@@ -473,7 +478,7 @@ func TestPerFlushCrawlerMapIsBounded(t *testing.T) {
 	r, _ := newRec()
 	const n = opstats.MaxCrawlersPerDrain + 476
 	for i := 0; i < n; i++ {
-		r.SubmitValidated(fmt.Sprintf("crawler-%d", i), netip.Addr{}, 1)
+		r.SubmitValidated(fmt.Sprintf("00000000-0000-4000-8000-%012d", i), netip.Addr{}, 1)
 	}
 	d := r.Drain()
 	if len(d.Crawlers) != opstats.MaxCrawlersPerDrain || d.CrawlersOverflow != 476 {
@@ -495,12 +500,12 @@ func TestRecorderMemoryIsBounded(t *testing.T) {
 	// 10,000 registered crawlers over ten drains (each at most 1,024), plus a full ring.
 	for round := 0; round < 10; round++ {
 		for i := 0; i < 1000; i++ {
-			r.SubmitValidated(fmt.Sprintf("crawler-%d-%d", round, i), netip.MustParseAddr("192.0.2.1"), 1)
+			r.SubmitValidated(fmt.Sprintf("00000000-%04d-4000-8000-%012d", round, i), netip.MustParseAddr("192.0.2.1"), 1)
 		}
 		_ = r.Drain()
 	}
 	for i := 0; i < 1500; i++ { // 1,500 distinct crawlers in one window: the cap holds
-		r.SubmitValidated(fmt.Sprintf("window-%d", i), netip.Addr{}, 1)
+		r.SubmitValidated(fmt.Sprintf("00000001-0000-4000-8000-%012d", i), netip.Addr{}, 1)
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)
@@ -513,9 +518,9 @@ func TestRecorderMemoryIsBounded(t *testing.T) {
 
 func TestCounterSaturatesAtTwoToTheSixtyTwo(t *testing.T) {
 	r, _ := newRec()
-	r.RequestBytes("c", opstats.Saturation-5)
-	r.RequestBytes("c", 100)
-	r.RequestBytes("c", 100)
+	r.RequestBytes(cidA, opstats.Saturation-5)
+	r.RequestBytes(cidA, 100)
+	r.RequestBytes(cidA, 100)
 	d := r.Drain()
 	if got := d.Hours[0].Counters[opstats.CBytesBody]; got != opstats.Saturation {
 		t.Fatalf("counter = %d, want saturation %d", got, opstats.Saturation)
@@ -533,7 +538,7 @@ func TestRecordingNeverBlocksTheHandlerOnWriterStalls(t *testing.T) {
 	start := time.Now()
 	for i := 0; i < 40; i++ { // 40 simulated hours without a drain
 		for j := 0; j < 2000; j++ {
-			r.SubmitAcked("c", 1, 0, 1)
+			r.SubmitAcked(cidA, 1, 0, 1)
 		}
 		c.Advance(time.Hour)
 	}
@@ -549,12 +554,12 @@ func TestRecordingNeverBlocksTheHandlerOnWriterStalls(t *testing.T) {
 func TestRecordingDoesNotAllocateOnTheHotPath(t *testing.T) {
 	r := New(nil)
 	ip := netip.MustParseAddr("192.0.2.1")
-	r.SubmitValidated("crawler", ip, 1) // creates the crawler record
+	r.SubmitValidated(cidA, ip, 1) // creates the crawler record
 	allocs := testing.AllocsPerRun(1000, func() {
-		r.SubmitAuthenticated("crawler")
-		r.SubmitValidated("crawler", ip, 2)
-		r.SubmitAcked("crawler", 1, 1, 100)
-		r.RequestBytes("crawler", 10)
+		r.SubmitAuthenticated(cidA)
+		r.SubmitValidated(cidA, ip, 2)
+		r.SubmitAcked(cidA, 1, 1, 100)
+		r.RequestBytes(cidA, 10)
 		r.AuthHit()
 		r.SettledStoredNew(time.Millisecond)
 	})
@@ -565,21 +570,21 @@ func TestRecordingDoesNotAllocateOnTheHotPath(t *testing.T) {
 
 func BenchmarkRecorderUncontended(b *testing.B) {
 	r := New(nil)
-	r.SubmitValidated("crawler", netip.Addr{}, 1)
+	r.SubmitValidated(cidA, netip.Addr{}, 1)
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		r.SubmitAcked("crawler", 1, 0, 100)
+		r.SubmitAcked(cidA, 1, 0, 100)
 	}
 }
 
 func BenchmarkRecorderContended64(b *testing.B) {
 	r := New(nil)
-	r.SubmitValidated("crawler", netip.Addr{}, 1)
+	r.SubmitValidated(cidA, netip.Addr{}, 1)
 	b.ReportAllocs()
 	b.SetParallelism(64)
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			r.SubmitAcked("crawler", 1, 0, 100)
+			r.SubmitAcked(cidA, 1, 0, 100)
 		}
 	})
 }
@@ -591,7 +596,7 @@ func TestWindowsCountOnlyCompletedSeconds(t *testing.T) {
 	r := New(c.Now)
 	c.Advance(2 * time.Second)
 	for i := 0; i < 10; i++ { // all inside second 10:00:02
-		r.SubmitAcked("c", 1, 0, 1)
+		r.SubmitAcked(cidA, 1, 0, 1)
 	}
 	if ws := r.Windows(); ws.Counts[0][wmEnqueued] != 0 {
 		t.Fatalf("the current, incomplete second was counted: %v", ws.Counts[0])
@@ -606,9 +611,9 @@ func TestWindowsCountOnlyCompletedSeconds(t *testing.T) {
 func TestStaleRingSlotsAreNeverSummed(t *testing.T) {
 	c := newClock(time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC))
 	r := New(c.Now)
-	r.SubmitAcked("c", 5, 0, 1)
+	r.SubmitAcked(cidA, 5, 0, 1)
 	c.Advance(time.Hour + 30*time.Second) // the slot is reused one hour later
-	r.SubmitAcked("c", 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
 	c.Advance(time.Second)
 	ws := r.Windows()
 	if ws.Counts[2][wmEnqueued] != 1 {
