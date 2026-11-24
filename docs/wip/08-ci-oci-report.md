@@ -111,7 +111,7 @@ Design points, each pinned by `internal/repocheck` (13 deliberate violations wer
 | Promotion rehearsal (real `crane` v0.21.0, two throwaway registries) | identical index digest in both (`sha256:b3c710f7…`, equal to the build's `index.json`), identical raw manifest, 2 platforms + 2 attestation manifests, **smoke test passes on the digest pulled back**; `latest` and `0.8` refused (`release-rehearsal.txt`) |
 | arm64 | built (no emulation needed), scanned, digest-verified; **not executed** |
 | Native dry run | see §8; archives reproducible; `ci/native-smoke.sh` tested against fixtures (8 tests, 3 mutations caught) |
-| Script and tool tests | `ci/ciguard` 15, `ci/skipcensus` 10, `internal/repocheck` (mapping 3, workflow invariants 17, promote/verify 9, native smoke 8, native verify 5, readiness 3) — all with mutation checks of the guards |
+| Script and tool tests | `ci/ciguard` 15, `ci/skipcensus` 10, `internal/repocheck` (mapping 3, workflow invariants 19, promote/verify 9, native smoke 8, native verify 5, readiness 3) — all with mutation checks of the guards |
 | `shellcheck` (warnings), `hadolint`, `woodpecker-cli lint` | clean / clean / valid |
 
 Not verified (needs a Woodpecker/Forgejo/registry): the workflows on a server, the status-context name, `docker load` into `dind`, the privileged plugin build on a real agent, pushes to Docker Hub/GHCR/Forgejo, the prerelease flag on a real release.
