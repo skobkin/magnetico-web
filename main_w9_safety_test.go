@@ -228,6 +228,22 @@ func TestW9CheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	refused("a real account whose name merely starts with w9u")
 }
 
+// benchForeignAccounts counts the accounts in magnetico_web.users that are not
+// in allowed. A database without that table (the web schema is optional for a
+// benchmark database) holds none.
+func benchForeignAccounts(ctx context.Context, conn *pgx.Conn, allowed []string) (int, error) {
+	var exists bool
+	if err := conn.QueryRow(ctx, `SELECT to_regclass('magnetico_web.users') IS NOT NULL`).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+	var n int
+	err := conn.QueryRow(ctx, `SELECT count(*) FROM magnetico_web.users WHERE NOT (username = ANY($1))`, allowed).Scan(&n)
+	return n, err
+}
+
 // TestW9MarkBenchmarkDatabase marks an already seeded database (one seeded before
 // the marker existed). Gated and explicit: MAGNETICO_W9_MARK=1 plus the usual
 // confirmation. It refuses a database that holds accounts other than the generated
@@ -246,14 +262,15 @@ func TestW9MarkBenchmarkDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close(ctx)
-	var multi, foreign, users int
+	var multi, foreign int
 	if err := conn.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE name NOT LIKE '% multi %' AND name NOT LIKE '% w9ing %') FROM magneticod.torrents WHERE file_count > 1`).Scan(&multi, &foreign); err != nil {
 		t.Fatal(err)
 	}
 	if multi == 0 || foreign != 0 {
 		t.Fatalf("not a W9 seeded database: %d multi-file rows, %d not seeder-named", multi, foreign)
 	}
-	if err := conn.QueryRow(ctx, `SELECT CASE WHEN to_regclass('magnetico_web.users') IS NULL THEN 0 ELSE (SELECT count(*) FROM magnetico_web.users WHERE NOT (username = ANY($1))) END`, w9UserNames()).Scan(&users); err != nil {
+	users, err := benchForeignAccounts(ctx, conn, w9UserNames())
+	if err != nil {
 		t.Fatal(err)
 	}
 	if users != 0 {
@@ -263,4 +280,37 @@ func TestW9MarkBenchmarkDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("marked with %q", w9Marker)
+}
+
+// TestBenchForeignAccountsWithoutWebSchema pins the optional absence of
+// magnetico_web.users: PostgreSQL resolves relation names even inside an
+// unselected CASE branch, so the table must not be named at all unless it exists.
+func TestBenchForeignAccountsWithoutWebSchema(t *testing.T) {
+	dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+
+	n, err := benchForeignAccounts(ctx, conn, []string{"a"})
+	if err != nil || n != 0 {
+		t.Fatalf("without the web schema: n=%d err=%v, want 0 and no error", n, err)
+	}
+
+	for _, q := range []string{
+		`CREATE SCHEMA magnetico_web`,
+		`CREATE TABLE magnetico_web.users (username text)`,
+		`INSERT INTO magnetico_web.users VALUES ('a'), ('b')`,
+	} {
+		if _, err := conn.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err = benchForeignAccounts(ctx, conn, []string{"a"})
+	if err != nil || n != 1 {
+		t.Fatalf("with the web schema: n=%d err=%v, want 1 and no error", n, err)
+	}
 }
