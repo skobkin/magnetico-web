@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -31,6 +33,28 @@ const initAdvisoryKey int64 = 7881644658832750186
 // the expected version.
 var ErrSchemaMissing = errors.New(
 	"the magnetico_ingest schema is missing or has an unsupported version; run `magnetico migrate ingest-schema-init`")
+
+// ReinitHint names the manual steps for an unreleased development schema that
+// predates a structural change. Nothing in this package ever repairs or
+// upgrades an existing schema: operators reinitialise it explicitly (UPGRADE.md).
+const ReinitHint = "reinitialise the development schema by hand: stop ingest, run " +
+	"`DROP SCHEMA magnetico_ingest CASCADE;` (records acknowledged but not yet processed are lost), " +
+	"then `magnetico migrate ingest-schema-init` and `magnetico ingest crawler add <name>` (see UPGRADE.md)"
+
+// ErrSchemaInvalid is matched by every *SchemaInvalidError: the schema has
+// the supported version but is not structurally what this release expects.
+var ErrSchemaInvalid = errors.New("the magnetico_ingest schema is structurally incompatible")
+
+// SchemaInvalidError lists what is wrong with an existing magnetico_ingest.
+type SchemaInvalidError struct{ Details []string }
+
+func (e *SchemaInvalidError) Error() string {
+	return "the magnetico_ingest schema is structurally incompatible (" + strings.Join(e.Details, "; ") +
+		"); it is never repaired or upgraded automatically: " + ReinitHint
+}
+
+// Is makes errors.Is(err, ErrSchemaInvalid) true.
+func (e *SchemaInvalidError) Is(target error) bool { return target == ErrSchemaInvalid }
 
 // schemaStatements create the queue schema. usage is maintained exclusively
 // by statement-level triggers so every write path (including manual operator
@@ -101,6 +125,21 @@ BEGIN
         TG_OP, TG_TABLE_SCHEMA, TG_TABLE_NAME;
 END $$`,
 
+	// The crawler registry (per-crawler credentials): the token is never
+	// stored, only its SHA-256 digest. No triggers.
+	`CREATE TABLE magnetico_ingest.crawlers (
+    crawler_id UUID PRIMARY KEY,
+    name TEXT NOT NULL CONSTRAINT crawlers_name_format
+        CHECK (char_length(name) BETWEEN 1 AND 64 AND name ~ '^[A-Za-z0-9][A-Za-z0-9._-]*$'),
+    token_hash BYTEA NOT NULL CONSTRAINT crawlers_token_hash_len CHECK (octet_length(token_hash) = 32),
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    token_rotated_at TIMESTAMPTZ,
+    disabled_at TIMESTAMPTZ,
+    CONSTRAINT crawlers_token_hash_key UNIQUE (token_hash)
+)`,
+	`CREATE UNIQUE INDEX crawlers_name_lower ON magnetico_ingest.crawlers (lower(name))`,
+
 	`CREATE TRIGGER queue_usage_ins AFTER INSERT ON magnetico_ingest.queue
     REFERENCING NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION magnetico_ingest.usage_add()`,
 	`CREATE TRIGGER queue_usage_del AFTER DELETE ON magnetico_ingest.queue
@@ -150,7 +189,7 @@ func InitSchema(ctx context.Context, dsn string) error {
 			return err
 		}
 		if exists {
-			return verifyVersion(ctx, tx)
+			return verifySchema(ctx, tx)
 		}
 		for _, stmt := range schemaStatements {
 			if _, err := tx.Exec(ctx, stmt); err != nil {
@@ -161,7 +200,7 @@ func InitSchema(ctx context.Context, dsn string) error {
 		return err
 	})
 	if err != nil {
-		if errors.Is(err, ErrSchemaMissing) {
+		if errors.Is(err, ErrSchemaMissing) || errors.Is(err, ErrSchemaInvalid) {
 			return err
 		}
 		return fmt.Errorf("%w: %w", persistence.ErrStorageIO, err)
@@ -212,6 +251,127 @@ func verifyVersion(ctx context.Context, q rowQueryer) error {
 	}
 	if len(versions) != 1 || versions[0] != SchemaVersion {
 		return fmt.Errorf("%w (found versions %v)", ErrSchemaMissing, versions)
+	}
+	return nil
+}
+
+// verifySchema is the verification run by InitSchema (existing schema) and by
+// Open: the version row, then the structure of the crawler registry.
+func verifySchema(ctx context.Context, q rowQueryer) error {
+	if err := verifyVersion(ctx, q); err != nil {
+		return err
+	}
+	return verifyCrawlers(ctx, q)
+}
+
+// crawlerColumns is the exact column list of magnetico_ingest.crawlers.
+var crawlerColumns = map[string]string{
+	"crawler_id": "uuid", "name": "text", "token_hash": "bytea", "enabled": "boolean",
+	"created_at": "timestamp with time zone", "token_rotated_at": "timestamp with time zone",
+	"disabled_at": "timestamp with time zone",
+}
+
+// verifyCrawlers checks that the registry has exactly the expected columns,
+// the unique digest and case-insensitive name indexes, the digest length
+// check and no triggers. It only reads.
+func verifyCrawlers(ctx context.Context, q rowQueryer) error {
+	var details []string
+	collect := func(sql string, fn func(rows pgx.Rows) error) error {
+		rows, err := q.Query(ctx, sql)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			if err := fn(rows); err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	}
+
+	var reg *string
+	if err := collect(`SELECT to_regclass('magnetico_ingest.crawlers')::text`, func(r pgx.Rows) error { return r.Scan(&reg) }); err != nil {
+		return err
+	}
+	if reg == nil {
+		return &SchemaInvalidError{Details: []string{"missing table crawlers"}}
+	}
+
+	have := map[string]string{}
+	if err := collect(`SELECT a.attname, format_type(a.atttypid, a.atttypmod)
+FROM pg_attribute a WHERE a.attrelid = 'magnetico_ingest.crawlers'::regclass AND a.attnum > 0 AND NOT a.attisdropped`,
+		func(r pgx.Rows) error {
+			var n, t string
+			if err := r.Scan(&n, &t); err != nil {
+				return err
+			}
+			have[n] = t
+			return nil
+		}); err != nil {
+		return err
+	}
+	for n, t := range crawlerColumns {
+		if have[n] != t {
+			if have[n] == "" {
+				details = append(details, "crawlers lacks column "+n)
+			} else {
+				details = append(details, fmt.Sprintf("crawlers.%s has type %s, want %s", n, have[n], t))
+			}
+		}
+	}
+	for n := range have {
+		if _, ok := crawlerColumns[n]; !ok {
+			details = append(details, "crawlers has unexpected column "+n)
+		}
+	}
+
+	var uniqueDigest, uniqueName bool
+	if err := collect(`SELECT pg_get_indexdef(i.indexrelid) FROM pg_index i
+WHERE i.indrelid = 'magnetico_ingest.crawlers'::regclass AND i.indisunique`, func(r pgx.Rows) error {
+		var def string
+		if err := r.Scan(&def); err != nil {
+			return err
+		}
+		switch {
+		case strings.Contains(def, "(token_hash)"):
+			uniqueDigest = true
+		case strings.Contains(def, "lower(name)"):
+			uniqueName = true
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if !uniqueDigest {
+		details = append(details, "crawlers lacks a unique index on token_hash")
+	}
+	if !uniqueName {
+		details = append(details, "crawlers lacks a unique index on lower(name)")
+	}
+
+	var hashLenCheck bool
+	if err := collect(`SELECT EXISTS (SELECT 1 FROM pg_constraint
+WHERE conrelid = 'magnetico_ingest.crawlers'::regclass AND contype = 'c'
+  AND pg_get_constraintdef(oid) LIKE '%octet_length(token_hash) = 32%')`, func(r pgx.Rows) error { return r.Scan(&hashLenCheck) }); err != nil {
+		return err
+	}
+	if !hashLenCheck {
+		details = append(details, "crawlers lacks the token_hash length check")
+	}
+
+	var triggers int
+	if err := collect(`SELECT count(*) FROM pg_trigger
+WHERE tgrelid = 'magnetico_ingest.crawlers'::regclass AND NOT tgisinternal`, func(r pgx.Rows) error { return r.Scan(&triggers) }); err != nil {
+		return err
+	}
+	if triggers > 0 {
+		details = append(details, "crawlers has a trigger (none is allowed)")
+	}
+
+	if len(details) > 0 {
+		sort.Strings(details)
+		return &SchemaInvalidError{Details: details}
 	}
 	return nil
 }

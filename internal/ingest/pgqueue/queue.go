@@ -94,8 +94,8 @@ func (q *Queue) verify(ctx context.Context) error {
 	if err := q.pool.Ping(ctx); err != nil {
 		return fmt.Errorf("%w: %w", persistence.ErrStorageIO, err)
 	}
-	if err := verifyVersion(ctx, q.pool); err != nil {
-		if errors.Is(err, ErrSchemaMissing) {
+	if err := verifySchema(ctx, q.pool); err != nil {
+		if errors.Is(err, ErrSchemaMissing) || errors.Is(err, ErrSchemaInvalid) {
 			return err
 		}
 		// A missing schema surfaces as to_regclass NULL (handled); anything

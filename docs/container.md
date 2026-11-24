@@ -61,6 +61,9 @@ docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/m
 docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate ingest-schema-init
 ```
 
+An older **development** `magnetico_ingest` schema without the `crawlers` table is refused, never repaired; see
+`UPGRADE.md` ("Reinitialising an older development ingest schema").
+
 ```yaml
 # docker-compose.yml — web and ingest (placeholders; secrets live in the env files, chmod 600, never committed)
 services:

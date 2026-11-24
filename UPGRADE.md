@@ -110,6 +110,20 @@ data only and is not claimed to suffice for every workload. The crawler needs no
 `ingest` refuses to start while an import is running or incomplete. Records ingested after the
 import make earlier migration-verification verdicts stale.
 
+**Reinitialising an older development ingest schema.** The `crawlers` table (per-crawler credentials) is part of the
+initial `magnetico_ingest` definition, which has never been released, so there is no upgrade command. A development
+database whose `magnetico_ingest` predates it is refused by `ingest` and `magnetico ingest crawler …` with
+`missing table crawlers`; nothing repairs or alters it. Reinitialise it by hand:
+
+1. stop `magnetico ingest` (records already acknowledged to crawlers but not yet processed are **lost** by the next
+   step; let the queue drain first if they matter);
+2. `DROP SCHEMA magnetico_ingest CASCADE;`
+3. `magnetico migrate ingest-schema-init`
+4. `magnetico ingest crawler add <name>` once per crawler, and give each crawler its token.
+
+Only `magnetico_ingest` is touched: the torrent dataset (`magneticod`), the web schema (`magnetico_web`: users, tokens,
+invitations) and `magnetico_stats` are left as they are.
+
 **Quarantine.** Both sides keep records that are permanently invalid in a quarantine table
 (`quarantine` in the crawler's SQLite file, `magnetico_ingest.quarantine` in PostgreSQL). Nothing is
 deleted automatically and quarantined bytes count toward the quota. Inspect with SQL, for example
