@@ -77,7 +77,7 @@ The lineage above is the history of the *code*. The system the maintainer runs i
 | Feeds | none | RSS | RSS **v2** (own token) and **v1** kept for existing clients |
 | Schema changes | automatic migration in the crawler | automatic migration v0→v1 | **never automatic**: explicit `schema-init` commands; fail closed |
 | Moving old data | — | — | offline `migrate torrents` (checkpointed, resumable) and `migrate users` (one transaction: all or nothing, not resumable), two verifications, forensic export |
-| Deployment | binaries, Docker images | OCI image on GHCR | binaries; images **not yet published** (CI/OCI is a later task) |
+| Deployment | binaries, Docker images | OCI image on GHCR | native Linux (amd64, arm64) binaries on Forgejo releases and **one universal multi-platform OCI image** (`docker.io/skobkin/magnetico-web`, `ghcr.io/skobkin/magnetico-web`, user `10001:10001`, every subcommand); build and publication **configured and verified locally, nothing published yet** |
 
 ---
 
@@ -286,7 +286,8 @@ A path is decimal components joined by `_` (`""` is the root, `1_1_0` is the fir
 
 - **Behind a reverse proxy.** The web and ingest services speak plain HTTP and are meant to run behind a TLS-terminating reverse proxy (Traefik is the documented default). **Native TLS termination in the application is deliberately not planned.** The proxy must route only the configured public host name to the service, forward `X-Forwarded-For` from a narrow trusted set, allow at least 90 s for upstream timeouts (the search deadline is 60 s) and keep credentials out of its access logs (`docs/web-deployment.md`).
 - **One PostgreSQL account by default.** The default deployment uses the same PostgreSQL account for ingest and web. A restricted runtime role for the web service is documented as optional hardening; separate least-privilege roles for ingest and web may be considered later. No schema, grant or privilege-verification contract changes because of this.
-- **Source, CI and images.** Forgejo is the primary Git repository and GitHub a mirror. Woodpecker CI is the intended build system and Docker Hub the intended OCI registry (GHCR may be added later); Forgejo is not an OCI publication target. **None of this is set up yet**: no release, image or CI publication exists.
+- **Source, CI and images.** Forgejo is the primary Git repository and GitHub a mirror. Woodpecker CI verifies every pull request and push and publishes release tags; native binaries go to Forgejo releases, images to Docker Hub and GHCR (Forgejo is not an OCI publication target). The publication path builds the image **once**, smoke-tests and scans exactly that build, and promotes the same digest to both registries; publication requires the verification workflow of the same commit. **Configured and verified locally (build, smoke test, scan, promotion rehearsal), but no pipeline has run on Woodpecker and no release or image has been published** (`docs/release-engineering.md`).
+- **One image for every service.** `crawl`, `ingest`, `web`, `migrate` and `dev` are one executable; the OCI image is that executable on Alpine with no compiler, source tree or test harness, non-root (`10001:10001`), an exec-form entrypoint with no default command, `/data` for the crawler queue, and no universal healthcheck (the healthchecks are per service, `docs/container.md`). The original and the `tgragnato` fork ship separate or differently packaged binaries and images; the per-service healthchecks, the digest-pinned promotion and the legacy-PHP-environment warning are 0.8.0 additions, not improvements claimed over a measured baseline.
 - **Front end.** The web UI uses its own CSS and vanilla JavaScript (first-party files, no framework, no CDN, no inline script); PicoCSS, which the PHP application used, is not used.
 - **Resources.** Memory limits for the web container are in the 07J report and depend on the measured workload; the `GOMEMLIMIT` value and the container limit are different numbers.
 
@@ -309,7 +310,7 @@ A path is decimal components joined by `_` (`""` is the root, `1_1_0` is the fir
 - **OAuth** may be considered for a future API v3 if there is sufficient demand.
 - **A lightweight UI library** such as Preact may be considered in the more distant future; a heavy single-page-application rewrite is not planned.
 - **Least-privilege PostgreSQL roles** for ingest and web, as security hardening.
-- **Release engineering:** CI, OCI image publication and live-DHT acceptance (§8, §5).
+- **Release engineering:** the first real Woodpecker run and the publication of a release candidate (the pipeline and image are configured, §8), a registry build cache (deliberately not configured), executing the arm64 image, and live-DHT acceptance (§8, §5).
 
 ---
 

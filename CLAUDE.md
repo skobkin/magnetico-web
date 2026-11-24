@@ -13,6 +13,9 @@ Task documents and phase reports live in [`docs/wip/`](docs/wip/).
 
 ## Commands
 
-- Build: `go build ./...`
-- Test: `go test ./...`
-- Vet: `go vet ./...`
+- Build: `go build ./...`; the executable: `go build -o magnetico ./cmd/magnetico` (`magnetico --version` needs no configuration)
+- Test: `go test -p 3 ./...` (needs a disposable trust-auth PostgreSQL via `MAGNETICO_TEST_POSTGRES_DSN`; set
+  `MAGNETICO_TEST_REQUIRE_POSTGRES=1` so a missing database fails instead of skipping). Classes and exact commands: [`docs/testing.md`](docs/testing.md)
+- Vet: `go vet ./... && go vet -tags loadtest,diag ./...`
+- Lint: `golangci-lint fmt --diff ./... && golangci-lint run ./...` (must report 0 issues)
+- CI, tags, image and secrets: [`docs/release-engineering.md`](docs/release-engineering.md); running the image: [`docs/container.md`](docs/container.md)

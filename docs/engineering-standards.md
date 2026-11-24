@@ -43,7 +43,9 @@ The repository is organised around a few clear responsibilities:
 - DHT crawling and discovery logic in the `dht` and `metadata` packages
 - the narrow storage interface in `persistence` and its PostgreSQL
   implementation (phase 3)
-- CLI parsing and runtime assembly in `opflags` and `main.go`
+- CLI parsing in `opflags`; the executable is `cmd/magnetico` (a thin `main`), the commands (dispatch, lifecycle,
+  controlled error messages) are `internal/app`, split by command (`crawl.go`, `web.go`, `migrate_*.go`, …); the web
+  service's wiring is `internal/web/assemble`; build identity is `internal/buildinfo`
 - low-level protocols and encoders such as `bencode`, `metainfo`, `merkle`, and
   `types`
 
@@ -66,22 +68,43 @@ The design philosophy is intentionally conservative:
 Run before every commit:
 
 ```sh
-goimports -w .               # format + fix import grouping (subsumes gofmt)
-go vet ./...                 # static analysis
-go test ./...                # unit testing
+golangci-lint fmt ./...      # formatting and import grouping (gci), config in .golangci.yml
+golangci-lint run ./...      # the lint gate: must report 0 issues (it also lints the loadtest and diag tags)
+go vet ./... && go vet -tags loadtest,diag ./...   # the opt-in code must stay compilable
+go test -p 3 ./...           # the whole regular suite (see Testing; needs a disposable PostgreSQL)
 ```
 
-Run periodically:
+Run periodically and before a release:
 
 ```sh
-go test -race ./...          # race detector — mandatory, not optional
+go test -race -p 3 ./...     # race detector — mandatory, not optional
 go mod tidy                  # keep go.mod/go.sum clean
-golangci-lint run            # extended linting (config in .golangci.yml)
 ```
 
-In this repository, the primary contract is the Go compiler and the test suite.
-We do not maintain a larger custom toolchain for lint, static analysis, or
-CI-only conventions beyond what is already standard in the Go ecosystem.
+The lint gate is **clean and stays clean**: fix a finding, or, for a justified false positive, add a *line-scoped*
+`//nolint:gosec // <reason>` (every one in the tree names its reason). Never disable a linter, weaken an assertion or
+add a global exclusion to get a green run; propose a narrowly scoped temporary exclusion with its reason if a finding
+needs an architectural change. Apply what `golangci-lint fmt` and `golangci-lint run --fix` can do automatically in
+their own mechanical commit, separate from restructuring and from semantic fixes.
+
+The CI configuration (`.woodpecker/`), the release scripts (`ci/`) and the container (`Dockerfile`) are part of the
+contract: `internal/repocheck` pins their security properties (no secret or privilege in the pull-request workflow,
+tag-only publication behind every gate, one image build, the Go 1.27.4 floor, no registry cache, no reruns), and
+[`release-engineering.md`](release-engineering.md) says what is configured versus verified.
+
+Repository rules that keep the layout maintainable:
+
+- production code never exports an interface, a hook or a variable only so that a test can reach it; white-box tests
+  live beside the code they test (`internal/app/errfmt_test.go`), black-box and in-process service tests live in
+  `internal/e2e/cli`, and the web service's wiring is a production package (`internal/web/assemble`) that the command
+  and the tests both call
+- shared test support (`internal/pgtest`, `internal/testkit`) is imported by test files only; the release binary links
+  none of it (pinned by `TestBinaryDoesNotLinkTestSupport`)
+- heavy harnesses are behind the build tag `loadtest` and need explicit authorization for anything that mutates a
+  database; the diagnostic listener is behind `diag`; **no release build passes `-tags`** (pinned in CI and by the native
+  and image smoke tests)
+- no milestone names (`w9`, `07g`, …) in permanent test infrastructure: name things by what they do; persisted
+  benchmark-dataset identifiers are the one exception and are never renamed (`docs/testing.md` maps old names)
 
 Rules:
 
@@ -150,7 +173,7 @@ Project-specific rules:
 
 - library code should not call `log.Fatal`, `os.Exit`, or `panic` for
   recoverable conditions
-- the boundary at `main.go` may terminate the process when a startup or
+- the command boundary (`internal/app`) may terminate the process when a startup or
   operational dependency is unavailable
 - when a database, network, or filesystem call fails, the relevant layer should
   return an error and let a higher layer decide whether to continue, degrade,
@@ -337,10 +360,13 @@ pressure, rather than letting a single blocked consumer corrupt the whole flow.
 
 ## Testing
 
+The classes (regular CI, release CI, explicit manual only), the exact commands and the skip census are in
+[`testing.md`](testing.md).
+
 ### Verified full-suite configuration (for CI)
 
-The configuration verified at the end of task 07J (and the one a CI job should
-start from) is the **whole suite with reduced package parallelism**:
+The configuration verified at the end of task 07J, and the one `.woodpecker/ci.yaml` and `release.yaml` run, is the
+**whole suite with reduced package parallelism**:
 
 ```sh
 go test -p 3 ./... -count=1
