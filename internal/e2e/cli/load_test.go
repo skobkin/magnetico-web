@@ -1030,7 +1030,7 @@ func TestDrainReportsQueryErrorsAndEnforcesItsDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `LOCK TABLE magnetico_ingest.queue IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}

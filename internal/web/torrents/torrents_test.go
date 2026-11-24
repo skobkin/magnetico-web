@@ -165,7 +165,7 @@ func TestSearchTimeoutBusyAndLoginResponsiveness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(tctx(t), `LOCK TABLE magneticod.torrents IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestSearchTimeoutBusyAndLoginResponsiveness(t *testing.T) {
 	if busy != 2 || timeout != 1 {
 		t.Fatalf("busy=%d timeout=%d, want 2 and 1", busy, timeout)
 	}
-	tx.Rollback(context.Background())
+	_ = tx.Rollback(context.Background())
 	if res := c.get("/torrents?q=ubuntu"); res.StatusCode != 200 {
 		t.Fatalf("search after the lock is released: %d", res.StatusCode)
 	}

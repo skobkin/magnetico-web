@@ -49,7 +49,7 @@ func (t *TrackerStore) write(ctx context.Context, fn func(tx pgx.Tx, cur []Track
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }() // after Commit this is a no-op by design
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, webschema.TrackersAdvisoryKey); err != nil {
 		return err
 	}

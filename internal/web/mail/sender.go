@@ -142,7 +142,7 @@ func (s *Sender) Send(ctx context.Context, m Message) error {
 	}
 	defer conn.Close()
 	if dl, ok := ctx.Deadline(); ok {
-		conn.SetDeadline(dl)
+		_ = conn.SetDeadline(dl) // a failure surfaces as an I/O error on the first read or write
 	}
 	// A stuck handshake or read ends when the context does.
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
@@ -206,7 +206,7 @@ func (s *Sender) Send(ctx context.Context, m Message) error {
 		return classify(ctx, CatRejected)
 	}
 	// The message is accepted; a failing QUIT does not undo that.
-	c.Quit()
+	_ = c.Quit()
 	return nil
 }
 

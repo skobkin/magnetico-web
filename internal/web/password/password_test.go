@@ -204,7 +204,7 @@ func TestLimiterCapsConcurrencyAndCountsBusy(t *testing.T) {
 func TestLimiterHonoursContext(t *testing.T) {
 	l := NewLimiter(1, time.Minute)
 	hold := make(chan struct{})
-	go l.Do(context.Background(), func() { <-hold })
+	go func() { _ = l.Do(context.Background(), func() { <-hold }) }()
 	time.Sleep(50 * time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -240,7 +240,7 @@ func TestEverythingPassesThroughTheLimiter(t *testing.T) {
 	}
 	hold := make(chan struct{})
 	started := make(chan struct{})
-	go l.Do(ctx, func() { close(started); <-hold })
+	go func() { _ = l.Do(ctx, func() { close(started); <-hold }) }()
 	<-started
 	defer close(hold)
 	if _, err := svc.Hash(ctx, "another password"); !errors.Is(err, ErrBusy) {
@@ -309,7 +309,7 @@ func TestConcurrentPrepareGeneratesOnce(t *testing.T) {
 	hold := make(chan struct{})
 	started := make(chan struct{})
 	l := svc.limiter
-	go l.Do(context.Background(), func() { close(started); <-hold })
+	go func() { _ = l.Do(context.Background(), func() { close(started); <-hold }) }()
 	<-started
 	defer close(hold)
 	if err := svc.Prepare(context.Background()); err != nil {
@@ -322,7 +322,7 @@ func TestPrepareFailureLeavesServiceRetryable(t *testing.T) {
 	svc := NewService(l, fastParams)
 	hold := make(chan struct{})
 	started := make(chan struct{})
-	go l.Do(context.Background(), func() { close(started); <-hold })
+	go func() { _ = l.Do(context.Background(), func() { close(started); <-hold }) }()
 	<-started
 	if err := svc.Prepare(context.Background()); !errors.Is(err, ErrBusy) {
 		t.Fatalf("Prepare under load: %v", err)
@@ -373,7 +373,7 @@ func TestCancelledContextNeverRunsTheFunction(t *testing.T) {
 	l1 := NewLimiter(1, time.Minute)
 	hold := make(chan struct{})
 	started := make(chan struct{})
-	go l1.Do(context.Background(), func() { close(started); <-hold })
+	go func() { _ = l1.Do(context.Background(), func() { close(started); <-hold }) }()
 	<-started
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	done := make(chan error, 1)

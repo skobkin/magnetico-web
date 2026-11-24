@@ -88,7 +88,9 @@ func TestUserAddAndList(t *testing.T) {
 		t.Fatalf("duplicate: %v", err)
 	}
 	e.InviteQuota = 4
-	UserAdd(ctx, e, "bob", "", -1) // negative: the configured quota
+	if err := UserAdd(ctx, e, "bob", "", -1); err != nil { // negative: the configured quota
+		t.Fatal(err)
+	}
 	if !strings.Contains(take(out), "4 invitation(s)") {
 		t.Fatal("configured quota not used")
 	}
@@ -108,7 +110,9 @@ func TestUserAddAndList(t *testing.T) {
 func TestSetPasswordAndStates(t *testing.T) {
 	e, out, pool := newEnv(t)
 	ctx := tctx(t)
-	UserAdd(ctx, e, "carol", "", 0)
+	if err := UserAdd(ctx, e, "carol", "", 0); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
 	u, _ := e.Store.CreateUser(ctx, accounts.CreateUserParams{Username: "dan"})
 	_ = u
@@ -134,7 +138,9 @@ func TestSetPasswordAndStates(t *testing.T) {
 	if ok, err := e.hasher().Verify(ctx, "operator chosen password", us.PasswordHash); !ok || err != nil {
 		t.Fatalf("password does not verify: %v %v", ok, err)
 	}
-	UserList(ctx, e)
+	if err := UserList(ctx, e); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(take(out), "legacy") { // fast test parameters differ from the production ones
 		t.Fatal("password state not shown")
 	}
@@ -180,7 +186,9 @@ func TestPasswordLineReader(t *testing.T) {
 func TestResetPasswordLinks(t *testing.T) {
 	e, out, _ := newEnv(t)
 	ctx := tctx(t)
-	UserAdd(ctx, e, "erin", "", 0)
+	if err := UserAdd(ctx, e, "erin", "", 0); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
 	if err := UserResetPassword(ctx, e, "erin"); err != nil {
 		t.Fatal(err)
@@ -189,9 +197,13 @@ func TestResetPasswordLinks(t *testing.T) {
 	if !strings.Contains(got, "/password/setup/") || strings.Contains(got, "warning") {
 		t.Fatalf("no password yet → setup link without the revocation warning:\n%s", got)
 	}
-	UserSetPassword(ctx, e, "erin")
+	if err := UserSetPassword(ctx, e, "erin"); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
-	UserDisable(ctx, e, "erin")
+	if err := UserDisable(ctx, e, "erin"); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
 	if err := UserResetPassword(ctx, e, "erin"); err != nil {
 		t.Fatal(err)
@@ -210,24 +222,34 @@ func TestResetPasswordLinks(t *testing.T) {
 func TestDisableEnableRoleRevoke(t *testing.T) {
 	e, out, pool := newEnv(t)
 	ctx := tctx(t)
-	UserAdd(ctx, e, "fred", "", 0)
+	if err := UserAdd(ctx, e, "fred", "", 0); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
-	pool.Exec(ctx, `INSERT INTO magnetico_web.sessions (token_hash, user_id, expires_at, remember) VALUES ($1, 1, now() + interval '1 hour', false)`, bytes.Repeat([]byte{9}, 32))
+	if _, err := pool.Exec(ctx, `INSERT INTO magnetico_web.sessions (token_hash, user_id, expires_at, remember) VALUES ($1, 1, now() + interval '1 hour', false)`, bytes.Repeat([]byte{9}, 32)); err != nil {
+		t.Fatal(err)
+	}
 	tok, _ := e.Store.CreateAPIToken(ctx, 1, "", nil)
 	rss, _ := e.Store.CreateRSSToken(ctx, 1, "", nil)
 
-	UserDisable(ctx, e, "fred")
+	if err := UserDisable(ctx, e, "fred"); err != nil {
+		t.Fatal(err)
+	}
 	if got := take(out); !strings.Contains(got, "1 session(s) deleted") || !strings.Contains(got, "suspended, not revoked") {
 		t.Fatalf("disable:\n%s", got)
 	}
-	UserEnable(ctx, e, "fred")
+	if err := UserEnable(ctx, e, "fred"); err != nil {
+		t.Fatal(err)
+	}
 	if got := take(out); !strings.Contains(got, "work again") {
 		t.Fatalf("enable:\n%s", got)
 	}
 	if _, err := e.Store.AuthenticateAPIToken(ctx, tok.Plaintext); err != nil {
 		t.Fatalf("a token did not survive disable/enable: %v", err)
 	}
-	UserRevokeTokens(ctx, e, "fred")
+	if err := UserRevokeTokens(ctx, e, "fred"); err != nil {
+		t.Fatal(err)
+	}
 	if got := take(out); got != "revoked: 1 API tokens, 1 RSS tokens\n" {
 		t.Fatalf("revoke: %q", got)
 	}
@@ -256,7 +278,9 @@ func TestDisableEnableRoleRevoke(t *testing.T) {
 func TestInvitationCommands(t *testing.T) {
 	e, out, _ := newEnv(t)
 	ctx := tctx(t)
-	UserAdd(ctx, e, "gina", "", 0)
+	if err := UserAdd(ctx, e, "gina", "", 0); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
 	if err := InviteAdd(ctx, e, "gina", 2, 24*time.Hour); err != nil {
 		t.Fatal(err)
@@ -265,7 +289,9 @@ func TestInvitationCommands(t *testing.T) {
 	if len(links) != 2 || !strings.HasPrefix(links[0], "https://magnet.example.org/register/") {
 		t.Fatalf("links = %v", links)
 	}
-	InviteList(ctx, e, "gina")
+	if err := InviteList(ctx, e, "gina"); err != nil {
+		t.Fatal(err)
+	}
 	list := take(out)
 	if strings.Count(list, "unused") != 2 || !strings.Contains(list, links[0]) {
 		t.Fatalf("list:\n%s", list)
@@ -276,11 +302,15 @@ func TestInvitationCommands(t *testing.T) {
 	if !strings.Contains(take(out), "invitation 1 revoked") {
 		t.Fatal("revoke message")
 	}
-	InviteRevoke(ctx, e, "1")
+	if err := InviteRevoke(ctx, e, "1"); err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(take(out), "already revoked") {
 		t.Fatal("repeat revoke message")
 	}
-	InviteList(ctx, e, "gina")
+	if err := InviteList(ctx, e, "gina"); err != nil {
+		t.Fatal(err)
+	}
 	list = take(out)
 	if !strings.Contains(list, "revoked") || strings.Contains(list, links[0]) && strings.Contains(strings.Split(list, "\n")[1], "register") {
 		t.Fatalf("revoked invitation still shows a link:\n%s", list)
@@ -294,9 +324,13 @@ func TestInvitationCommands(t *testing.T) {
 		t.Fatalf("unknown id: %v", err)
 	}
 	// Suspended owner: no link is offered.
-	UserDisable(ctx, e, "gina")
+	if err := UserDisable(ctx, e, "gina"); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
-	InviteList(ctx, e, "gina")
+	if err := InviteList(ctx, e, "gina"); err != nil {
+		t.Fatal(err)
+	}
 	if got := take(out); !strings.Contains(got, "suspended (owner disabled)") || strings.Contains(got, "/register/") {
 		t.Fatalf("suspended list:\n%s", got)
 	}
@@ -308,7 +342,9 @@ func TestInvitationCommands(t *testing.T) {
 func TestTrackerCommands(t *testing.T) {
 	e, out, pool := newEnv(t)
 	ctx := tctx(t)
-	TrackerList(ctx, e)
+	if err := TrackerList(ctx, e); err != nil {
+		t.Fatal(err)
+	}
 	if n := strings.Count(take(out), "\n"); n != 12 {
 		t.Fatalf("seeded list has %d lines", n)
 	}
@@ -344,15 +380,21 @@ func TestTrackerCommands(t *testing.T) {
 		t.Fatalf("insert at 1: %v", urls[:3])
 	}
 	// Move down, then up, by URL and by id.
-	TrackerMove(ctx, e, "https://second.example.org/announce", 14)
+	if err := TrackerMove(ctx, e, "https://second.example.org/announce", 14); err != nil {
+		t.Fatal(err)
+	}
 	urls = dense()
 	if urls[13] != "https://second.example.org/announce" || urls[0] != first {
 		t.Fatalf("move down: %v", urls)
 	}
 	var id int64
-	pool.QueryRow(ctx, `SELECT id FROM magnetico_web.trackers WHERE url = $1`, "udp://new.example.org:1337/announce").Scan(&id)
+	if err := pool.QueryRow(ctx, `SELECT id FROM magnetico_web.trackers WHERE url = $1`, "udp://new.example.org:1337/announce").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
 	take(out)
-	TrackerMove(ctx, e, itoa(id), 1)
+	if err := TrackerMove(ctx, e, itoa(id), 1); err != nil {
+		t.Fatal(err)
+	}
 	urls = dense()
 	if urls[0] != "udp://new.example.org:1337/announce" {
 		t.Fatalf("move up by id: %v", urls[:2])

@@ -280,7 +280,7 @@ func (c *client) rowIDs() []int32 {
 	var out []int32
 	for _, m := range rowIDRe.FindAllStringSubmatch(c.body, -1) {
 		var n int32
-		fmt.Sscan(m[1], &n)
+		_, _ = fmt.Sscan(m[1], &n) // the capture is \d+: it always parses
 		out = append(out, n)
 	}
 	return out

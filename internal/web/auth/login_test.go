@@ -255,13 +255,17 @@ func TestLegacyHashesLogInAndAreRehashed(t *testing.T) {
 			u := e.mkUser("frank", "placeholder password")
 			e.exec(`UPDATE magnetico_web.users SET password_hash = $2 WHERE id = $1`, u.ID, hash)
 			var changed0 *time.Time
-			e.pool.QueryRow(tctx(t), `SELECT password_changed_at FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&changed0)
+			if err := e.pool.QueryRow(tctx(t), `SELECT password_changed_at FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&changed0); err != nil {
+				t.Fatal(err)
+			}
 
 			c := e.client()
 			c.signIn("frank", pw)
 			var got string
 			var changed1 *time.Time
-			e.pool.QueryRow(tctx(t), `SELECT password_hash, password_changed_at FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got, &changed1)
+			if err := e.pool.QueryRow(tctx(t), `SELECT password_hash, password_changed_at FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got, &changed1); err != nil {
+				t.Fatal(err)
+			}
 			if got == hash || !strings.HasPrefix(got, "$argon2id$v=19$m=64,t=1,p=1$") {
 				t.Fatalf("hash not upgraded: %q", got)
 			}
@@ -293,7 +297,9 @@ func TestRehashBusyStillLogsInWithoutRehash(t *testing.T) {
 	c := e.client()
 	c.signIn("gina", pw) // verification itself was not skipped (it succeeded), login completes
 	var got string
-	e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got)
+	if err := e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got != hash {
 		t.Fatal("the hash changed although the rehash was refused")
 	}
@@ -302,7 +308,9 @@ func TestRehashBusyStillLogsInWithoutRehash(t *testing.T) {
 	}
 	e.svc.rehashErr.Store(nil)
 	e.client().signIn("gina", pw) // the next login upgrades it
-	e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got)
+	if err := e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got == hash {
 		t.Fatal("the upgrade did not happen at the next login")
 	}

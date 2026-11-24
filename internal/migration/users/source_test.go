@@ -169,7 +169,7 @@ func TestSourceFingerprintRefusals(t *testing.T) {
 			cfg := cfgFor(src, "postgres://127.0.0.1:1/none")
 			cfg.DryRun = true
 			_, err := Run(tctx(t), cfg)
-			wantClass(t, err, ClassSourceSchema)
+			_ = wantClass(t, err, ClassSourceSchema) // the helper fails the test itself
 		})
 	}
 	t.Run("no users schema", func(t *testing.T) {
@@ -177,7 +177,7 @@ func TestSourceFingerprintRefusals(t *testing.T) {
 		cfg := cfgFor(src, "postgres://127.0.0.1:1/none")
 		cfg.DryRun = true
 		_, err := Run(tctx(t), cfg)
-		wantClass(t, err, ClassSourceSchema)
+		_ = wantClass(t, err, ClassSourceSchema) // the helper fails the test itself
 	})
 }
 

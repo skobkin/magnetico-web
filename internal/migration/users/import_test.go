@@ -162,7 +162,7 @@ func TestImportPreservesIdentitiesAndRelationships(t *testing.T) {
 	// A wrong stated zone is detected by verify (timestamps differ).
 	vcfg.SourceTimezone = "Europe/Berlin"
 	vrep, err = Verify(tctx(t), vcfg)
-	wantClass(t, err, ClassVerifyFailed)
+	_ = wantClass(t, err, ClassVerifyFailed) // the helper fails the test itself
 	if vrep.MismatchCount == 0 || !strings.Contains(strings.Join(vrep.Mismatches, ","), "user-created-at") {
 		t.Errorf("verify under a different zone: %+v", vrep.Mismatches)
 	}
@@ -190,7 +190,7 @@ func TestVerifyDetectsDifferences(t *testing.T) {
 			mustRun(t, cfgFor(src2, tgt2))
 			execSQL(t, tgt2, sql)
 			rep, err := Verify(tctx(t), cfgFor(src2, tgt2))
-			wantClass(t, err, ClassVerifyFailed)
+			_ = wantClass(t, err, ClassVerifyFailed) // the helper fails the test itself
 			if rep.MismatchCount == 0 {
 				t.Fatal("no mismatch reported")
 			}
@@ -269,7 +269,7 @@ func TestSequenceStateAcrossFailuresAndSuccess(t *testing.T) {
 			}
 			defer func() { testHook = nil }()
 			rep, err := Run(tctx(t), cfgFor(src, tgt))
-			wantClass(t, err, ClassStorage)
+			_ = wantClass(t, err, ClassStorage) // the helper fails the test itself
 			if rep.Result != "failed" {
 				t.Errorf("result %q", rep.Result)
 			}
@@ -308,7 +308,7 @@ func TestSequenceStateAcrossFailuresAndSuccess(t *testing.T) {
 		}
 		defer func() { testHook = nil }()
 		_, err := Run(ctx, cfgFor(src, tgt))
-		wantClass(t, err, ClassStorage)
+		_ = wantClass(t, err, ClassStorage) // the helper fails the test itself
 		if userState(t, tgt) != before {
 			t.Fatal("an interrupted import left changes")
 		}

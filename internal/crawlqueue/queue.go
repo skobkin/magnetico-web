@@ -290,7 +290,7 @@ func Open(opts Options) (*Queue, error) {
 	}
 	if err := q.open(); err != nil {
 		dbCancel()
-		q.closeDBs()
+		_ = q.closeDBs() // the open error below is the one reported
 		unlockDir(lock)
 		return nil, err
 	}

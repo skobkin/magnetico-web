@@ -235,7 +235,9 @@ func TestTokenTouchIsThrottled(t *testing.T) {
 		t.Fatal(err)
 	}
 	var t1 time.Time
-	pool.QueryRow(ctx, `SELECT last_used_at FROM magnetico_web.api_tokens WHERE id = $1`, id.TokenID).Scan(&t1)
+	if err := pool.QueryRow(ctx, `SELECT last_used_at FROM magnetico_web.api_tokens WHERE id = $1`, id.TokenID).Scan(&t1); err != nil {
+		t.Fatal(err)
+	}
 	if t1.IsZero() {
 		t.Fatal("last_used_at not set")
 	}
@@ -247,7 +249,9 @@ func TestTokenTouchIsThrottled(t *testing.T) {
 		t.Fatal(err)
 	}
 	var t2 time.Time
-	pool.QueryRow(ctx, `SELECT last_used_at FROM magnetico_web.api_tokens WHERE id = $1`, id.TokenID).Scan(&t2)
+	if err := pool.QueryRow(ctx, `SELECT last_used_at FROM magnetico_web.api_tokens WHERE id = $1`, id.TokenID).Scan(&t2); err != nil {
+		t.Fatal(err)
+	}
 	if !t1.Equal(t2) {
 		t.Fatal("a throttled touch wrote")
 	}

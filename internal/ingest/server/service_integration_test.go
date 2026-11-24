@@ -76,7 +76,7 @@ func startService(t *testing.T, dsn string, mutate func(*Options)) *running {
 	select {
 	case a := <-ready:
 		r := &running{base: "http://" + a.String() + APIPrefix, cancel: cancel, done: done}
-		t.Cleanup(func() { cancel(); r.wait(60 * time.Second) })
+		t.Cleanup(func() { cancel(); _, _ = r.wait(60 * time.Second) }) // best-effort drain at cleanup
 		return r
 	case err := <-done:
 		cancel()

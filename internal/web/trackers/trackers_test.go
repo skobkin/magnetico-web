@@ -159,7 +159,9 @@ func TestStaleSnapshotIsServedWhileOneBackgroundReloadRuns(t *testing.T) {
 func TestFailedReloadKeepsTheLastGoodSnapshotAndRetriesAtTTLCadence(t *testing.T) {
 	src := &fakeSource{urls: []string{"udp://a:1/announce", "udp://b:1/announce"}}
 	c, clk, logs := newCache(t, src, time.Minute)
-	c.Load(context.Background())
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	run(t, c)
 
 	src.set(nil, errors.New("connection refused to secret-host"))
@@ -194,7 +196,9 @@ func TestFailedReloadKeepsTheLastGoodSnapshotAndRetriesAtTTLCadence(t *testing.T
 func TestSuccessfulEmptyListReplacesButAFailureNeverDoes(t *testing.T) {
 	src := &fakeSource{urls: []string{"udp://a:1/announce"}}
 	c, clk, _ := newCache(t, src, time.Minute)
-	c.Load(context.Background())
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	run(t, c)
 	src.set([]string{}, nil) // the operator removed every tracker
 	clk.Advance(2 * time.Minute)
@@ -205,7 +209,9 @@ func TestSuccessfulEmptyListReplacesButAFailureNeverDoes(t *testing.T) {
 func TestInvalidateReloadsNow(t *testing.T) {
 	src := &fakeSource{urls: []string{"udp://a:1/announce"}}
 	c, _, _ := newCache(t, src, time.Hour)
-	c.Load(context.Background())
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	run(t, c)
 	src.set([]string{"udp://z:1/announce"}, nil)
 	c.Invalidate()
@@ -215,7 +221,9 @@ func TestInvalidateReloadsNow(t *testing.T) {
 func TestSnapshotNeverBlocksOnTheSource(t *testing.T) {
 	src := &fakeSource{urls: []string{"udp://a:1/announce"}}
 	c, clk, _ := newCache(t, src, time.Minute)
-	c.Load(context.Background())
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	// No Run: nothing consumes the reload requests, yet reads stay instant.
 	src.gate = make(chan struct{})
 	clk.Advance(time.Hour)

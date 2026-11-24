@@ -245,11 +245,15 @@ func TestTouchIsThrottledAndConditional(t *testing.T) {
 	rem := login(t, s, u, true)
 	idleBackdate(t, pool, rem.Token, time.Hour)
 	var e1, e2 time.Time
-	pool.QueryRow(ctx, `SELECT expires_at FROM magnetico_web.sessions WHERE token_hash = $1`, hashOf(t, rem.Token)).Scan(&e1)
+	if err := pool.QueryRow(ctx, `SELECT expires_at FROM magnetico_web.sessions WHERE token_hash = $1`, hashOf(t, rem.Token)).Scan(&e1); err != nil {
+		t.Fatal(err)
+	}
 	if ok, err := s.TouchSession(ctx, hashOf(t, rem.Token), lt.Idle); err != nil || !ok {
 		t.Fatalf("remember touch: %v %v", ok, err)
 	}
-	pool.QueryRow(ctx, `SELECT expires_at FROM magnetico_web.sessions WHERE token_hash = $1`, hashOf(t, rem.Token)).Scan(&e2)
+	if err := pool.QueryRow(ctx, `SELECT expires_at FROM magnetico_web.sessions WHERE token_hash = $1`, hashOf(t, rem.Token)).Scan(&e2); err != nil {
+		t.Fatal(err)
+	}
 	if !e1.Equal(e2) {
 		t.Fatal("activity extended a remember session")
 	}

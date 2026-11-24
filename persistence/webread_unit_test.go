@@ -96,7 +96,7 @@ func TestBuildSearchSQLShape(t *testing.T) {
 						max := 0
 						for _, m := range placeholder.FindAllStringSubmatch(sql, -1) {
 							var n int
-							fmt.Sscan(m[1], &n)
+							_, _ = fmt.Sscan(m[1], &n) // the capture is \d+: it always parses
 							max = max2(max, n)
 						}
 						if max != len(args) {

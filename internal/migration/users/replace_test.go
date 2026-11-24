@@ -53,7 +53,7 @@ func TestPopulatedTargetIsNeverReplacedWithoutTheFlag(t *testing.T) {
 	mustRun(t, cfgFor(src, tgt2))
 	execSQL(t, tgt2, `UPDATE magnetico_web.users SET password_hash = 'rehashed' WHERE id = 1`)
 	_, err = Run(tctx(t), cfgFor(src, tgt2))
-	wantClass(t, err, ClassTargetNotEmpty)
+	_ = wantClass(t, err, ClassTargetNotEmpty) // the helper fails the test itself
 }
 
 // populate turns a fresh import into a realistic "live" state that
@@ -102,10 +102,10 @@ func TestReplaceUsersGuardedAndAtomic(t *testing.T) {
 	real := cfgFor(src, tgt)
 	real.ReplaceUsers = true
 	_, err := Run(tctx(t), real)
-	wantClass(t, err, ClassConfig)
+	_ = wantClass(t, err, ClassConfig) // the helper fails the test itself
 	real.ConfirmPlan = strings.Repeat("0", 64)
 	_, err = Run(tctx(t), real)
-	wantClass(t, err, ClassPlanMismatch)
+	_ = wantClass(t, err, ClassPlanMismatch) // the helper fails the test itself
 	if userState(t, tgt) != before {
 		t.Fatal("a refused replace changed the target")
 	}
@@ -163,7 +163,7 @@ func TestReplaceFailureIsFullyRolledBack(t *testing.T) {
 		real.ReplaceUsers, real.ConfirmPlan = true, digest
 		_, err := Run(tctx(t), real)
 		testHook = nil
-		wantClass(t, err, ClassStorage)
+		_ = wantClass(t, err, ClassStorage) // the helper fails the test itself
 		if userState(t, tgt) != before {
 			t.Fatalf("a failed replace at %s left changes (rows or sequences)", stage)
 		}
@@ -196,7 +196,7 @@ func TestUnmatchedTargetAccountsAreProtected(t *testing.T) {
 		if _, err := dry(list...); err == nil {
 			t.Errorf("list %v accepted", list)
 		} else {
-			wantClass(t, err, ClassUnmatchedTarget)
+			_ = wantClass(t, err, ClassUnmatchedTarget) // the helper fails the test itself
 		}
 	}
 	rep, err = dry(2, 50)
@@ -219,7 +219,7 @@ func TestUnmatchedTargetAccountsAreProtected(t *testing.T) {
 	cfg.SourceTimezone, cfg.AcceptNeedsReset = testZone, 0
 	cfg.ReplaceUsers, cfg.DeleteUnmatchedIDs = false, nil
 	rep3, err := Run(tctx(t), cfg)
-	wantClass(t, err, ClassTargetNotEmpty)
+	_ = wantClass(t, err, ClassTargetNotEmpty) // the helper fails the test itself
 	if rep3.PlanDigest == digest {
 		t.Error("the digest does not bind the destructive operation")
 	}
@@ -229,11 +229,11 @@ func TestUnmatchedTargetAccountsAreProtected(t *testing.T) {
 	real.ReplaceUsers, real.DeleteUnmatchedIDs, real.ConfirmPlan = true, []int64{2, 50}, digest
 	real.SourceTimezone = "Europe/Berlin"
 	_, err = Run(tctx(t), real)
-	wantClass(t, err, ClassPlanMismatch)
+	_ = wantClass(t, err, ClassPlanMismatch) // the helper fails the test itself
 	real.SourceTimezone = testZone
 	real.DeleteUnmatchedIDs = []int64{50, 2, 3}
 	_, err = Run(tctx(t), real)
-	wantClass(t, err, ClassUnmatchedTarget)
+	_ = wantClass(t, err, ClassUnmatchedTarget) // the helper fails the test itself
 	if userState(t, tgt) != before {
 		t.Fatal("a refused run wrote")
 	}
@@ -259,7 +259,7 @@ func TestConfirmationIsInvalidatedByDataChanges(t *testing.T) {
 	real := cfgFor(src, tgt)
 	real.ConfirmPlan = digest
 	_, err := Run(tctx(t), real)
-	wantClass(t, err, ClassPlanMismatch)
+	_ = wantClass(t, err, ClassPlanMismatch) // the helper fails the test itself
 	if n := scalar[int](t, tgt, `SELECT count(*) FROM magnetico_web.users`); n != 0 {
 		t.Fatal("a refused run wrote")
 	}
@@ -284,7 +284,7 @@ func TestSourceChangeDuringTheRunRollsBack(t *testing.T) {
 	}
 	defer func() { testHook = nil }()
 	_, err := Run(tctx(t), cfgFor(src, tgt))
-	wantClass(t, err, ClassSourceChanged)
+	_ = wantClass(t, err, ClassSourceChanged) // the helper fails the test itself
 	if userState(t, tgt) != before {
 		t.Fatal("source drift left changes in the target (rows or sequences)")
 	}
@@ -305,7 +305,7 @@ func TestIdentityBehindItsMaximumIsNotIdentical(t *testing.T) {
 				cfg := cfgFor(src, tgt)
 				cfg.DryRun = dry
 				rep, err := Run(tctx(t), cfg)
-				wantClass(t, err, ClassTargetNotEmpty)
+				_ = wantClass(t, err, ClassTargetNotEmpty) // the helper fails the test itself
 				if rep != nil && (rep.Result == "already-migrated" || rep.TargetState == "identical") {
 					t.Fatalf("dry=%v: reported %q/%q", dry, rep.Result, rep.TargetState)
 				}
@@ -348,7 +348,7 @@ func TestConfirmationIsInvalidatedByIdentityChanges(t *testing.T) {
 			real := prev
 			real.DryRun, real.ConfirmPlan = false, digest
 			_, err := Run(tctx(t), real)
-			wantClass(t, err, ClassPlanMismatch)
+			_ = wantClass(t, err, ClassPlanMismatch) // the helper fails the test itself
 			if userState(t, tgt) != rows {
 				t.Fatal("a refused run changed the rows")
 			}

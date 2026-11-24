@@ -366,7 +366,7 @@ func TestQueueDeliversAndCountsAndFreesSlots(t *testing.T) {
 		var slot *Slot
 		waitFor(t, "slot", func() bool { var err error; slot, err = q.Reserve(); return err == nil })
 		slot.Submit(func(ctx context.Context, send func(Message) error) {
-			send(Message{To: "a@example.com", Subject: "s", Body: "b"})
+			_ = send(Message{To: "a@example.com", Subject: "s", Body: "b"}) // runs on a queue worker: not the test goroutine
 		})
 	}
 	waitFor(t, "all sent", func() bool { return m.count() == 20 })
@@ -412,7 +412,9 @@ func TestQueueClosedRejectsButSubmittedJobsFinishOnDrain(t *testing.T) {
 	runQueue(t, q)
 	for i := 0; i < 6; i++ {
 		s, _ := q.Reserve()
-		s.Submit(func(ctx context.Context, send func(Message) error) { send(Message{To: "a@example.com", Subject: "s"}) })
+		s.Submit(func(ctx context.Context, send func(Message) error) {
+			_ = send(Message{To: "a@example.com", Subject: "s"})
+		})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -434,7 +436,9 @@ func TestDrainGivesUpAtTheDeadlineAndReportsAbandonedJobs(t *testing.T) {
 	runQueue(t, q)
 	for i := 0; i < 3; i++ {
 		s, _ := q.Reserve()
-		s.Submit(func(ctx context.Context, send func(Message) error) { send(Message{To: "a@example.com", Subject: "s"}) })
+		s.Submit(func(ctx context.Context, send func(Message) error) {
+			_ = send(Message{To: "a@example.com", Subject: "s"})
+		})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -455,7 +459,9 @@ func TestOldJobsAreDroppedNotSent(t *testing.T) {
 	q := NewQueue(m, logTo(&bytes.Buffer{}), Options{Capacity: 4, Workers: 1, MaxAge: time.Minute,
 		Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }})
 	s, _ := q.Reserve()
-	s.Submit(func(ctx context.Context, send func(Message) error) { send(Message{To: "a@example.com", Subject: "s"}) })
+	s.Submit(func(ctx context.Context, send func(Message) error) {
+		_ = send(Message{To: "a@example.com", Subject: "s"})
+	})
 	mu.Lock()
 	clock = now.Add(2 * time.Minute)
 	mu.Unlock()
@@ -475,7 +481,7 @@ func TestFailuresAndPanicsDoNotKillWorkersOrLeakDetails(t *testing.T) {
 	var ran atomic.Int32
 	s, _ := q.Reserve()
 	s.Submit(func(ctx context.Context, send func(Message) error) {
-		send(Message{To: "victim@example.com", Subject: "s", Body: "https://example.org/reset/SECRETTOKEN"})
+		_ = send(Message{To: "victim@example.com", Subject: "s", Body: "https://example.org/reset/SECRETTOKEN"}) // runs on a queue worker: not the test goroutine
 		ran.Add(1)
 	})
 	s, _ = q.Reserve()
@@ -559,7 +565,9 @@ func TestMeasureQueueSaturation(t *testing.T) {
 			continue
 		}
 		accepted++
-		s.Submit(func(ctx context.Context, send func(Message) error) { send(Message{To: "a@example.com", Subject: "s"}) })
+		s.Submit(func(ctx context.Context, send func(Message) error) {
+			_ = send(Message{To: "a@example.com", Subject: "s"})
+		})
 	}
 	d := time.Since(start)
 	t.Logf("1000 reservations against capacity %d with stalled workers: %d accepted, %d rejected in %v (%v each)", DefaultCapacity, accepted, rejected, d, d/1000)

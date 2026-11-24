@@ -128,7 +128,9 @@ func tableDump(t *testing.T, pool *pgxpool.Pool, userID int64) string {
 		}
 		for rows.Next() {
 			var s string
-			rows.Scan(&s)
+			if err := rows.Scan(&s); err != nil {
+				t.Fatal(err)
+			}
 			out += s + "\n"
 		}
 		rows.Close()

@@ -587,7 +587,7 @@ func TestWriteDeadlinePerRouteNotGlobal(t *testing.T) {
 	f.srv.Router().Handle("GET /plain-slow", KindRequest, Public, slow)
 	f.srv.Router().Handle("GET /search-slow", KindSearch, Public, slow)
 	addr, done, cancel := startServer(t, f)
-	defer func() { cancel(); <-done }()
+	defer func() { cancel(); _ = <-done }()
 
 	resp, err := http.Get("http://" + addr + "/search-slow")
 	if err != nil {
@@ -626,10 +626,12 @@ func TestRunFailsClosedOnVerification(t *testing.T) {
 		t.Fatal("backend not closed after a verification failure")
 	}
 	// Nothing was ever served on the listener.
-	ln.(*net.TCPListener).SetDeadline(time.Now().Add(50 * time.Millisecond))
+	if err := ln.(*net.TCPListener).SetDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
 	if c, err := net.DialTimeout("tcp", ln.Addr().String(), 200*time.Millisecond); err == nil {
 		// The kernel accepts into the backlog; the server must not answer.
-		c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 		_, _ = c.Write([]byte("GET /healthz HTTP/1.0\r\n\r\n"))
 		if n, _ := c.Read(make([]byte, 16)); n > 0 {
 			t.Fatal("server answered despite failed verification")
@@ -780,7 +782,7 @@ func TestMarginDoesNotExtendHandlerContextButAllowsErrorResponse(t *testing.T) {
 		_, _ = io.WriteString(w, "timed out")
 	}))
 	addr, done, cancel := startServer(t, f)
-	defer func() { cancel(); <-done }()
+	defer func() { cancel(); _ = <-done }()
 
 	resp, err := http.Get("http://" + addr + "/slowdb")
 	if err != nil {
@@ -855,7 +857,7 @@ func (r *Router) rawHandle(pattern string, k Kind, h http.Handler) {
 func TestRequestLineLimitBoundary(t *testing.T) {
 	f := newFixture(t, nil)
 	addr, done, cancel := startServer(t, f)
-	defer func() { cancel(); <-done }()
+	defer func() { cancel(); _ = <-done }()
 
 	get := func(n int) int {
 		t.Helper()

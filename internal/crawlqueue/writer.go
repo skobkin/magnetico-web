@@ -357,7 +357,7 @@ func (q *Queue) maintain() {
 	}
 	if cpErr != nil {
 		if isFatalCode(cpErr) {
-			q.fail(fmt.Errorf("crawlqueue: checkpoint: %w", cpErr))
+			_ = q.fail(fmt.Errorf("crawlqueue: checkpoint: %w", cpErr)) // records the fatal error; the return value is the same error
 			return
 		}
 		q.cpFailures.Add(1)
@@ -391,7 +391,7 @@ func (q *Queue) vacuum(ctx context.Context) {
 	}
 	if _, err := q.wdb.ExecContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		if isFatalCode(err) {
-			q.fail(fmt.Errorf("crawlqueue: incremental vacuum: %w", err))
+			_ = q.fail(fmt.Errorf("crawlqueue: incremental vacuum: %w", err)) // records the fatal error; the return value is the same error
 			return
 		}
 		q.warn("vacuum", "crawl queue: incremental vacuum failed: %v", err)

@@ -9,10 +9,10 @@ func TestFinalRunRequiresWritesStoppedAssertion(t *testing.T) {
 	cfg := cfgFor("postgres://127.0.0.1:1/src", "postgres://127.0.0.1:1/tgt")
 	cfg.SourceWritesStopped = false
 	_, err := Run(tctx(t), cfg)
-	wantClass(t, err, ClassSourceWritesNotAssert)
-	cfg.DryRun = true // a dry-run needs no assertion; it fails later, on the unreachable source
+	_ = wantClass(t, err, ClassSourceWritesNotAssert) // the helper fails the test itself
+	cfg.DryRun = true                                 // a dry-run needs no assertion; it fails later, on the unreachable source
 	_, err = Run(tctx(t), cfg)
-	wantClass(t, err, ClassStorage)
+	_ = wantClass(t, err, ClassStorage) // the helper fails the test itself
 }
 
 func TestConfigurationErrors(t *testing.T) {
@@ -30,7 +30,7 @@ func TestConfigurationErrors(t *testing.T) {
 		cfg := base
 		mod(&cfg)
 		_, err := Run(tctx(t), cfg)
-		wantClass(t, err, ClassConfig)
+		_ = wantClass(t, err, ClassConfig) // the helper fails the test itself
 	}
 	if _, err := ParseIDList("3, 1,2"); err != nil {
 		t.Error(err)
@@ -55,7 +55,7 @@ func TestNeedsResetMustBeAcknowledgedExactly(t *testing.T) {
 		cfg := cfgFor(src, tgt)
 		cfg.AcceptNeedsReset = n
 		rep, err := Run(tctx(t), cfg)
-		wantClass(t, err, ClassNeedsResetUnack)
+		_ = wantClass(t, err, ClassNeedsResetUnack) // the helper fails the test itself
 		if rep.NeedsReset != 2 {
 			t.Errorf("needs_reset=%d", rep.NeedsReset)
 		}
@@ -87,13 +87,13 @@ func TestUnvettedHashFormatBlocksTheFinalRun(t *testing.T) {
 	cfg := cfgFor(src, tgt)
 	cfg.DryRun = true
 	rep, err := Run(tctx(t), cfg)
-	wantClass(t, err, ClassUnvettedHash)
+	_ = wantClass(t, err, ClassUnvettedHash) // the helper fails the test itself
 	if rep.Unvetted != 1 || rep.NeedsReset != 0 || len(rep.WouldRefuse) != 1 || rep.WouldRefuse[0] != ClassUnvettedHash {
 		t.Fatalf("dry-run report: %+v", rep)
 	}
 	cfg.DryRun = false
 	_, err = Run(tctx(t), cfg)
-	wantClass(t, err, ClassUnvettedHash)
+	_ = wantClass(t, err, ClassUnvettedHash) // the helper fails the test itself
 	if userState(t, tgt) != before {
 		t.Fatal("a refused run wrote")
 	}
@@ -139,7 +139,7 @@ func TestEmptySourceIsRefused(t *testing.T) {
 	src := legacyDB(t)
 	tgt := targetDB(t)
 	_, err := Run(tctx(t), cfgFor(src, tgt))
-	wantClass(t, err, ClassSourceEmpty)
+	_ = wantClass(t, err, ClassSourceEmpty) // the helper fails the test itself
 }
 
 func TestWarningsDoNotBlockAndAllTokensAreImported(t *testing.T) {
@@ -239,7 +239,7 @@ func TestLockTimeoutWhenAUserTableIsBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = Run(tctx(t), cfgFor(src, tgt))
-	wantClass(t, err, ClassLockTimeout)
+	_ = wantClass(t, err, ClassLockTimeout) // the helper fails the test itself
 	_ = tx.Rollback(tctx(t))
 	if userState(t, tgt) != before {
 		t.Fatal("a lock timeout left changes")

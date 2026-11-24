@@ -118,12 +118,16 @@ func TestInvitationRules(t *testing.T) {
 	}
 
 	// Disabled owner: generic error, invitation unchanged; enable restores it.
-	s.Disable(ctx, "tess")
+	if _, err := s.Disable(ctx, "tess"); err != nil {
+		t.Fatal(err)
+	}
 	mustErr(t, reg(codes[4], "user-six"), ErrInvitationUnavailable, "disabled owner")
 	if count(t, pool, `SELECT count(*) FROM magnetico_web.invites WHERE code = $1 AND used_by IS NULL AND revoked_at IS NULL`, codes[4]) != 1 {
 		t.Fatal("a refused registration changed the invitation")
 	}
-	s.Enable(ctx, "tess")
+	if err := s.Enable(ctx, "tess"); err != nil {
+		t.Fatal(err)
+	}
 	if err := reg(codes[4], "user-six"); err != nil {
 		t.Fatalf("after enable: %v", err)
 	}
@@ -146,7 +150,7 @@ func TestDisableVersusRegistrationDeterministic(t *testing.T) {
 			}
 			return nil
 		}
-		go s.Disable(ctx, "uma")
+		go func() { _, _ = s.Disable(ctx, "uma") }()
 		<-inCommit
 		res := make(chan error, 1)
 		go func() {
@@ -187,8 +191,8 @@ func TestDisableVersusRegistrationDeterministic(t *testing.T) {
 		dis := make(chan error, 1)
 		go func() { _, err := s.Disable(ctx, "walt"); dis <- err }()
 		select {
-		case <-dis:
-			t.Fatal("disable did not wait for the registration")
+		case err := <-dis:
+			t.Fatalf("disable did not wait for the registration (returned %v)", err)
 		case <-time.After(150 * time.Millisecond):
 		}
 		close(release)
@@ -213,7 +217,9 @@ func TestDisableVersusRegistrationStress(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		s.Enable(ctx, "yan")
+		if err := s.Enable(ctx, "yan"); err != nil {
+			t.Fatal(err)
+		}
 		var wg sync.WaitGroup
 		var regErr error
 		wg.Add(2)
@@ -221,7 +227,7 @@ func TestDisableVersusRegistrationStress(t *testing.T) {
 			defer wg.Done()
 			_, regErr = s.RegisterWithInvite(ctx, RegisterParams{Code: codes[0], Username: "stress-" + codes[0][:10], Hash: testHash(t)})
 		}()
-		go func() { defer wg.Done(); s.Disable(ctx, "yan") }()
+		go func() { defer wg.Done(); _, _ = s.Disable(ctx, "yan") }() // racing the registration: either outcome is legitimate
 		wg.Wait()
 		used := count(t, pool, `SELECT count(*) FROM magnetico_web.invites WHERE code = $1 AND used_by IS NOT NULL`, codes[0])
 		switch {
@@ -278,11 +284,15 @@ func TestAuthenticationVersusDisableAndRevoke(t *testing.T) {
 	}
 	for i := 0; i < 60; i++ {
 		state.Store(-1)
-		s.Disable(ctx, "zed")
+		if _, err := s.Disable(ctx, "zed"); err != nil {
+			t.Fatal(err)
+		}
 		state.Store(0)
 		time.Sleep(3 * time.Millisecond)
 		state.Store(-1)
-		s.Enable(ctx, "zed")
+		if err := s.Enable(ctx, "zed"); err != nil {
+			t.Fatal(err)
+		}
 		state.Store(1)
 		time.Sleep(3 * time.Millisecond)
 	}

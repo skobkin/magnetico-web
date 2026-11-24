@@ -221,10 +221,18 @@ func TestStructuralRouteClassification(t *testing.T) {
 func TestSafeRequestsChangeNoApplicationState(t *testing.T) {
 	e := newEnv(t)
 	u := e.mkUser("sven", "the right password")
-	e.store.CreateAPIToken(tctx(t), u.ID, "t", nil)
-	e.store.CreateRSSToken(tctx(t), u.ID, "t", nil)
-	e.store.CreateInvites(tctx(t), "sven", 2, nil)
-	e.store.IssuePasswordLink(tctx(t), "sven")
+	if _, err := e.store.CreateAPIToken(tctx(t), u.ID, "t", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.CreateRSSToken(tctx(t), u.ID, "t", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.CreateInvites(tctx(t), "sven", 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.store.IssuePasswordLink(tctx(t), "sven"); err != nil {
+		t.Fatal(err)
+	}
 
 	dump := func() string {
 		var out string
@@ -242,7 +250,9 @@ func TestSafeRequestsChangeNoApplicationState(t *testing.T) {
 			}
 			for rows.Next() {
 				var s string
-				rows.Scan(&s)
+				if err := rows.Scan(&s); err != nil {
+					t.Fatal(err)
+				}
 				out += s + "\n"
 			}
 			rows.Close()
@@ -270,15 +280,21 @@ func TestSafeRequestsChangeNoApplicationState(t *testing.T) {
 	// and a public GET form issues a pre-session cookie.
 	e.exec(`UPDATE magnetico_web.sessions SET last_seen_at = last_seen_at - interval '10 minutes'`)
 	var seen0, exp0, seen1, exp1 time.Time
-	e.pool.QueryRow(tctx(t), `SELECT last_seen_at, expires_at FROM magnetico_web.sessions`).Scan(&seen0, &exp0)
+	if err := e.pool.QueryRow(tctx(t), `SELECT last_seen_at, expires_at FROM magnetico_web.sessions`).Scan(&seen0, &exp0); err != nil {
+		t.Fatal(err)
+	}
 	c.get("/")
-	e.pool.QueryRow(tctx(t), `SELECT last_seen_at, expires_at FROM magnetico_web.sessions`).Scan(&seen1, &exp1)
+	if err := e.pool.QueryRow(tctx(t), `SELECT last_seen_at, expires_at FROM magnetico_web.sessions`).Scan(&seen1, &exp1); err != nil {
+		t.Fatal(err)
+	}
 	if !seen1.After(seen0) || !exp1.Equal(exp0) {
 		t.Errorf("touch: last_seen %v→%v, expires %v→%v", seen0, seen1, exp0, exp1)
 	}
 	c.get("/")
 	var seen2 time.Time
-	e.pool.QueryRow(tctx(t), `SELECT last_seen_at FROM magnetico_web.sessions`).Scan(&seen2)
+	if err := e.pool.QueryRow(tctx(t), `SELECT last_seen_at FROM magnetico_web.sessions`).Scan(&seen2); err != nil {
+		t.Fatal(err)
+	}
 	if !seen2.Equal(seen1) {
 		t.Error("a second request inside the throttle wrote last_seen_at again")
 	}

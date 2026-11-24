@@ -336,8 +336,12 @@ func TestRevocationOwnerStateAndExpiryApplyBeforeTheCache(t *testing.T) {
 	if r := e.do(path, nil); r.Status != 401 {
 		t.Fatalf("revoked: %d", r.Status)
 	}
-	e.store.Disable(tctx(t), "alice")
-	e.store.Enable(tctx(t), "alice")
+	if _, err := e.store.Disable(tctx(t), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Enable(tctx(t), "alice"); err != nil {
+		t.Fatal(err)
+	}
 	if e.do(path, nil).Status != 401 {
 		t.Fatal("enable revived a revoked token")
 	}
@@ -359,7 +363,9 @@ func TestMigratedLegacyTokenSurvivesDisableEnableAndDiesOnReset(t *testing.T) {
 	e.exec(`INSERT INTO magnetico_web.rss_tokens (token_hash, user_id, legacy, created_at) VALUES ($1,$2,true,'2019-05-06 07:08:09+00')`, lh[:], e.user.ID)
 	dump := func() string {
 		var s string
-		e.pool.QueryRow(tctx(t), `SELECT t::text FROM magnetico_web.rss_tokens t WHERE token_hash = $1`, lh[:]).Scan(&s)
+		if err := e.pool.QueryRow(tctx(t), `SELECT t::text FROM magnetico_web.rss_tokens t WHERE token_hash = $1`, lh[:]).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
 		return s
 	}
 	before := dump()

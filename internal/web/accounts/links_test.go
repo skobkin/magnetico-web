@@ -115,9 +115,15 @@ func TestCompletionAndSetPasswordRevokeEverything(t *testing.T) {
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "ivy")
 	for round, complete := range []bool{true, false} {
-		s.CreateAPIToken(ctx, u.ID, "", nil)
-		s.CreateAPIToken(ctx, u.ID, "", nil)
-		s.CreateRSSToken(ctx, u.ID, "", nil)
+		if _, err := s.CreateAPIToken(ctx, u.ID, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateAPIToken(ctx, u.ID, "", nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.CreateRSSToken(ctx, u.ID, "", nil); err != nil {
+			t.Fatal(err)
+		}
 		exec(t, pool, `INSERT INTO magnetico_web.rss_tokens (token_hash, user_id, legacy) VALUES ($1,$2,true)`, hashToken("legacy"+string(rune('a'+round))), u.ID)
 		addSession(t, pool, u.ID)
 		exec(t, pool, `INSERT INTO magnetico_web.one_time_tokens (token_hash, user_id, purpose, email, expires_at) VALUES ($1,$2,'email_verify','x@example.org', now() + interval '1 day')`, hashToken("ev"+string(rune('a'+round))), u.ID)
@@ -129,7 +135,9 @@ func TestCompletionAndSetPasswordRevokeEverything(t *testing.T) {
 			res, err = s.CompletePasswordLink(ctx, l.Token, PurposeReset, testHash(t))
 			r = res.Revocations
 		} else {
-			s.IssuePasswordLink(ctx, "ivy")
+			if _, err := s.IssuePasswordLink(ctx, "ivy"); err != nil {
+				t.Fatal(err)
+			}
 			r, err = s.SetPassword(ctx, "ivy", testHash(t))
 		}
 		if err != nil {
@@ -174,7 +182,9 @@ func TestCompletionOnDisabledAccountIsRefusedAndNotConsumed(t *testing.T) {
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "kate")
 	l, _ := s.IssuePasswordLink(ctx, "kate")
-	s.Disable(ctx, "kate")
+	if _, err := s.Disable(ctx, "kate"); err != nil {
+		t.Fatal(err)
+	}
 	before := tableDump(t, pool, u.ID)
 	if _, err := s.CompletePasswordLink(ctx, l.Token, PurposeReset, testHash(t)); !errors.Is(err, ErrLinkInvalid) {
 		t.Fatalf("disabled owner: %v", err)
@@ -187,7 +197,9 @@ func TestCompletionOnDisabledAccountIsRefusedAndNotConsumed(t *testing.T) {
 		t.Fatalf("issue on disabled account: %+v, %v", l2, err)
 	}
 	l3, _ := s.IssuePasswordLink(ctx, "kate")
-	s.Enable(ctx, "kate")
+	if err := s.Enable(ctx, "kate"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.CompletePasswordLink(ctx, l3.Token, PurposeReset, testHash(t)); err != nil {
 		t.Fatalf("after enable: %v", err)
 	}
@@ -200,7 +212,9 @@ func TestConcurrentCompletionOfOneLinkSucceedsOnce(t *testing.T) {
 	s, pool := newStore(t)
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "liam")
-	s.CreateAPIToken(ctx, u.ID, "", nil)
+	if _, err := s.CreateAPIToken(ctx, u.ID, "", nil); err != nil {
+		t.Fatal(err)
+	}
 	l, _ := s.IssuePasswordLink(ctx, "liam")
 	var ok, invalid atomic.Int32
 	var wg sync.WaitGroup
@@ -313,7 +327,7 @@ func TestCompletionVersusReplacement(t *testing.T) {
 			var wg sync.WaitGroup
 			var fresh Link
 			wg.Add(2)
-			go func() { defer wg.Done(); s.CompletePasswordLink(ctx, old.Token, PurposeReset, testHash(t)) }()
+			go func() { defer wg.Done(); _, _ = s.CompletePasswordLink(ctx, old.Token, PurposeReset, testHash(t)) }() // racing the second issue: either outcome is legitimate
 			go func() {
 				defer wg.Done()
 				var err error
@@ -339,20 +353,26 @@ func TestCompletionVersusDisable(t *testing.T) {
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "quin")
 	l, _ := s.IssuePasswordLink(ctx, "quin")
-	s.Disable(ctx, "quin")
+	if _, err := s.Disable(ctx, "quin"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.CompletePasswordLink(ctx, l.Token, PurposeReset, testHash(t)); !errors.Is(err, ErrLinkInvalid) {
 		t.Fatal("completion after a committed disable")
 	}
 	if linkCount(t, s, u.ID, `'setup','reset'`) != 1 {
 		t.Fatal("link did not survive")
 	}
-	s.Enable(ctx, "quin")
+	if err := s.Enable(ctx, "quin"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.CompletePasswordLink(ctx, l.Token, PurposeReset, testHash(t)); err != nil {
 		t.Fatal(err)
 	}
 	// Disable after a committed completion leaves a disabled user with the new password.
 	before, _ := s.GetUser(ctx, "quin")
-	s.Disable(ctx, "quin")
+	if _, err := s.Disable(ctx, "quin"); err != nil {
+		t.Fatal(err)
+	}
 	after, _ := s.GetUser(ctx, "quin")
 	if after.Active || after.PasswordHash != before.PasswordHash {
 		t.Fatalf("after = %+v", after)

@@ -326,7 +326,11 @@ func TestBackgroundStopsOnForcedShutdown(t *testing.T) {
 	errc := make(chan error, 1)
 	go func() { errc <- s.Run(ctx) }()
 	<-bgEntered
-	go http.Get("http://" + ln.Addr().String() + "/stuck")
+	go func() {
+		if resp, err := http.Get("http://" + ln.Addr().String() + "/stuck"); err == nil {
+			resp.Body.Close()
+		}
+	}()
 	<-inHandler
 	cancel()
 	select {

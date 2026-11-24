@@ -143,8 +143,12 @@ func TestRevocationExpiryAndDisableTakeEffectOnTheNextRequest(t *testing.T) {
 	if r := e.api(path); r.Status != 401 || !bytes.Equal(r.Body, body401) {
 		t.Fatalf("revoked: %d", r.Status)
 	}
-	e.store.Disable(tctx(t), "alice")
-	e.store.Enable(tctx(t), "alice")
+	if _, err := e.store.Disable(tctx(t), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.Enable(tctx(t), "alice"); err != nil {
+		t.Fatal(err)
+	}
 	if e.api(path).Status != 401 {
 		t.Fatal("enable revived a revoked token")
 	}
@@ -214,18 +218,24 @@ func TestConcurrentDisableVersusRequests(t *testing.T) {
 func TestLastUseIsRecordedAndThrottled(t *testing.T) {
 	e := newEnv(t)
 	var before *time.Time
-	e.pool.QueryRow(tctx(t), `SELECT last_used_at FROM magnetico_web.api_tokens WHERE user_id = $1`, e.user.ID).Scan(&before)
+	if err := e.pool.QueryRow(tctx(t), `SELECT last_used_at FROM magnetico_web.api_tokens WHERE user_id = $1`, e.user.ID).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
 	if before != nil {
 		t.Fatal("last_used_at preset")
 	}
 	e.api("/api/v2/torrents?limit=1")
 	var t1, t2 time.Time
-	e.pool.QueryRow(tctx(t), `SELECT last_used_at FROM magnetico_web.api_tokens WHERE user_id = $1`, e.user.ID).Scan(&t1)
+	if err := e.pool.QueryRow(tctx(t), `SELECT last_used_at FROM magnetico_web.api_tokens WHERE user_id = $1`, e.user.ID).Scan(&t1); err != nil {
+		t.Fatal(err)
+	}
 	if t1.IsZero() {
 		t.Fatal("last use not recorded")
 	}
 	e.api("/api/v2/torrents?limit=1")
-	e.pool.QueryRow(tctx(t), `SELECT last_used_at FROM magnetico_web.api_tokens WHERE user_id = $1`, e.user.ID).Scan(&t2)
+	if err := e.pool.QueryRow(tctx(t), `SELECT last_used_at FROM magnetico_web.api_tokens WHERE user_id = $1`, e.user.ID).Scan(&t2); err != nil {
+		t.Fatal(err)
+	}
 	if !t1.Equal(t2) {
 		t.Fatal("last use written again within the throttle interval")
 	}
@@ -351,7 +361,9 @@ func TestInfoHashLookupAndParameterValidation(t *testing.T) {
 	e := newEnv(t)
 	id := e.seed("Lookup me", 10, 1, nil)
 	var hash string
-	e.pool.QueryRow(tctx(t), `SELECT encode(info_hash,'hex') FROM magneticod.torrents WHERE id=$1`, id).Scan(&hash)
+	if err := e.pool.QueryRow(tctx(t), `SELECT encode(info_hash,'hex') FROM magneticod.torrents WHERE id=$1`, id).Scan(&hash); err != nil {
+		t.Fatal(err)
+	}
 	var out struct {
 		Items      []map[string]any `json:"items"`
 		NextCursor *string          `json:"next_cursor"`

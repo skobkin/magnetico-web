@@ -133,7 +133,7 @@ func (f *fakeSMTP) accept() {
 }
 
 func (f *fakeSMTP) serve(c net.Conn) {
-	c.SetDeadline(time.Now().Add(15 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(15 * time.Second))
 	if f.mode == "silent" {
 		time.Sleep(10 * time.Second)
 		return

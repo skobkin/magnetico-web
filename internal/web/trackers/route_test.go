@@ -86,7 +86,9 @@ func TestMagnetRouteRedirectsWithTrackersAndDoesNoLookup(t *testing.T) {
 func TestMagnetRouteSurvivesRefreshFailureAndPicksUpChangesWithinTheTTL(t *testing.T) {
 	src := &fakeSource{urls: []string{"udp://a:1/announce"}}
 	c, clk, _ := newCache(t, src, time.Minute)
-	c.Load(context.Background())
+	if err := c.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	run(t, c)
 	h := routeServer(t, c)
 	const hash = "ffffffffffffffffffffffffffffffffffffffff"

@@ -74,7 +74,7 @@ func (s *Store) inTx(ctx context.Context, op string, fn func(tx pgx.Tx) error) e
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if err := fn(tx); err != nil {
 		return err
 	}

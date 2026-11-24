@@ -93,7 +93,7 @@ func startSMTPSink(t *testing.T) (*smtpSink, string) {
 func (s *smtpSink) port() int { return s.ln.Addr().(*net.TCPAddr).Port }
 
 func (s *smtpSink) serve(c net.Conn) {
-	c.SetDeadline(time.Now().Add(30 * time.Second))
+	_ = c.SetDeadline(time.Now().Add(30 * time.Second))
 	r := bufio.NewReader(c)
 	say := func(l string) { fmt.Fprintf(c, "%s\r\n", l) }
 	say("220 sink ESMTP")

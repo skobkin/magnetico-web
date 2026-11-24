@@ -272,14 +272,18 @@ func TestColdBuildReport(t *testing.T) {
 
 	reps := 1
 	if v := os.Getenv("MAGNETICO_COLD_REPEAT"); v != "" {
-		fmt.Sscan(v, &reps)
+		if _, err := fmt.Sscan(v, &reps); err != nil {
+			t.Fatalf("MAGNETICO_COLD_REPEAT=%q: %v", v, err)
+		}
 	}
 	concs := []int{1}
 	if v := os.Getenv("MAGNETICO_COLD_CONC"); v != "" {
 		concs = nil
 		for _, f := range strings.Fields(v) {
 			var c int
-			fmt.Sscan(f, &c)
+			if _, err := fmt.Sscan(f, &c); err != nil {
+				t.Fatal(err)
+			}
 			concs = append(concs, c)
 		}
 	}

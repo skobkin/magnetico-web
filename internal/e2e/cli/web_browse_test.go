@@ -174,7 +174,7 @@ func TestWebBinaryForcedShutdownAndResponsiveness(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err := tx.Exec(ctx, `LOCK TABLE magneticod.torrents IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}

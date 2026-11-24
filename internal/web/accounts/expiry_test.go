@@ -22,7 +22,7 @@ func holdUserLock(t *testing.T, pool *pgxpool.Pool, userID int64) (release func(
 		t.Fatal(err)
 	}
 	var once sync.Once
-	release = func() { once.Do(func() { tx.Rollback(context.Background()) }) }
+	release = func() { once.Do(func() { _ = tx.Rollback(context.Background()) }) }
 	t.Cleanup(release)
 	if _, err := tx.Exec(tctx(t), `SELECT 1 FROM magnetico_web.users WHERE id = $1 FOR UPDATE`, userID); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,9 @@ func TestLinkExpiringDuringLockWaitIsRefused(t *testing.T) {
 	s, pool := newStore(t)
 	ctx := tctx(t)
 	u := mkUser(t, s, pool, "lena")
-	s.CreateAPIToken(ctx, u.ID, "", nil)
+	if _, err := s.CreateAPIToken(ctx, u.ID, "", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	for window := 2 * time.Second; window <= 32*time.Second; window *= 2 {
 		link, err := s.IssuePasswordLink(ctx, "lena")
@@ -97,7 +99,7 @@ func TestLinkExpiringDuringLockWaitIsRefused(t *testing.T) {
 		if count(t, pool, `SELECT count(*) FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND expires_at > clock_timestamp()`, u.ID) != 1 {
 			// Too slow for this window: widen it and try again.
 			release()
-			<-res
+			_ = <-res // this attempt is discarded: its outcome is irrelevant
 			continue
 		}
 		sleepPast(t, pool, "the link", "one_time_tokens", `user_id = $1`, u.ID)
@@ -152,7 +154,7 @@ func TestInvitationExpiringDuringLockWaitIsRefused(t *testing.T) {
 			// Too slow for this window: the registration may have started
 			// after expiry. Discard this attempt and widen the window.
 			release()
-			<-res
+			_ = <-res // this attempt is discarded: its outcome is irrelevant
 			exec(t, pool, `DELETE FROM magnetico_web.invites WHERE code = $1`, code)
 			continue
 		}

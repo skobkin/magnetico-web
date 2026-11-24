@@ -192,7 +192,9 @@ func TestPasswordResetBetweenVerificationAndCommitFailsGenerically(t *testing.T)
 		t.Fatalf("login racing with a reset: %d", res.StatusCode)
 	}
 	var got string
-	e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got)
+	if err := e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got != newHash {
 		t.Fatal("the rehash overwrote the operator's password")
 	}
@@ -211,7 +213,11 @@ func TestDisableBetweenVerificationAndCommitRefusesTheLogin(t *testing.T) {
 	e.mkUser("yuri", "the right password")
 	var once sync.Once
 	e.store.commitStub = func() {
-		once.Do(func() { e.store.Disable(tctx(t), "yuri") })
+		once.Do(func() {
+			if _, err := e.store.Disable(tctx(t), "yuri"); err != nil {
+				t.Error(err) // not the test goroutine: Error, not Fatal
+			}
+		})
 	}
 	c := e.client()
 	c.get("/login")
@@ -265,7 +271,9 @@ func TestTwoConcurrentLegacyLoginsBothSucceedThroughTheBoundedRetry(t *testing.T
 		t.Fatalf("%d sessions, want 2", e.sessions())
 	}
 	var got string
-	e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got)
+	if err := e.pool.QueryRow(tctx(t), `SELECT password_hash FROM magnetico_web.users WHERE id = $1`, u.ID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
 	if got == hash || !strings.HasPrefix(got, "$argon2id$") {
 		t.Fatalf("hash not upgraded: %q", got)
 	}
@@ -408,7 +416,9 @@ func TestPurgerRemovesExpiredRowsAndStopsPromptly(t *testing.T) {
 	live.signIn("dora", "the right password")
 	e.exec(`INSERT INTO magnetico_web.sessions (token_hash, user_id, created_at, last_seen_at, expires_at, remember)
         VALUES (decode(repeat('ab', 32), 'hex'), $1, now() - interval '200 hours', now() - interval '200 hours', now() - interval '1 hour', false)`, u.ID)
-	e.store.IssuePasswordLink(tctx(t), "dora")
+	if _, err := e.store.IssuePasswordLink(tctx(t), "dora"); err != nil {
+		t.Fatal(err)
+	}
 	e.exec(`UPDATE magnetico_web.one_time_tokens SET created_at = now() - interval '3 hours', expires_at = now() - interval '2 hours'`)
 
 	a := &Auth{cfg: Config{Store: e.store, Lifetimes: testLifetimes, PurgeFirst: 10 * time.Millisecond, PurgeEvery: 20 * time.Millisecond}, log: e.srv.Logger()}
