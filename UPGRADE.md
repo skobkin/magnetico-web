@@ -15,6 +15,40 @@ before upgrading.
 > in [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md) and keep the old databases and backups until
 > you have validated the new system.
 
+### Starting the Go application with the old PHP deployment's environment (temporary warning)
+
+Magnetico Web 0.8.0 is a rewrite in Go: the PHP application's configuration and database layout are **incompatible**
+with it, and nothing is migrated or translated automatically. To save operators who point the new image at their old
+deployment from reading unrelated configuration errors, every command except `--help`, `--version` and the plain usage
+(no arguments) first checks the process environment for the **names** `APP_DATABASE_URL` and
+`MAGNETICOD_DATABASE_URL` (the two variables only the PHP application used; the generic `APP_ENV`, `APP_SECRET`,
+`MAILER_DSN`, … are deliberately not triggers). If one is present it prints a boxed warning on standard error, before
+the configuration is read:
+
+```
+================================================================================
+WARNING: the environment of the previous PHP deployment of Magnetico Web was detected
+         (variables set: APP_DATABASE_URL).
+
+Magnetico Web has been rewritten in Go. The old deployment configuration and the old
+database layout are incompatible with this application. Explicit migration and
+configuration changes are required; nothing is migrated or translated automatically
+and no database is modified by this notice.
+
+Upgrade instructions: https://github.com/skobkin/magnetico-web/blob/master/UPGRADE.md
+(Temporary notice; planned for removal around version 0.10.0.)
+================================================================================
+```
+
+The warning prints variable **names only**, never a value, a DSN or a credential; it changes no exit code, never
+connects to anything and does not weaken the fail-closed schema verification or the required-configuration checks (the
+real error follows it unchanged). The link targets `master`: the instructions are this file's 0.8.0 section and
+[`docs/migration_0.8.0.md`](docs/migration_0.8.0.md), which reach `master` when the owner merges the 0.8.0 branch.
+
+**This warning is temporary and is intended to be removed around version 0.10.0** (the code is the one call in
+`internal/app/app.go` and the package `internal/legacywarn`; its tests are `internal/legacywarn` and
+`internal/e2e/cli/legacywarn_test.go`).
+
 ### The crawler no longer connects to PostgreSQL (distributed crawler/ingest)
 
 `magnetico crawl` now delivers metadata to a separate **`magnetico ingest`** service over

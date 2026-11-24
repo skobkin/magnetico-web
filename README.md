@@ -16,6 +16,38 @@ authenticated web UI (implemented; see below).
 > development branch is unreleased Go work; no 0.8.0 release exists yet, and
 > its breaking changes will be documented in `UPGRADE.md` when it is ready.
 
+## Container images and releases
+
+| | |
+|---|---|
+| **Docker Hub** | [`skobkin/magnetico-web`](https://hub.docker.com/r/skobkin/magnetico-web) (`docker.io/skobkin/magnetico-web`) |
+| **GitHub Container Registry** | [`ghcr.io/skobkin/magnetico-web`](https://github.com/skobkin/magnetico-web/pkgs/container/magnetico-web) |
+| **Deployment stack** | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) — it temporarily still describes the **old PHP** deployment until it is updated separately |
+| **Native binaries** | Linux amd64 and arm64 archives with SHA-256 checksums on the [Forgejo releases](https://git.skobk.in/skobkin/magnetico-web/releases) |
+
+One multi-platform image (`linux/amd64`, `linux/arm64`) holds the single `magnetico` executable and every subcommand;
+tags are the exact release only (`0.8.0-rc.0`, `0.8.0`, …; no `latest` yet; pin the digest in production). It runs as
+`10001:10001`, with `/data` (the crawler queue) and `/reports` (migration reports and exports) as the only writable
+places. **No image has been published yet**: the build, the checks and the publication pipeline are configured and were
+verified locally, but have not run on Woodpecker (see [`docs/release-engineering.md`](docs/release-engineering.md)).
+
+```sh
+docker run --rm docker.io/skobkin/magnetico-web:0.8.0 --version
+# web (behind a TLS-terminating reverse proxy), ingest, crawler with a persistent queue and its UDP port,
+# migration/admin commands, healthchecks, graceful shutdown, resources: see docs/container.md
+docker run -d --name magnetico-crawl -p 6881:6881/udp -v magnetico-queue:/data --env-file crawler.env \
+  -e MAGNETICO_CRAWL_INGEST_URL=https://ingest.example.org -e MAGNETICO_CRAWL_INDEXER_ADDR=0.0.0.0:6881 \
+  docker.io/skobkin/magnetico-web:0.8.0 crawl
+```
+
+Starting this image with the environment of the **old PHP deployment** (`APP_DATABASE_URL` or
+`MAGNETICOD_DATABASE_URL` set) prints a prominent warning that the application was rewritten in Go and needs explicit
+migration and configuration changes (see [`UPGRADE.md`](UPGRADE.md)); it never migrates or translates anything.
+
+Details: [`docs/container.md`](docs/container.md) (usage), [`docs/web-deployment.md`](docs/web-deployment.md) (web),
+[`docs/crawler.md`](docs/crawler.md) (crawler and ingest), [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md)
+(migration), [`UPGRADE.md`](UPGRADE.md), [`docs/release-engineering.md`](docs/release-engineering.md) (CI, tags, secrets).
+
 ## Current state
 
 A single binary `magnetico` with the following subcommands:
@@ -105,21 +137,30 @@ The storage layer (codec + PostgreSQL persistence), the crawler/ingest delivery,
 the migration toolchain, the web UI and API (milestones W1–W7), the user
 migration (W8) and the development fixtures and operator guides (07I) are
 implemented and accepted by the owner, as is the W9 integration, security and
-regression task (07J); the CI/OCI and release-engineering task (08) is in
-progress and tracked in [`docs/wip/`](docs/wip/). Not done: CI and
-OCI image publishing, release-candidate testing (including live-DHT
+regression task (07J). The CI/OCI and release-engineering task (08) is done
+(report: [`docs/wip/08-ci-oci-report.md`](docs/wip/08-ci-oci-report.md)): the
+repository layout, the lint gate, `magnetico --version`, the container image,
+the Woodpecker workflows and the GoReleaser configuration exist and were
+verified locally; **nothing has been published and no pipeline has run on
+Woodpecker yet**. Not done: release-candidate testing (including live-DHT
 acceptance) and the production cutover. No 0.8.0 release exists yet.
 
 ## Build and test
 
-    go build ./...
+    go build ./...                                 # everything
+    go build -o magnetico ./cmd/magnetico          # the executable
+    ./magnetico --version                          # version, commit, Go version, platform (no config or database needed)
     go vet ./...
-    go test ./...
+    go test -p 3 ./...                             # the whole regular suite
 
 Integration tests bootstrap their own disposable PostgreSQL (a container from
 the locally cached `postgres:17` image, an explicit
-`MAGNETICO_TEST_POSTGRES_DSN`, or local `initdb`/`postgres` binaries) and skip
-when none is available; they never touch any other server.
+`MAGNETICO_TEST_POSTGRES_DSN` pointing at a **trust-authentication** server, or
+local `initdb`/`postgres` binaries) and skip when none is available unless
+`MAGNETICO_TEST_REQUIRE_POSTGRES=1` (CI sets it); they never touch any other
+server. `-p 3` is the verified parallelism. Which tests run where (regular CI,
+release CI, explicit manual execution only), the exact commands for each and the
+mapping of historical report commands are in [`docs/testing.md`](docs/testing.md).
 
 ## Examples
 
@@ -165,4 +206,4 @@ MIT licensed; no relicensing of third-party work is claimed or performed.
 
 - Primary repository: [git.skobk.in/skobkin/magnetico-web](https://git.skobk.in/skobkin/magnetico-web) (Forgejo). GitHub is a mirror.
 - Go module path: `github.com/skobkin/magnetico-web` (served from the GitHub mirror; importable once a version is tagged).
-- The intended build system is Woodpecker CI and the intended OCI registry is Docker Hub (GHCR may be added later). Forgejo is not an OCI publication target. None of this is set up yet: no production container image has been published for the unified version.
+- Build system: Woodpecker CI (`.woodpecker/ci.yaml` verifies, `.woodpecker/release.yaml` publishes tags). Native binaries are published to Forgejo releases; images to Docker Hub and GHCR only (Forgejo is not an OCI publication target). All of it is **configured**, none of it has run on Woodpecker, and no image or release has been published: see [`docs/release-engineering.md`](docs/release-engineering.md).
