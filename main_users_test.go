@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -179,6 +180,37 @@ INSERT INTO users.api_tokens (key, user_id, created_at) VALUES
 		if resp := b.login(u.name, u.pw); resp.StatusCode != 303 {
 			t.Fatalf("%s: legacy login: %d\n%s", u.name, resp.StatusCode, b.body)
 		}
+	}
+	// A migrated historical address is unverified. The service here has no SMTP,
+	// so the page says recovery is unavailable and that the address cannot be
+	// verified (never the generic "verify your address" instruction), offers no
+	// verification action and still lets the user remove the address (W9).
+	ab := newBrowser(t, w.addr)
+	if resp := ab.login("alice", sodiumPW); resp.StatusCode != 303 {
+		t.Fatalf("alice login: %d", resp.StatusCode)
+	}
+	ab.get("/account?tab=profile")
+	for _, want := range []string{"alice@example.org", "Unverified", "Password recovery is unavailable.", "cannot currently send email, so this address cannot be verified", `action="/account/email/remove"`} {
+		if !strings.Contains(ab.body, want) {
+			t.Errorf("migrated profile page lacks %q", want)
+		}
+	}
+	for _, bad := range []string{"Verify your email address", `action="/account/email/resend"`, `action="/account/email"`, "Send verification email"} {
+		if strings.Contains(ab.body, bad) {
+			t.Errorf("migrated profile page without SMTP contains %q", bad)
+		}
+	}
+	if resp := ab.post("/account/email/remove", url.Values{"current_password": {"not the password"}, "csrf_token": {ab.token()}}); resp.StatusCode != 400 {
+		t.Errorf("removal with a wrong password: %d", resp.StatusCode)
+	}
+	if resp := ab.post("/account/email/remove", url.Values{"current_password": {sodiumPW}, "csrf_token": {ab.token()}}); resp.StatusCode != 303 {
+		t.Errorf("removal: %d\n%s", resp.StatusCode, ab.body)
+	}
+	if n := sqlCount(t, tgt, `SELECT count(*) FROM magnetico_web.users WHERE username = 'alice' AND email IS NULL`); n != 1 {
+		t.Errorf("alice's address was not removed")
+	}
+	if n := sqlCount(t, tgt, `SELECT count(*) FROM magnetico_web.users WHERE username = 'Bob' AND email = 'bob@example.org'`); n != 1 {
+		t.Errorf("Bob's address changed")
 	}
 	if n := sqlCount(t, tgt, `SELECT count(*) FROM magnetico_web.users WHERE password_hash LIKE '$argon2id$v=19$m=65536,t=3,p=4$%'`); n != 2 {
 		t.Errorf("%d accounts were rehashed at login, want 2", n)

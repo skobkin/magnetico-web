@@ -91,7 +91,8 @@ paths:
         Returns the metadata, the magnet URI (with the configured trackers) and
         `full_tree_available`: `true` means `files/tree` can deliver the whole
         file hierarchy in one response, `false` means use `files`. Clients may
-        always choose `files`.
+        always choose `files`. An `id` that is not a positive integer is
+        reported as `404`, exactly like an unknown torrent.
       parameters:
         - {$ref: "#/components/parameters/TorrentId"}
       responses:
@@ -100,7 +101,6 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/TorrentDetails"}
-        "400": {$ref: "#/components/responses/InvalidParameter"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "404": {$ref: "#/components/responses/NotFound"}
         "429": {$ref: "#/components/responses/RateLimited"}
