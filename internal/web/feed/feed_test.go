@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"github.com/skobkin/magnetico-web/persistence"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/internal/web/ratelimit"
+	"github.com/skobkin/magnetico-web/persistence"
 )
 
 const legacyEnvelope = `{"code":401,"status":"error","message":"Invalid credentials.","data":null}`

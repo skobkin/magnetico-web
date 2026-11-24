@@ -15,10 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/term"
-
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	"github.com/skobkin/magnetico-web/internal/web/password"
+	"golang.org/x/term"
 )
 
 // PasswordSource reads the new password for `set-password`.

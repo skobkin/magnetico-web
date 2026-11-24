@@ -22,7 +22,6 @@ import (
 
 	"github.com/goccy/go-yaml"
 	"github.com/santhosh-tekuri/jsonschema/v6"
-
 	"github.com/skobkin/magnetico-web/internal/web/apidocs"
 	"github.com/skobkin/magnetico-web/internal/web/apiv2"
 	"github.com/skobkin/magnetico-web/internal/web/feed"

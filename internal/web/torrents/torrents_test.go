@@ -3,13 +3,14 @@ package torrents
 import (
 	"context"
 	"fmt"
-	"github.com/skobkin/magnetico-web/codec"
 	"net/url"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/skobkin/magnetico-web/codec"
 )
 
 func TestAnonymousAndRoot(t *testing.T) {

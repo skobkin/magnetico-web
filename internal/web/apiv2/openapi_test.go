@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/goccy/go-yaml"
-
 	"github.com/skobkin/magnetico-web/internal/web/apidocs"
 )
 
