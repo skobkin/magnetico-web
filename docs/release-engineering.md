@@ -16,7 +16,7 @@ Nothing below has been published. This table is the honest state after Task 08.
 | Native archives | **verified locally**: a snapshot build and a build for a local, never-pushed tag in a scratch clone, `ci/native-smoke.sh`, reproducible checksums; also built inside the pinned `goreleaser/goreleaser:v2.20.1` image |
 | Both Woodpecker workflows | **linted** with Woodpecker's own `woodpecker-cli lint` (v3.20.1: valid) and pinned by `internal/repocheck`; **never run on a Woodpecker server** |
 | Pushes to Docker Hub, GHCR, Forgejo releases | **never performed** (no tag exists, no credentials were used) |
-| `ci/ciguard` against a real Forgejo, the exact status-context name Woodpecker posts, `docker load` into the `dind` service, the privileged plugin build on a real agent | **unverified**: they depend on the operator's Woodpecker/Forgejo/Docker versions; the first manual pre-flight run is the check |
+| `ci/ciguard` against a real Forgejo, the exact status-context name Woodpecker posts and that it records the pipeline URL as the status `target_url` (the guard fails closed if it does not), `docker load` into the `dind` service, the privileged plugin build on a real agent | **unverified**: they depend on the operator's Woodpecker/Forgejo/Docker versions; the first manual pre-flight run is the check |
 
 ## Roles
 
@@ -56,7 +56,7 @@ accepted duplication; remove `refactor/0.8.0-unify-and-new-storage` from the `pu
 ```
 tag ─► ci.yaml (verification, same commit)
    └─► release.yaml
-         require-verification   ci/ciguard: commit statuses of exactly CI_COMMIT_SHA (tag only)
+         require-verification   ci/ciguard: the ci workflow's status of THIS pipeline for CI_COMMIT_SHA (tag only)
          ├─ race                go test -race -p 3 + skip census          ┐
          ├─ govulncheck         pinned v1.10.0, both tag sets             │
          ├─ image-build         plugin-docker-buildx, dry_run, OCI layout │ gates
@@ -88,9 +88,13 @@ Guarantees, and how each is enforced:
   qualified `checksums.txt` is kept, and `verify-native` requires the published one to be byte-identical.
 * **Publication needs verification of the same commit.** Workflow `depends_on: [ci]` (never optional: Woodpecker
   documents that a dependency that was not built blocks the dependent) and `ci/ciguard`, which reads the forge's commit
-  statuses for exactly `CI_COMMIT_SHA` and succeeds only when the newest `ci/woodpecker/tag/ci` status is `success`;
-  failure, error, a missing or pending status, a status of another commit, an API error, a non-tag event, a malformed tag
-  or SHA all refuse. Every publication step depends on the guard and on all five gates.
+  statuses for exactly `CI_COMMIT_SHA` and succeeds only when the newest `ci/woodpecker/tag/ci` status **that belongs to
+  the current pipeline** is `success`. A status belongs to it when its `target_url` is `CI_PIPELINE_URL` (or below it on a
+  path-segment boundary, so a workflow id may follow; pipeline 1 is not 12). A green status of an **earlier pipeline for
+  the same commit** (a tag re-run, two tags on one commit) therefore never substitutes, and the pipeline-level aggregate
+  status, which may stay pending while the release workflow itself runs, is a different context and never counts.
+  Failure, error, a missing or pending status, a status of another commit or pipeline, an empty or unusable
+  `CI_PIPELINE_URL`, an API error, a non-tag event, a malformed tag or SHA all refuse. Every publication step depends on the guard and on all five gates.
 * **Untrusted code never sees credentials.** `ci.yaml` (the only workflow pull requests reach) has no `from_secret`, no
   registry login, no cache, no privileged step and no Docker daemon; `release.yaml` is tag/manual only. Secrets are used
   by `promote-image` (registry credentials) and `release-forgejo` (Forgejo token) and nowhere else.

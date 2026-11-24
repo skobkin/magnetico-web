@@ -7,9 +7,18 @@
 // require-verification is the second line of defence behind the workflow-level
 // `depends_on`: it asks the forge for the commit statuses of exactly
 // CI_COMMIT_SHA and succeeds only when the newest status of the verification
-// workflow's context is "success". A verification that failed, never ran, was
-// filtered out, is still pending after the timeout, or belongs to another commit
-// all end in a non-zero exit. Only status names are printed, never a token.
+// workflow's context that belongs to THIS pipeline is "success".
+//
+// Two things make a status count: its context equals --context exactly (the
+// verification WORKFLOW's own context; the pipeline-level aggregate, which stays
+// pending while the release workflow itself runs, has another context), and its
+// target_url, which Woodpecker sets to the pipeline's URL, is CI_PIPELINE_URL (a
+// further path segment, such as a workflow id, is allowed). A green status of an
+// EARLIER pipeline for the same commit (a tag re-run, two tags on one commit)
+// therefore never substitutes, and neither does an earlier pipeline's failure
+// block. A verification that failed, never ran, was filtered out, is still
+// pending after the timeout, or belongs to another commit or pipeline all end in
+// a non-zero exit. Only status names are printed, never a token.
 package main
 
 import (
@@ -36,9 +45,10 @@ func main() {
 }
 
 type commitStatus struct {
-	ID      int64  `json:"id"`
-	Context string `json:"context"`
-	Status  string `json:"status"`
+	ID        int64  `json:"id"`
+	Context   string `json:"context"`
+	Status    string `json:"status"`
+	TargetURL string `json:"target_url"`
 }
 
 func realMain(args []string, getenv func(string) string, stdout, stderr io.Writer, client *http.Client) int {
@@ -79,13 +89,18 @@ func realMain(args []string, getenv func(string) string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "ciguard: refusing: CI_FORGE_URL is empty")
 		return 1
 	}
+	pipeline, err := parsePipelineURL(getenv("CI_PIPELINE_URL"))
+	if err != nil {
+		fmt.Fprintf(stderr, "ciguard: refusing: %v\n", err)
+		return 1
+	}
 	endpoint := forgeURL + "/api/v1/repos/" + repo + "/commits/" + url.PathEscape(sha) + "/statuses"
 	token := getenv("GUARD_TOKEN")
 
 	start := time.Now()
 	apiErrors := 0
 	for {
-		state, err := newest(client, endpoint, token, *ctxName)
+		state, err := newest(client, endpoint, token, *ctxName, pipeline)
 		switch {
 		case err != nil:
 			apiErrors++
@@ -103,7 +118,7 @@ func realMain(args []string, getenv func(string) string, stdout, stderr io.Write
 		case state == "":
 			apiErrors = 0
 			if time.Since(start) >= *missing {
-				fmt.Fprintf(stderr, "ciguard: no status %q exists for commit %s: the verification never ran for this commit: publication refused\n", *ctxName, sha[:12])
+				fmt.Fprintf(stderr, "ciguard: no status %q of this pipeline exists for commit %s: the verification never ran in this pipeline (a status of an earlier pipeline does not count): publication refused\n", *ctxName, sha[:12])
 				return 1
 			}
 		default: // pending
@@ -117,8 +132,35 @@ func realMain(args []string, getenv func(string) string, stdout, stderr io.Write
 	}
 }
 
-// newest returns the state of the newest status of ctxName ("" when there is none).
-func newest(client *http.Client, endpoint, token, ctxName string) (string, error) {
+// parsePipelineURL validates CI_PIPELINE_URL: an absolute http(s) URL with a host
+// and a non-empty path (…/repos/<id>/pipeline/<number>).
+func parsePipelineURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if raw == "" || err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || strings.Trim(u.Path, "/") == "" {
+		return nil, fmt.Errorf("CI_PIPELINE_URL is missing or not an absolute http(s) pipeline URL, so the verification cannot be tied to this pipeline")
+	}
+	return u, nil
+}
+
+// belongsTo reports whether a status target_url is the pipeline's URL or lies
+// below it on a path-segment boundary (pipeline 1 is not pipeline 12). Scheme and
+// host must match; query and fragment are ignored; dot segments never match.
+func belongsTo(target string, pipeline *url.URL) bool {
+	u, err := url.Parse(target)
+	if target == "" || err != nil || u.Scheme != pipeline.Scheme || u.Host != pipeline.Host {
+		return false
+	}
+	want := strings.TrimRight(pipeline.Path, "/")
+	got := u.Path
+	if strings.Contains(got, "/../") || strings.HasSuffix(got, "/..") || strings.Contains(got, "/./") {
+		return false
+	}
+	return got == want || strings.HasPrefix(got, want+"/")
+}
+
+// newest returns the state of the newest status of ctxName that belongs to the
+// pipeline ("" when there is none).
+func newest(client *http.Client, endpoint, token, ctxName string, pipeline *url.URL) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, endpoint+"?limit=100", nil)
 	if err != nil {
 		return "", err
@@ -141,7 +183,7 @@ func newest(client *http.Client, endpoint, token, ctxName string) (string, error
 	}
 	var best *commitStatus
 	for i := range list {
-		if list[i].Context != ctxName {
+		if list[i].Context != ctxName || !belongsTo(list[i].TargetURL, pipeline) {
 			continue
 		}
 		if best == nil || list[i].ID > best.ID {

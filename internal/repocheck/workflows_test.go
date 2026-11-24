@@ -325,6 +325,16 @@ func TestRequireVerificationIsTagOnlyAndGatesDoNotWaitForIt(t *testing.T) {
 	if !strings.Contains(strings.Join(toStrings(g["commands"]), "\n"), "ci/ciguard") {
 		t.Error("require-verification must run ci/ciguard")
 	}
+	// The guard must name the verification WORKFLOW's own status context (the
+	// workflow file is ci.yaml; the pipeline-level aggregate has no workflow suffix
+	// and stays pending while the release workflow runs).
+	cmd := strings.Join(toStrings(g["commands"]), "\n")
+	if !strings.Contains(cmd, "--context ci/woodpecker/tag/ci\n") && !strings.HasSuffix(cmd, "--context ci/woodpecker/tag/ci") {
+		t.Errorf("require-verification must pass --context ci/woodpecker/tag/ci (the ci workflow's context), got %q", cmd)
+	}
+	if _, err := os.Stat("../../.woodpecker/ci.yaml"); err != nil {
+		t.Errorf("the context names the workflow ci.yaml, which must exist: %v", err)
+	}
 	// A manual pre-flight has no tag: the gates must not wait for a step that is
 	// filtered out there.
 	for _, name := range gates {

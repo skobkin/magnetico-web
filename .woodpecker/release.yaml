@@ -7,9 +7,12 @@
 # Publication needs, in this order:
 #   1. the verification workflow (ci.yaml) of the SAME commit has succeeded:
 #      `depends_on: [ci]` below, and require-verification (ci/ciguard) which asks the
-#      forge for the commit statuses of exactly CI_COMMIT_SHA and refuses anything
-#      else: a failed, never-run, filtered-out or foreign verification, or a pending
-#      one after the timeout;
+#      forge for the commit statuses of exactly CI_COMMIT_SHA and accepts only the
+#      status of the ci WORKFLOW (not the pipeline-level aggregate) that belongs to
+#      THIS pipeline (its target_url is CI_PIPELINE_URL): a success of an earlier
+#      pipeline for the same commit never substitutes. A failed, never-run,
+#      filtered-out or foreign verification, or a pending one after the timeout,
+#      refuses;
 #   2. the gates: the race-enabled test suite, govulncheck, the container smoke test
 #      and the image scan on the image, the native artifact smoke test;
 #   3. publication of exactly what the gates qualified:
@@ -67,6 +70,8 @@ steps:
       # The status context Woodpecker posts for the ci workflow of a tag pipeline
       # (WOODPECKER_STATUS_CONTEXT_FORMAT default: <context>/<event>/<workflow>). An
       # operator who changes the format breaks this guard closed: nothing publishes.
+      # Only a status whose target_url is this pipeline (CI_PIPELINE_URL, set by
+      # Woodpecker) counts: an earlier pipeline's green status for the same commit does not.
       - go run ./ci/ciguard require-verification --context ci/woodpecker/tag/ci
 
   # ---- gates ----
