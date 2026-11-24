@@ -3,6 +3,11 @@ version: "2"
 run:
   concurrency: 4
   tests: true
+  # Lint the opt-in code too: the heavy benchmark harness (loadtest) and the
+  # diagnostic listener (diag) are compiled only with these tags.
+  build-tags:
+    - loadtest
+    - diag
   allow-parallel-runners: true
   go: '1.27'
 
