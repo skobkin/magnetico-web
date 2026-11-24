@@ -43,9 +43,11 @@ go vet ./... && go vet -tags loadtest,diag ./...                       (run in T
 
 `ci/skipcensus` fails the run when a test was skipped for a reason that is not on `ci/skip-allowlist.txt` (a missing
 database above all) or when no test ran. The allow-list holds the opt-in harnesses, the bodies of subprocess helper
-tests, fuzz-seed entries a target rejects as invalid input, and two **known coverage gaps of the external-server mode**
-(`TestOpenRefusesFsyncOff`, `TestIdentitySameDatabaseViaSocketAndTCP` need a locally controlled cluster; they run when the
-harness starts docker or `initdb` itself). One more entry, `TestSSLCertFileIsHonoured`, skips when the process had already
+tests, fuzz-seed entries a target rejects as invalid input, and three **known coverage gaps of the CI environment**:
+`TestOpenRefusesFsyncOff` and `TestIdentitySameDatabaseViaSocketAndTCP` need a locally controlled cluster (they run when the
+harness starts docker or `initdb` itself), and `TestFaultRestartedSourceIsNotDrift` restarts a PostgreSQL container and
+needs the docker CLI, which the CI test image does not have. The allow-list was derived from a run **inside the CI image**
+(`golang:1.27.4-alpine`), not from a developer machine: a test that finds docker on a VM runs there and would be missing. One more entry, `TestSSLCertFileIsHonoured`, skips when the process had already
 initialised the system roots; it is only effective in isolation.
 
 Narrower runs while developing: `go test ./internal/web/...`, `go test -run TestWebBinary ./internal/e2e/cli`, the

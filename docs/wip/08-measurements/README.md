@@ -11,5 +11,6 @@ on arm64 hardware, or against a public registry**.
 | `image-scan.txt` | Trivy 0.76.2 (pinned by digest), HIGH/CRITICAL, `linux/amd64` and `linux/arm64`, on the final layout |
 | `release-rehearsal.txt` | the promotion rehearsal with the real `crane` against two throwaway registries: identical digest, `verify-published`, smoke test of the published digest, refusal of `latest` |
 | `govulncheck.txt` | `govulncheck` v1.10.0 with `GOTOOLCHAIN=go1.27.4`, default and `-tags loadtest,diag` |
-| `skip-census.txt` | the skip census of a full `go test -json -p 3 ./...` run (the source of `ci/skip-allowlist.txt`) |
+| `skip-census-ci-image.txt` | the skip census of the CI `test` step run **inside `golang:1.27.4-alpine`** (the CI image: no docker): 3026 passed, 28 skipped, 0 unexpected. **This** is the source of `ci/skip-allowlist.txt` |
+| `skip-census.txt` | the same census from a developer VM that has docker: kept as the record of why that was the wrong source (it lacked `TestFaultRestartedSourceIsNotDrift`, which skips in the CI image) |
 | `image-local.txt` | an **earlier iteration** of the image evidence (before the final Dockerfile and the embedded time zone data were finalised); kept because it holds the arm64 archive facts (executable 27.1 MB, 14.3 MB compressed layers) |

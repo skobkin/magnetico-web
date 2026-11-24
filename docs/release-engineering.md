@@ -73,10 +73,15 @@ tag ─► ci.yaml (verification, same commit)
 Guarantees, and how each is enforced:
 
 * **The published image is the qualified image.** `image-build` is the only build. Its output is an OCI layout
-  (`.ci/image`): one index holding `linux/amd64`, `linux/arm64` and two attestation manifests (SBOM and provenance,
-  `mode=max`). The smoke test and the scanner read that layout; `promote-image` pushes it unchanged, so each registry
+  (`.ci/image`, relative to the workspace: `CI_WORKSPACE` is runtime-only and cannot be substituted into a setting): one
+  index holding `linux/amd64`, `linux/arm64` and two attestation manifests (SBOM and provenance, `mode=max`).
+  `ci/check-attestations.sh` (in `image-scan`) requires an SPDX **and** a SLSA predicate in each attestation manifest —
+  counting manifests cannot show an SBOM, provenance alone also yields two. The smoke test and the scanner read that layout; `promote-image` pushes it unchanged, so each registry
   reports exactly the qualified digest (the script fails otherwise, and `verify-published` checks again). The image
-  digest differs between builds (provenance embeds timestamps), which is why nothing is rebuilt. The plugin runs with
+  digest differs between builds (provenance embeds timestamps), which is why nothing is rebuilt. `ci/promote-image.sh`
+  never overwrites a release tag that already resolves to other bytes (checked for both repositories before anything
+  is pushed) and is idempotent for the same digest; `ci/image-smoke.sh` judges the identity of `--version` (the tag
+  and the commit the pipeline builds), not only its format. The plugin runs with
   `dry_run: true` against a non-routable `staged.invalid` repository: it cannot push anywhere.
 * **The published archives are the qualified archives.** GoReleaser's OSS edition has no `publish` command, so
   `release-forgejo` rebuilds; builds are reproducible (the binary and archive timestamps are the commit's), the
@@ -100,6 +105,27 @@ Guarantees, and how each is enforced:
 * **`latest` is a deliberate owner switch.** It stays commented out (`# - latest` in `promote-image`) for every release
   and `ci/promote-image.sh` refuses it, `0.8`, `stable`, `edge` and every tag outside the grammar. Enabling it means
   promoting the same layout under that tag and updating `internal/repocheck` on purpose.
+
+* **Timing-sensitive suites run alone.** `-p 3` is verified for a quiet agent, and failures are never rerun, so in
+  `ci.yaml` the `test` step waits for lint, vet, build and the Dockerfile check and the heavier steps (OpenAPI,
+  the GoReleaser snapshot, the invariants) run after it; in `release.yaml` the image build, the native build and
+  `govulncheck` wait for the race suite. The pipeline is slower than a fully parallel one by design.
+
+## Recovery after a partial publication
+
+`promote-image` (registries) and `release-forgejo` (Forgejo) are independent, so one can succeed while the other fails,
+and a pipeline re-run **rebuilds** the image with a different digest. Therefore:
+
+* a re-run whose `promote-image` finds a tag that already resolves to other bytes **stops** ("refusing to overwrite a
+  published tag"); it never replaces a published image;
+* to recover, either delete the incomplete artifacts deliberately (the image tag in both registries, and the Forgejo
+  release for that tag) and re-run, or cut the next tag (`0.8.0-rc.1`): a tag is cheap, an overwritten image is not;
+* what GoReleaser does when the Forgejo release already exists is **not verified** here: expect to delete that release
+  before a re-run.
+
+**First release and GHCR.** `verify-published` pulls anonymously. If the first push creates the GHCR package private
+(not verified here), that step fails right after a successful publication: set the package public (and linked to the
+repository) and re-run, or run `ci/verify-published.sh` by hand. The artifacts themselves are fine in that case.
 
 ## Operator configuration (not in the repository)
 
