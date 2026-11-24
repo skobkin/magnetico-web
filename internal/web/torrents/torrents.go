@@ -254,7 +254,8 @@ func (h *Handlers) list(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, persistence.ErrStorageIO):
 		w.Header().Set("Retry-After", retryBusy)
-		h.log.Warn("search storage error", "request_id", server.RequestID(r.Context()))
+		server.MarkFault(r.Context())
+		h.log.Error("search storage error", "request_id", server.RequestID(r.Context()))
 		page.Error = "The torrent database is temporarily unavailable."
 		h.render(w, r, http.StatusServiceUnavailable, "torrents", page)
 		return

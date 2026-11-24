@@ -328,12 +328,19 @@ func TestBackpressureIsLoggedAsAWarningAndFaultsAsErrors(t *testing.T) {
 	f.srv.Router().Handle("GET /t/down", KindRequest, Public, h(503, false))
 	f.srv.Router().Handle("GET /t/boom", KindRequest, Public, h(500, false))
 	f.srv.Router().Handle("GET /t/boom-retry", KindRequest, Public, h(500, true))
-	for _, p := range []string{"/t/shed", "/t/down", "/t/boom", "/t/boom-retry"} {
+	// A handler that recognised an infrastructure fault says so; the retry hint
+	// it still sends must not downgrade the access line.
+	f.srv.Router().Handle("GET /t/fault", KindRequest, Public, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		MarkFault(r.Context())
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(503)
+	}))
+	for _, p := range []string{"/t/shed", "/t/down", "/t/boom", "/t/boom-retry", "/t/fault"} {
 		f.get(p)
 	}
 	level := map[string]string{}
 	for _, line := range strings.Split(f.log.String(), "\n") {
-		for _, route := range []string{"/t/shed", "/t/down", "/t/boom-retry", "/t/boom"} {
+		for _, route := range []string{"/t/shed", "/t/down", "/t/boom-retry", "/t/boom", "/t/fault"} {
 			if strings.Contains(line, `route="GET `+route+`"`) {
 				for _, l := range []string{"WARN", "ERROR", "INFO"} {
 					if strings.Contains(line, "level="+l) {
@@ -344,7 +351,7 @@ func TestBackpressureIsLoggedAsAWarningAndFaultsAsErrors(t *testing.T) {
 			}
 		}
 	}
-	want := map[string]string{"/t/shed": "WARN", "/t/down": "ERROR", "/t/boom": "ERROR", "/t/boom-retry": "ERROR"}
+	want := map[string]string{"/t/shed": "WARN", "/t/down": "ERROR", "/t/boom": "ERROR", "/t/boom-retry": "ERROR", "/t/fault": "ERROR"}
 	for route, w := range want {
 		if level[route] != w {
 			t.Errorf("%s logged at %q, want %s\n%s", route, level[route], w, f.log.String())

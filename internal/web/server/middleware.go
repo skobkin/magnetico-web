@@ -21,9 +21,21 @@ type reqState struct {
 	clientIP netip.Addr
 	route    string
 	userID   int64 // set by authentication; 0 = anonymous
+	fault    bool  // a handler reported an infrastructure fault (see MarkFault)
 }
 
 type ctxKey struct{}
+
+// MarkFault records that the response being produced reports an infrastructure
+// fault (the database or storage is failing), not deliberate backpressure. The
+// access log then keeps the line at ERROR even when the response is a 503 with a
+// Retry-After hint, so a storage outage cannot hide among the WARN lines of
+// ordinary load shedding. Handlers call it where they classify an error.
+func MarkFault(ctx context.Context) {
+	if st, ok := ctx.Value(ctxKey{}).(*reqState); ok {
+		st.fault = true
+	}
+}
 
 func stateOf(ctx context.Context) *reqState {
 	if s, ok := ctx.Value(ctxKey{}).(*reqState); ok {
@@ -107,11 +119,13 @@ func accessLog(log *slog.Logger) func(http.Handler) http.Handler {
 			}
 			level := slog.LevelInfo
 			switch {
-			case sw.status == http.StatusServiceUnavailable && sw.Header().Get("Retry-After") != "":
-				// Deliberate backpressure (a saturated resource gate, a deadline,
-				// storage briefly unavailable): the service answers 503 with a
-				// retry hint. Under overload that is one line per shed request, so
-				// it must not look like a fault to an operator who alerts on ERROR.
+			case sw.status == http.StatusServiceUnavailable && sw.Header().Get("Retry-After") != "" && !st.fault:
+				// Deliberate backpressure (a saturated resource gate, a deadline, a
+				// statement timeout): the service answers 503 with a retry hint.
+				// Under overload that is one line per shed request, so it must not
+				// look like a fault to an operator who alerts on ERROR. A handler
+				// that recognised a real infrastructure fault (MarkFault) is excluded
+				// and stays at ERROR below.
 				level = slog.LevelWarn
 			case sw.status >= 500:
 				level = slog.LevelError

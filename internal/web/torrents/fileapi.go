@@ -147,7 +147,13 @@ func (f *FileAPI) fail(w http.ResponseWriter, r *http.Request, id int32, err err
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, persistence.ErrStatementTimeout),
 		errors.Is(err, persistence.ErrBudgetExhausted):
 		busy("The request timed out")
-	case errors.Is(err, persistence.ErrBlobChanged), errors.Is(err, filecache.ErrClosed), errors.Is(err, persistence.ErrStorageIO):
+	case errors.Is(err, persistence.ErrStorageIO):
+		// The database itself is failing: not backpressure, so it is logged (and
+		// access-logged) at ERROR although the client gets a retryable 503.
+		server.MarkFault(r.Context())
+		f.Log.Error("file list storage error", "request_id", rid, "torrent_id", id, "error_type", fmt.Sprintf("%T", err))
+		busy("Temporarily unavailable")
+	case errors.Is(err, persistence.ErrBlobChanged), errors.Is(err, filecache.ErrClosed):
 		f.Log.Warn("file list temporarily unavailable", "request_id", rid, "torrent_id", id, "error_type", fmt.Sprintf("%T", err))
 		busy("Temporarily unavailable")
 	case errors.Is(err, persistence.ErrIntegrityMissingBlob):

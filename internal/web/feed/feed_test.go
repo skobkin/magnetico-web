@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"github.com/skobkin/magnetico-web/persistence"
 	"net/http"
 	"net/url"
 	"os"
@@ -559,4 +560,51 @@ func TestLogsCarryNoTokensOrQueries(t *testing.T) {
 		t.Errorf("expected structured feed log lines:\n%s", logs)
 	}
 	_ = url.QueryEscape
+}
+
+// A storage failure answers 503 + Retry-After like load shedding does, but it is
+// a fault: both the handler and the access log keep it at ERROR so it cannot hide
+// among the WARN lines of ordinary backpressure. A statement timeout stays WARN.
+func TestStorageFaultIsLoggedAtErrorAndBackpressureAtWarn(t *testing.T) {
+	e := newEnv(t)
+	seedGolden(e)
+	tok := e.rssToken()
+	accessLevel := func() string {
+		level := ""
+		for _, l := range strings.Split(e.log.String(), "\n") {
+			if strings.Contains(l, `msg=request`) && strings.Contains(l, "status=503") {
+				for _, lv := range []string{"ERROR", "WARN", "INFO"} {
+					if strings.Contains(l, "level="+lv) {
+						level = lv
+					}
+				}
+			}
+		}
+		return level
+	}
+	for _, c := range []struct {
+		name        string
+		err         error
+		wantAccess  string
+		wantHandler string
+	}{
+		{"database failing", fmt.Errorf("%w: connection refused", persistence.ErrStorageIO), "ERROR", "level=ERROR msg=\"rss feed storage error\""},
+		{"statement timeout", persistence.ErrStatementTimeout, "WARN", "level=WARN msg=\"rss feed unavailable\""},
+	} {
+		e.log.reset()
+		err := c.err
+		e.rows.err.Store(&err)
+		r := e.do(V2Path+"?feed_token="+tok.Plaintext, nil)
+		if r.Status != 503 || r.Header.Get("Retry-After") == "" {
+			t.Fatalf("%s: %d retry=%q", c.name, r.Status, r.Header.Get("Retry-After"))
+		}
+		logged := e.log.String()
+		if got := accessLevel(); got != c.wantAccess {
+			t.Errorf("%s: access line at %q, want %s\n%s", c.name, got, c.wantAccess, logged)
+		}
+		if !strings.Contains(logged, c.wantHandler) {
+			t.Errorf("%s: handler diagnostic %q missing\n%s", c.name, c.wantHandler, logged)
+		}
+		e.rows.err.Store(nil)
+	}
 }

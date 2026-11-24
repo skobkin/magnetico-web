@@ -277,8 +277,14 @@ func (h *Handlers) handler(p policy) http.Handler {
 		case err == nil:
 		case errors.Is(err, context.Canceled):
 			return
+		case errors.Is(err, persistence.ErrStorageIO):
+			// The database itself is failing: logged at ERROR, not as backpressure.
+			server.MarkFault(r.Context())
+			h.log.Error("rss feed storage error", "request_id", rid, "feed", p.name, "error_type", errKind(err))
+			p.reply(w, http.StatusServiceUnavailable, 5)
+			return
 		case errors.Is(err, errBusy), errors.Is(err, context.DeadlineExceeded), errors.Is(err, persistence.ErrStatementTimeout),
-			errors.Is(err, persistence.ErrBudgetExhausted), errors.Is(err, persistence.ErrStorageIO):
+			errors.Is(err, persistence.ErrBudgetExhausted):
 			h.log.Warn("rss feed unavailable", "request_id", rid, "feed", p.name, "error_type", errKind(err))
 			p.reply(w, http.StatusServiceUnavailable, 5)
 			return

@@ -3,6 +3,7 @@ package torrents
 import (
 	"context"
 	"fmt"
+	"github.com/skobkin/magnetico-web/codec"
 	"net/url"
 	"slices"
 	"strings"
@@ -217,5 +218,40 @@ func TestSearchTimeoutBusyAndLoginResponsiveness(t *testing.T) {
 	tx.Rollback(context.Background())
 	if res := c.get("/torrents?q=ubuntu"); res.StatusCode != 200 {
 		t.Fatalf("search after the lock is released: %d", res.StatusCode)
+	}
+}
+
+// A failing database answers 503 + Retry-After, as load shedding does, but it is
+// a fault: the handler diagnostic and the access line stay at ERROR (load
+// shedding is WARN). The torrents table is renamed away to make every read fail.
+func TestStorageFaultsAreLoggedAtError(t *testing.T) {
+	e := newEnv(t)
+	id := e.seed("fault demo", 0, 100, []codec.File{{Path: "a/b.bin", Size: 1}, {Path: "a/c.bin", Size: 2}})
+	c := e.signedIn()
+	e.exec(`ALTER TABLE magneticod.torrents RENAME TO torrents_gone`)
+	for _, tc := range []struct{ name, path, handler string }{
+		{"search", "/torrents?q=x", `msg="search storage error"`},
+		{"file list", fmt.Sprintf("/torrents/%d/files?dir=", id), `msg="file list storage error"`},
+	} {
+		e.log.reset()
+		res := c.get(tc.path)
+		if res.StatusCode != 503 || res.Header.Get("Retry-After") == "" {
+			t.Fatalf("%s: %d retry=%q\n%s", tc.name, res.StatusCode, res.Header.Get("Retry-After"), c.body)
+		}
+		var access, handler string
+		for _, l := range strings.Split(e.log.String(), "\n") {
+			switch {
+			case strings.Contains(l, "msg=request") && strings.Contains(l, "status=503"):
+				access = l
+			case strings.Contains(l, tc.handler):
+				handler = l
+			}
+		}
+		if !strings.Contains(access, "level=ERROR") {
+			t.Errorf("%s: access line is not ERROR: %q\n%s", tc.name, access, e.log.String())
+		}
+		if !strings.Contains(handler, "level=ERROR") {
+			t.Errorf("%s: handler diagnostic missing or not ERROR: %q\n%s", tc.name, handler, e.log.String())
+		}
 	}
 }
