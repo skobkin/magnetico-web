@@ -1183,3 +1183,19 @@ func TestDefaultBinaryCarriesNoBuildTagsAndNoDiagnosticSymbols(t *testing.T) {
 		t.Error("the diag binary lacks the listener: the symbol probe is vacuous")
 	}
 }
+
+// The container image has no zoneinfo database and `migrate users` resolves a
+// source time zone by name, so the executable must carry the IANA data itself
+// (a system database may or may not exist on a native install).
+func TestBinaryEmbedsTimeZoneData(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "../../../cmd/magnetico").CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list: %v\n%s", err, out)
+	}
+	for _, dep := range strings.Fields(string(out)) {
+		if dep == "time/tzdata" {
+			return
+		}
+	}
+	t.Fatal("time/tzdata is not linked: migrate users would fail on a host without a zoneinfo database")
+}

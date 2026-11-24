@@ -1,0 +1,27 @@
+# The build context is the module: Go sources and the embedded assets (templates,
+# static files, OpenAPI documents, the tracker seed), go.mod/go.sum and the
+# licence files copied into the image. Everything else stays out.
+.git
+.gitignore
+.claude
+.superpowers
+.idea
+.woodpecker
+.golangci.yml
+.goreleaser.yaml
+Dockerfile
+.dockerignore
+ci
+dist
+docs
+AGENTS.md
+CLAUDE.md
+README.md
+UPGRADE.md
+/magnetico
+/magnetico-diag
+/magnetico-web
+**/*_test.go
+**/testdata
+third_party/**/*.map
+third_party/**/VENDOR.md
