@@ -337,6 +337,31 @@ pressure, rather than letting a single blocked consumer corrupt the whole flow.
 
 ## Testing
 
+### Verified full-suite configuration (for CI)
+
+The configuration verified at the end of task 07J (and the one a CI job should
+start from) is the **whole suite with reduced package parallelism**:
+
+```sh
+go test -p 3 ./... -count=1
+go test -race -p 3 ./... -count=1
+```
+
+*Why `-p 3`:* the suite starts real PostgreSQL clusters and real binaries, and a
+number of tests assert on short timing windows (a 60 ms gate window, a
+single-flight collapse, cancellation races). At the default parallelism (one
+package per CPU) on a busy 8-core host, a *different* timing-dependent test failed
+in each of four runs, and every one passed 20 of 20 in isolation with unchanged
+code. At `-p 3` both the plain and the `-race` run were green. This is a
+**workaround that hides timing sensitivity, not a fix**: those tests are tracked
+for deterministic synchronization (issue #53; the verify-decode cancellation race
+is issue #52, to be settled before RC0), after which the default
+parallelism should be re-verified and this section updated. Do not "fix" such a
+failure by lengthening a timeout; a failure that reproduces in isolation is a
+real defect (07J's F11 was one).
+
+### Conventions
+
 The project already uses a broad `t.Parallel()` pattern in tests, and that is
 appropriate for independent unit tests. Preserve it when safe.
 

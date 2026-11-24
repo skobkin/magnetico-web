@@ -12,22 +12,24 @@ Raw results and the scripts that produced them. The interpretation, the acceptan
 ## Reproduce
 
 1. Start PostgreSQL 17 with the data directory under `/home/herdr` (the root file system of this VM is small), `fsync=on`, `synchronous_commit=on`, `shared_buffers=512MB`, bounded container logs (`--log-driver local --log-opt max-size=10m --log-opt max-file=3`).
-2. `magnetico migrate schema-init` on an empty database, then seed it:
+2. `magnetico migrate schema-init` on an empty database, then seed it. Every harness command refuses to run unless the database is **named explicitly** (`MAGNETICO_W9_CONFIRM_DISPOSABLE_DB`, which must equal the DSN's database), **every host in the DSN is local** (loopback or a unix socket, fallback hosts included), and, for the load harness, the database carries the **benchmark marker**, a database comment `magnetico-w9-benchmark:w9-large-v1` that the seeder sets before it writes the first row:
 
    ```text
-   MAGNETICO_BENCH_LARGE=1 MAGNETICO_W9_DSN=postgres://…/bench MAGNETICO_W9_DATADIR=<data dir> \
+   MAGNETICO_BENCH_LARGE=1 MAGNETICO_W9_DSN=postgres://…/bench MAGNETICO_W9_CONFIRM_DISPOSABLE_DB=bench \
+     MAGNETICO_W9_DATADIR=<data dir> \
      go test . -run TestW9SeedLargeDataset -count=1 -v        # MAGNETICO_W9_SCALE=0.01 for a pilot
    ```
 
-   The seeder refuses a non-empty database and stops if less than 40 GiB is free under the data directory.
-3. Run a profile (`steps`, `soak`, `memfloor`, or `diag` with `MAGNETICO_W9_TAGS=w9diag`):
+   The seeder refuses a non-empty database and stops if less than 40 GiB is free under the data directory. A database seeded before the marker existed is marked once, explicitly, with `MAGNETICO_W9_MARK=1 MAGNETICO_W9_DSN=… MAGNETICO_W9_CONFIRM_DISPOSABLE_DB=bench go test . -run TestW9MarkBenchmarkDatabase -v` (it refuses a database with non-seeder multi-file torrents or accounts other than `w9u00`…`w9u31`).
+3. Run a profile (`steps`, `soak`, `memfloor`, `knee`, `regress`, or `diag` with `MAGNETICO_W9_TAGS=w9diag`):
 
    ```text
-   MAGNETICO_BENCH_LARGE=1 MAGNETICO_W9_DSN=… MAGNETICO_W9_OUT=<dir> MAGNETICO_W9_LABEL=<name> \
-     MAGNETICO_W9_PROFILE=steps go test . -run TestW9Load -count=1 -v -timeout 4h
+   MAGNETICO_BENCH_LARGE=1 MAGNETICO_W9_DSN=… MAGNETICO_W9_CONFIRM_DISPOSABLE_DB=bench \
+     MAGNETICO_W9_OUT=<dir> MAGNETICO_W9_LABEL=<name> \
+     MAGNETICO_W9_PROFILE=steps go test . -run 'TestW9Load$' -count=1 -v -timeout 4h
    ```
 
-   Knobs: `MAGNETICO_W9_STEP_SECONDS` (180), `MAGNETICO_W9_SOAK_SCALE` (1; the soak phases are 30/90/20 minutes), `MAGNETICO_W9_WEB_MEM` (1G), `MAGNETICO_W9_WEB_GOMEMLIMIT` (768MiB).
+   Knobs: `MAGNETICO_W9_NO_CONTINUATION=1` (no search paging follow-ups: the earlier campaign's workload), `MAGNETICO_W9_STEP_SECONDS` (180), `MAGNETICO_W9_SOAK_SCALE` (1; the soak phases are 30/90/20 minutes), `MAGNETICO_W9_WEB_MEM` (1G), `MAGNETICO_W9_WEB_GOMEMLIMIT` (768MiB).
 4. `python3 summarize.py <run>.jsonl > <run>-summary.md`.
 
 ## Method in one page

@@ -110,7 +110,7 @@ flowchart LR
   CLI["magnetico migrate / web user / dev"] -. "offline, explicit" .-> T
 ```
 
-**What changed.** Upstream shipped a crawler and a web interface (the fork as one binary, the original as two). 0.8.0 is one codebase and one executable whose subcommands are *separately deployed* services: `crawl` on a DHT-capable host, `ingest` and `web` next to PostgreSQL, `migrate` for offline work. The crawler no longer has a database connection at all.
+**What changed.** Upstream shipped a crawler and a web interface (the fork as one binary, the original as two). 0.8.0 is one codebase and one executable whose subcommands are *separately deployed* services: `crawl` on a DHT-capable host, `ingest` and `web` next to PostgreSQL, `migrate` for offline work. The crawler no longer has any PostgreSQL access (it keeps only its own local SQLite delivery queue and talks to `ingest` over HTTPS).
 
 **Why.** A DHT crawler needs inbound UDP and many outbound connections; it does not need to sit next to the database, and should not be able to damage it. Separating the roles lets the crawler run on a different machine, and lets the web service run as a small, privacy-minded process.
 

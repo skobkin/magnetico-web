@@ -81,6 +81,11 @@ func TestW9SeedLargeDataset(t *testing.T) {
 	if existing != 0 {
 		t.Fatalf("the target already holds %d torrents: the seeder only fills an empty database", existing)
 	}
+	// The marker goes on before the first row: a partially seeded database is
+	// still identifiable, and the load harness refuses any database without it.
+	if err := w9MarkDatabase(ctx, conn); err != nil {
+		t.Fatalf("marking the benchmark database: %v", err)
+	}
 	size := func() (db, tbl, idx, toast int64) {
 		_ = conn.QueryRow(ctx, `SELECT pg_database_size(current_database())`).Scan(&db)
 		_ = conn.QueryRow(ctx, `SELECT pg_table_size('magneticod.torrents'), pg_indexes_size('magneticod.torrents'),
