@@ -31,11 +31,6 @@ func (h *hasher) str(s string) {
 	h.h.Write([]byte(s))
 }
 
-func (h *hasher) bytes(b []byte) {
-	h.u64(uint64(len(b)))
-	h.h.Write(b)
-}
-
 func (h *hasher) opt(p *int64) {
 	if p == nil {
 		h.u64(0)

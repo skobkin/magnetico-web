@@ -394,20 +394,6 @@ func (c *client) signIn(user, pw string, extra ...string) *http.Response {
 	return res
 }
 
-func (c *client) sessionName() string {
-	if c.e.dev {
-		return "magnetico_session"
-	}
-	return "__Host-magnetico_session"
-}
-
-func (c *client) preName() string {
-	if c.e.dev {
-		return "magnetico_presession"
-	}
-	return "__Host-magnetico_presession"
-}
-
 type fixture struct {
 	ID          string `json:"id"`
 	Family      string `json:"family"`

@@ -110,7 +110,6 @@ type env struct {
 	clock    *clock
 	log      *syncBuf
 	user     accounts.User
-	n        int
 	srv      *server.Server
 }
 
@@ -189,15 +188,6 @@ func (e *env) exec(sql string, args ...any) {
 	if _, err := e.pool.Exec(tctx(e.t), sql, args...); err != nil {
 		e.t.Fatalf("%s: %v", sql, err)
 	}
-}
-
-func (e *env) count(sql string, args ...any) int {
-	e.t.Helper()
-	var n int
-	if err := e.pool.QueryRow(tctx(e.t), sql, args...).Scan(&n); err != nil {
-		e.t.Fatalf("%s: %v", sql, err)
-	}
-	return n
 }
 
 // seedFixed inserts a torrent with an exact info hash (40 hex).

@@ -150,8 +150,8 @@ var fastParams = password.Params{Memory: 64, Time: 1, Threads: 1}
 var testLifetimes = accounts.SessionLifetimes{Idle: 12 * time.Hour, Absolute: 168 * time.Hour, Remember: 2160 * time.Hour}
 
 type envOpts struct {
-	noMail      bool
-	runQueue    bool // default true; set stopQueue to leave workers off
+	noMail bool
+	// stopQueue leaves the mail workers off.
 	stopQueue   bool
 	queueCap    int
 	inviteQuota int

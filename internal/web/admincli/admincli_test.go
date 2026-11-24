@@ -64,11 +64,6 @@ func newEnv(t *testing.T) (*Env, *bytes.Buffer, *pgxpool.Pool) {
 // take returns and clears the captured output.
 func take(out *bytes.Buffer) string { s := out.String(); out.Reset(); return s }
 
-func lastLine(s string) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	return lines[len(lines)-1]
-}
-
 func noSecrets(t *testing.T, s string, extra ...string) {
 	t.Helper()
 	for _, bad := range append([]string{"$argon2", "$2y$", "password_hash", "operator chosen password"}, extra...) {

@@ -144,16 +144,6 @@ func appendSchemaStateDetails(msg string, err error) string {
 	return msg + " " + strings.Join(details, " ")
 }
 
-// databaseOpenFailureMessage composes the database-open failure log line from
-// controlled content only: the redacted URL, the controlled error detail and,
-// for a schema-state refusal, the bounded escaped catalog-object list.
-func databaseOpenFailureMessage(rawURL string, err error) string {
-	return appendSchemaStateDetails(fmt.Sprintf(
-		"Could not open the database %s. %s",
-		redactDatabaseURL(rawURL), controlledErrorDetail(err),
-	), err)
-}
-
 // schemaInitFailureMessage composes the `migrate schema-init` failure log
 // line from controlled content only, with the same schema-refusal details.
 func schemaInitFailureMessage(rawURL string, err error) string {

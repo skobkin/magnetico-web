@@ -267,17 +267,6 @@ func (c *client) signIn() {
 
 func (e *env) signedIn() *client { c := e.client(); c.signIn(); return c }
 
-var hrefRe = regexp.MustCompile(`href="([^"]*)"`)
-
-// links returns every href of the last page, HTML-unescaped.
-func (c *client) links() []string {
-	var out []string
-	for _, m := range hrefRe.FindAllStringSubmatch(c.body, -1) {
-		out = append(out, html.UnescapeString(m[1]))
-	}
-	return out
-}
-
 func (c *client) link(rel string) string {
 	for _, m := range regexp.MustCompile(`href="([^"]*)" rel="`+rel+`"`).FindAllStringSubmatch(c.body, -1) {
 		return html.UnescapeString(m[1])

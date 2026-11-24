@@ -276,12 +276,6 @@ func (e *env) api(path string) resp {
 	return e.do("GET", path, map[string]string{"Authorization": "Bearer " + e.token})
 }
 
-// session returns the UI file-view response of path for a signed-in browser.
-func (e *env) session(path string) resp {
-	e.t.Helper()
-	return e.do("GET", path, nil, e.sessionCookie())
-}
-
 func (e *env) sessionCookie() *http.Cookie {
 	e.t.Helper()
 	// Log in through the real handler.
