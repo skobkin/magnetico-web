@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/skobkin/magnetico-web/internal/buildinfo"
+	"github.com/skobkin/magnetico-web/internal/legacywarn"
 	"github.com/skobkin/magnetico-web/opflags"
 )
 
@@ -19,6 +20,13 @@ func Main() {
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println(buildinfo.Info())
 		os.Exit(0)
+	}
+
+	// TEMPORARY (planned removal around 0.10.0): explain the cause before any
+	// configuration failure when the PHP deployment's environment is present.
+	// Help and the no-command usage stay quiet.
+	if !helpOrNoCommand(os.Args[1:]) {
+		legacywarn.Warn(os.Stderr, os.Environ())
 	}
 
 	// opFlags is the "operational flags"
@@ -70,4 +78,17 @@ func Main() {
 			log.Fatalln("migrate: expected a subcommand; expected: schema-init, ingest-schema-init, web-schema-init, torrents, users, verify-decode, verify-content, errors, cleanup (see --help)")
 		}
 	}
+}
+
+// helpOrNoCommand reports whether args ask for help or name no command at all.
+func helpOrNoCommand(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	for _, a := range args {
+		if a == "-h" || a == "--help" {
+			return true
+		}
+	}
+	return false
 }
