@@ -1,6 +1,6 @@
 package cli
 
-// An in-process web service for the W9 security sweeps: the exact wiring of the
+// An in-process web service for the security sweeps: the exact wiring of the
 // binary (assemble.Web + Run, the same code path as runWeb), over a disposable
 // database, with the log captured so tests can scan it and the route table
 // readable so a sweep cannot miss a route.

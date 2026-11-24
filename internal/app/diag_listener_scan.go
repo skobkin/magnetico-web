@@ -1,4 +1,4 @@
-//go:build w9diag
+//go:build diag
 
 package app
 

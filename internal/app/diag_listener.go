@@ -1,16 +1,16 @@
-//go:build w9diag
+//go:build diag
 
 package app
 
-// Test-only diagnostic build (task 07J): `go build -tags w9diag`. It serves
+// Test-only diagnostic build (task 07J): `go build -tags diag`. It serves
 // non-destructive runtime statistics (goroutine counts grouped by creation
 // site, memory statistics, file-cache and connection-pool statistics) as JSON on
-// a loopback listener chosen by MAGNETICO_W9_DIAG_ADDR, so a soak can compare
+// a loopback listener chosen by MAGNETICO_DIAG_ADDR, so a soak can compare
 // goroutine and heap numbers of ONE process before, during and after the load
 // without SIGQUIT (which would end it) and without any pprof endpoint in the
 // production binary. The listener refuses non-loopback addresses and the output
 // carries no names, paths, queries or secrets. A normal build excludes this file
-// (TestW9BinaryDoesNotLinkTestSupport and TestW9DiagTagIsAbsentFromTheDefaultBuild).
+// (TestBinaryDoesNotLinkTestSupport and TestDiagTagIsAbsentFromTheDefaultBuild).
 
 import (
 	"bytes"
@@ -32,13 +32,13 @@ func init() { diagHook = startDiag }
 var creatorRe = regexp.MustCompile(`(?m)^#\s+0x[0-9a-f]+\s+(\S+)`)
 
 func startDiag(src diagSources) {
-	addr := os.Getenv("MAGNETICO_W9_DIAG_ADDR")
+	addr := os.Getenv("MAGNETICO_DIAG_ADDR")
 	if addr == "" {
 		return
 	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		log.Fatalln("MAGNETICO_W9_DIAG_ADDR must be a loopback address")
+		log.Fatalln("MAGNETICO_DIAG_ADDR must be a loopback address")
 	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -127,5 +127,5 @@ func startDiag(src diagSources) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"top_inuse": top})
 	})
 	go func() { _ = http.Serve(ln, mux) }()
-	log.Println("w9diag build: diagnostics on", ln.Addr())
+	log.Println("diag build: diagnostics on", ln.Addr())
 }

@@ -1,7 +1,7 @@
 // Package oastest checks real HTTP responses against the embedded OpenAPI
 // documents. It is test support and lives outside internal/web on purpose: only
 // _test.go files import it, so neither it nor its JSON Schema dependency is
-// linked into the shipped binary (TestW9BinaryDoesNotLinkTestSupport checks the
+// linked into the shipped binary (TestBinaryDoesNotLinkTestSupport checks the
 // binary's dependency list, and the web import-boundary test forbids the JSON
 // Schema library in every web package).
 //

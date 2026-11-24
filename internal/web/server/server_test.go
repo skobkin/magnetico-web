@@ -312,7 +312,7 @@ func TestAccessLogIsSecretSafe(t *testing.T) {
 
 // A 503 that carries a retry hint is deliberate backpressure and is logged as a
 // warning (an overload sheds one request per line); every other 5xx, including a
-// 503 without a hint, is an error. Found by the W9 overload run, which logged
+// 503 without a hint, is an error. Found by the overload run, which logged
 // 554,756 errors for 554,756 deliberate sheds.
 func TestBackpressureIsLoggedAsAWarningAndFaultsAsErrors(t *testing.T) {
 	f := newFixture(t, nil)

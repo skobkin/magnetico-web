@@ -1,7 +1,7 @@
 package cli
 
-// Safety checks of the W9 benchmark harness. The harness creates accounts,
-// revokes credentials and starts services against MAGNETICO_W9_DSN, so before it
+// Safety checks of the benchmark harness. The harness creates accounts,
+// revokes credentials and starts services against MAGNETICO_BENCH_DSN, so before it
 // mutates anything it must be sure the target is the disposable benchmark
 // database and nothing else: the owner confirms the database by name, the host
 // must be local, the database must hold the expected benchmark dataset, and the
@@ -20,48 +20,48 @@ import (
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 )
 
-// w9ConfirmEnv must hold the name of the database in MAGNETICO_W9_DSN: an explicit,
+// harnessConfirmEnv must hold the name of the database in MAGNETICO_BENCH_DSN: an explicit,
 // per-database statement that the target is disposable.
 const (
-	w9ConfirmEnv = "MAGNETICO_W9_CONFIRM_DISPOSABLE_DB"
-	w9TokenLabel = "w9" // label of every credential the harness mints
+	harnessConfirmEnv = "MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB"
+	harnessTokenLabel = "w9" // label of every credential the harness mints
 )
 
-// w9Marker is the database comment that identifies a W9 benchmark database. The
+// harnessMarker is the database comment that identifies a benchmark database. The
 // seeder sets it before it writes the first row; nothing else does.
-const w9Marker = "magnetico-w9-benchmark:w9-large-v1"
+const harnessMarker = "magnetico-w9-benchmark:w9-large-v1"
 
-func w9MarkDatabase(ctx context.Context, conn *pgx.Conn) error {
+func harnessMarkDatabase(ctx context.Context, conn *pgx.Conn) error {
 	var db string
 	if err := conn.QueryRow(ctx, `SELECT current_database()`).Scan(&db); err != nil {
 		return err
 	}
-	_, err := conn.Exec(ctx, `COMMENT ON DATABASE `+pgx.Identifier{db}.Sanitize()+` IS '`+w9Marker+`'`)
+	_, err := conn.Exec(ctx, `COMMENT ON DATABASE `+pgx.Identifier{db}.Sanitize()+` IS '`+harnessMarker+`'`)
 	return err
 }
 
-// w9UserNames are the exact usernames the harness creates, and the only ones it
+// harnessUserNames are the exact usernames the harness creates, and the only ones it
 // may touch.
-func w9UserNames() []string {
-	names := make([]string, w9LoadUsers)
+func harnessUserNames() []string {
+	names := make([]string, harnessLoadUsers)
 	for i := range names {
 		names[i] = fmt.Sprintf("w9u%02d", i)
 	}
 	return names
 }
 
-// w9CheckTarget validates the DSN without connecting: the database named by
+// harnessCheckTarget validates the DSN without connecting: the database named by
 // confirm, on a loopback or unix-socket host.
-func w9CheckTarget(dsn, confirm string) error {
+func harnessCheckTarget(dsn, confirm string) error {
 	cfg, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return fmt.Errorf("MAGNETICO_W9_DSN is not a valid DSN")
+		return fmt.Errorf("MAGNETICO_BENCH_DSN is not a valid DSN")
 	}
 	if confirm == "" {
-		return fmt.Errorf("%s is not set: name the disposable benchmark database (%q) to confirm that mutating it is allowed", w9ConfirmEnv, cfg.Database)
+		return fmt.Errorf("%s is not set: name the disposable benchmark database (%q) to confirm that mutating it is allowed", harnessConfirmEnv, cfg.Database)
 	}
 	if confirm != cfg.Database {
-		return fmt.Errorf("%s=%q does not match the DSN's database %q", w9ConfirmEnv, confirm, cfg.Database)
+		return fmt.Errorf("%s=%q does not match the DSN's database %q", harnessConfirmEnv, confirm, cfg.Database)
 	}
 	// Every host pgx may try: the primary and each fallback (a DSN with several
 	// hosts, or a host= list, would otherwise let the harness reach a remote server).
@@ -70,14 +70,14 @@ func w9CheckTarget(dsn, confirm string) error {
 		hosts = append(hosts, fb.Host)
 	}
 	for _, h := range hosts {
-		if !w9LocalHost(h) {
+		if !harnessLocalHost(h) {
 			return fmt.Errorf("every database host must be this host (loopback or unix socket), not %q", h)
 		}
 	}
 	return nil
 }
 
-func w9LocalHost(host string) bool {
+func harnessLocalHost(host string) bool {
 	if strings.HasPrefix(host, "/") || host == "localhost" {
 		return true
 	}
@@ -85,13 +85,13 @@ func w9LocalHost(host string) bool {
 	return err == nil && ip.IsLoopback()
 }
 
-// w9CheckDataset reads (never writes) the database and refuses it unless it is a
-// W9 benchmark database: the confirmed name is the connected database, it carries
+// harnessCheckDataset reads (never writes) the database and refuses it unless it is a
+// Benchmark database: the confirmed name is the connected database, it carries
 // the dedicated benchmark marker (a database comment set by the seeder, so foreign
 // torrents of any shape cannot pass for benchmark data), and every existing web
 // account is a generated identity.
-func w9CheckDataset(ctx context.Context, dsn, confirm string) error {
-	if err := w9CheckTarget(dsn, confirm); err != nil {
+func harnessCheckDataset(ctx context.Context, dsn, confirm string) error {
+	if err := harnessCheckTarget(dsn, confirm); err != nil {
 		return err
 	}
 	conn, err := pgx.Connect(ctx, dsn)
@@ -110,8 +110,8 @@ func w9CheckDataset(ctx context.Context, dsn, confirm string) error {
 	if err := conn.QueryRow(ctx, `SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = current_database()`).Scan(&marker); err != nil {
 		return err
 	}
-	if marker == nil || *marker != w9Marker {
-		return fmt.Errorf("the database does not carry the W9 benchmark marker %q: it was not created by the W9 seeder (see 07J-measurements/README.md to mark a seeded database)", w9Marker)
+	if marker == nil || *marker != harnessMarker {
+		return fmt.Errorf("the database does not carry the benchmark marker %q: it was not created by the benchmark seeder (see 07J-measurements/README.md to mark a seeded database)", harnessMarker)
 	}
 	var reg *string
 	if err := conn.QueryRow(ctx, `SELECT to_regclass('magneticod.torrents')::text`).Scan(&reg); err != nil {
@@ -125,7 +125,7 @@ func w9CheckDataset(ctx context.Context, dsn, confirm string) error {
 	}
 	if reg != nil {
 		var foreign int
-		if err := conn.QueryRow(ctx, `SELECT count(*) FROM magnetico_web.users WHERE NOT (username = ANY($1))`, w9UserNames()).Scan(&foreign); err != nil {
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM magnetico_web.users WHERE NOT (username = ANY($1))`, harnessUserNames()).Scan(&foreign); err != nil {
 			return err
 		}
 		if foreign != 0 {
@@ -135,17 +135,17 @@ func w9CheckDataset(ctx context.Context, dsn, confirm string) error {
 	return nil
 }
 
-// w9RequireDisposable fails the test unless the target passes w9CheckDataset.
-func w9RequireDisposable(t *testing.T, dsn string) {
+// harnessRequireDisposable fails the test unless the target passes harnessCheckDataset.
+func harnessRequireDisposable(t *testing.T, dsn string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	if err := w9CheckDataset(ctx, dsn, os.Getenv(w9ConfirmEnv)); err != nil {
-		t.Fatalf("refusing to touch MAGNETICO_W9_DSN: %v", err)
+	if err := harnessCheckDataset(ctx, dsn, os.Getenv(harnessConfirmEnv)); err != nil {
+		t.Fatalf("refusing to touch MAGNETICO_BENCH_DSN: %v", err)
 	}
 }
 
-func TestW9CheckTarget(t *testing.T) {
+func TestCheckTarget(t *testing.T) {
 	for _, c := range []struct {
 		name, dsn, confirm string
 		ok                 bool
@@ -163,7 +163,7 @@ func TestW9CheckTarget(t *testing.T) {
 		{"two local hosts", "postgres://u:p@127.0.0.1:5432,localhost:5433/w9bench", "w9bench", true},
 		{"garbage", "not a dsn %%", "x", false},
 	} {
-		err := w9CheckTarget(c.dsn, c.confirm)
+		err := harnessCheckTarget(c.dsn, c.confirm)
 		if (err == nil) != c.ok {
 			t.Errorf("%s: err = %v, want ok=%v", c.name, err, c.ok)
 		}
@@ -173,7 +173,7 @@ func TestW9CheckTarget(t *testing.T) {
 	}
 }
 
-func TestW9CheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
+func TestCheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	ctx := context.Background()
 	dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
 	cfg, _ := pgx.ParseConfig(dsn)
@@ -191,12 +191,12 @@ func TestW9CheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	}
 	refused := func(why string) {
 		t.Helper()
-		if err := w9CheckDataset(ctx, dsn, name); err == nil {
+		if err := harnessCheckDataset(ctx, dsn, name); err == nil {
 			t.Fatalf("accepted: %s", why)
 		}
 	}
 
-	if err := w9CheckDataset(ctx, dsn, "other"); err == nil {
+	if err := harnessCheckDataset(ctx, dsn, "other"); err == nil {
 		t.Fatal("accepted a mismatching confirmation")
 	}
 	refused("an empty, unmarked database")
@@ -211,17 +211,17 @@ func TestW9CheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	exec(`COMMENT ON DATABASE ` + pgx.Identifier{name}.Sanitize() + ` IS 'some other comment'`)
 	refused("a different database comment")
 
-	if err := w9MarkDatabase(ctx, conn); err != nil {
+	if err := harnessMarkDatabase(ctx, conn); err != nil {
 		t.Fatal(err)
 	}
-	if err := w9CheckDataset(ctx, dsn, name); err != nil {
+	if err := harnessCheckDataset(ctx, dsn, name); err != nil {
 		t.Fatalf("refused the marked database: %v", err)
 	}
 
 	exec(`CREATE SCHEMA magnetico_web`)
 	exec(`CREATE TABLE magnetico_web.users (id bigserial PRIMARY KEY, username text)`)
 	exec(`INSERT INTO magnetico_web.users (username) VALUES ('w9u00'), ('w9u07')`)
-	if err := w9CheckDataset(ctx, dsn, name); err != nil {
+	if err := harnessCheckDataset(ctx, dsn, name); err != nil {
 		t.Fatalf("refused a database that holds only generated identities: %v", err)
 	}
 	exec(`INSERT INTO magnetico_web.users (username) VALUES ('w9user-real')`) // matches the old LIKE 'w9u%' pattern
@@ -244,16 +244,16 @@ func benchForeignAccounts(ctx context.Context, conn *pgx.Conn, allowed []string)
 	return n, err
 }
 
-// TestW9MarkBenchmarkDatabase marks an already seeded database (one seeded before
-// the marker existed). Gated and explicit: MAGNETICO_W9_MARK=1 plus the usual
+// TestMarkBenchmarkDatabase marks an already seeded database (one seeded before
+// the marker existed). Gated and explicit: MAGNETICO_BENCH_MARK=1 plus the usual
 // confirmation. It refuses a database that holds accounts other than the generated
 // ones, and one without the seeder's multi-file torrents.
-func TestW9MarkBenchmarkDatabase(t *testing.T) {
-	if os.Getenv("MAGNETICO_W9_MARK") != "1" {
-		t.Skip("set MAGNETICO_W9_MARK=1 (with MAGNETICO_W9_DSN and the confirmation) to mark a seeded benchmark database")
+func TestMarkBenchmarkDatabase(t *testing.T) {
+	if os.Getenv("MAGNETICO_BENCH_MARK") != "1" {
+		t.Skip("set MAGNETICO_BENCH_MARK=1 (with MAGNETICO_BENCH_DSN and the confirmation) to mark a seeded benchmark database")
 	}
-	dsn := os.Getenv("MAGNETICO_W9_DSN")
-	if err := w9CheckTarget(dsn, os.Getenv(w9ConfirmEnv)); err != nil {
+	dsn := os.Getenv("MAGNETICO_BENCH_DSN")
+	if err := harnessCheckTarget(dsn, os.Getenv(harnessConfirmEnv)); err != nil {
 		t.Fatalf("refusing to mark: %v", err)
 	}
 	ctx := context.Background()
@@ -267,19 +267,19 @@ func TestW9MarkBenchmarkDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	if multi == 0 || foreign != 0 {
-		t.Fatalf("not a W9 seeded database: %d multi-file rows, %d not seeder-named", multi, foreign)
+		t.Fatalf("not a seeded benchmark database: %d multi-file rows, %d not seeder-named", multi, foreign)
 	}
-	users, err := benchForeignAccounts(ctx, conn, w9UserNames())
+	users, err := benchForeignAccounts(ctx, conn, harnessUserNames())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if users != 0 {
 		t.Fatalf("%d accounts are not generated identities", users)
 	}
-	if err := w9MarkDatabase(ctx, conn); err != nil {
+	if err := harnessMarkDatabase(ctx, conn); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("marked with %q", w9Marker)
+	t.Logf("marked with %q", harnessMarker)
 }
 
 // TestBenchForeignAccountsWithoutWebSchema pins the optional absence of

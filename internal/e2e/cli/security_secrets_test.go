@@ -1,6 +1,6 @@
 package cli
 
-// W9 secret-leak regression. A secret is a unique value the test created. Each
+// Secret-leak regression. A secret is a unique value the test created. Each
 // kind of secret has intentional delivery channels, which are NOT scanned
 // (otherwise legitimate delivery would be a false positive):
 //
@@ -101,7 +101,7 @@ func (l *leakScan) report() {
 
 // The scanner itself: a planted secret is found in every kind of location, in
 // plain and encoded form, and an allowed channel is not reported.
-func TestW9LeakScannerDetectsPlantedSecrets(t *testing.T) {
+func TestLeakScannerDetectsPlantedSecrets(t *testing.T) {
 	probe := func(plant func(l *leakScan, secret string)) bool {
 		l := &leakScan{t: t}
 		const secret = "planted-secret-value-0123456789"
@@ -138,8 +138,8 @@ func TestW9LeakScannerDetectsPlantedSecrets(t *testing.T) {
 	}
 }
 
-func TestW9NoSecretsInUnintendedLocations(t *testing.T) {
-	s := newW9Sec(t, nil)
+func TestNoSecretsInUnintendedLocations(t *testing.T) {
+	s := newHarnessSec(t, nil)
 	s.addUser("bob", "w9-bob-security-password-9", "")
 	l := newLeakScan(t)
 

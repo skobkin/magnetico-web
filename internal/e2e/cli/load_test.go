@@ -1,18 +1,18 @@
 package cli
 
-// W9 load steps and soak (task 07J, stage S6). Gated like the other heavy
+// Load steps and soak. Gated like the other heavy
 // harnesses: nothing here runs in the ordinary suite.
 //
 //	MAGNETICO_BENCH_LARGE=1
-//	MAGNETICO_W9_DSN       owner DSN of the seeded dataset database (TestW9SeedLargeDataset)
-//	MAGNETICO_W9_CONFIRM_DISPOSABLE_DB  the database name from the DSN: confirms it is disposable
-//	MAGNETICO_W9_OUT       output directory for the JSONL results (created)
-//	MAGNETICO_W9_PROFILE   "steps" | "soak" | "memfloor" | "knee" | "diag" | "regress"   (what to run)
+//	MAGNETICO_BENCH_DSN       owner DSN of the seeded dataset database (TestSeedLargeDataset)
+//	MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB  the database name from the DSN: confirms it is disposable
+//	MAGNETICO_BENCH_OUT       output directory for the JSONL results (created)
+//	MAGNETICO_BENCH_PROFILE   "steps" | "soak" | "memfloor" | "knee" | "diag" | "regress"   (what to run)
 //
-// Optional: MAGNETICO_W9_LABEL, MAGNETICO_W9_WEB_MEM (cgroup MemoryMax, default
-// 1G), MAGNETICO_W9_WEB_GOMEMLIMIT (default 768MiB), MAGNETICO_W9_STEP_SECONDS
-// (default 180), MAGNETICO_W9_SOAK_SCALE (multiplies the 30/90/20 minute soak
-// phases; 1 by default), MAGNETICO_W9_TAGS (build tags, "w9diag" for the
+// Optional: MAGNETICO_BENCH_LABEL, MAGNETICO_BENCH_WEB_MEM (cgroup MemoryMax, default
+// 1G), MAGNETICO_BENCH_WEB_GOMEMLIMIT (default 768MiB), MAGNETICO_BENCH_STEP_SECONDS
+// (default 180), MAGNETICO_BENCH_SOAK_SCALE (multiplies the 30/90/20 minute soak
+// phases; 1 by default), MAGNETICO_BENCH_TAGS (build tags, "diag" for the
 // diagnostic run).
 //
 // Isolation: the web service and the ingest service each run in their own
@@ -58,15 +58,15 @@ import (
 )
 
 const (
-	w9LoadUsers      = 32
-	w9TokensPerUser  = 10
-	w9LoadPassword   = "w9-load-password-0001"
-	w9ClientTimeout  = 90 * time.Second
-	w9IngestRate     = 20 // records per second during the steady phase
-	w9DrainDeadline  = 10 * time.Minute
-	w9SampleInterval = 10 * time.Second
-	w9QueryTimeout   = 5 * time.Second  // one monitoring query
-	w9VerifyTimeout  = 10 * time.Minute // the post-drain storage verification, as a whole
+	harnessLoadUsers      = 32
+	harnessTokensPerUser  = 10
+	harnessLoadPassword   = "w9-load-password-0001"
+	harnessClientTimeout  = 90 * time.Second
+	harnessIngestRate     = 20 // records per second during the steady phase
+	harnessDrainDeadline  = 10 * time.Minute
+	harnessSampleInterval = 10 * time.Second
+	harnessQueryTimeout   = 5 * time.Second  // one monitoring query
+	harnessVerifyTimeout  = 10 * time.Minute // the post-drain storage verification, as a whole
 )
 
 // outcome classes, reported separately and never merged.
@@ -82,7 +82,7 @@ const (
 
 // ---- processes in their own scopes --------------------------------------------------
 
-type w9Scoped struct {
+type harnessScoped struct {
 	name   string
 	cmd    *exec.Cmd
 	out    *testkit.SyncBuffer
@@ -92,12 +92,12 @@ type w9Scoped struct {
 	start  time.Time
 }
 
-var w9ScopeSeq atomic.Int64
+var harnessScopeSeq atomic.Int64
 
 // startScoped runs bin inside its own memory- and CPU-limited systemd user scope.
-func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, bin string, args ...string) *w9Scoped {
+func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, bin string, args ...string) *harnessScoped {
 	t.Helper()
-	unit := fmt.Sprintf("magnetico-w9-%s-%d-%d", name, os.Getpid(), w9ScopeSeq.Add(1))
+	unit := fmt.Sprintf("magnetico-w9-%s-%d-%d", name, os.Getpid(), harnessScopeSeq.Add(1))
 	sd := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=" + unit,
 		"-p", "MemoryMax=" + mem, "-p", "MemorySwapMax=0", "-p", "CPUQuota=" + strconv.Itoa(cpuPercent) + "%", bin}
 	cmd := exec.Command(sd[0], append(sd[1:], args...)...)
@@ -107,7 +107,7 @@ func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, b
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	s := &w9Scoped{name: name, cmd: cmd, out: out, exited: make(chan error, 1), pid: cmd.Process.Pid, start: time.Now()}
+	s := &harnessScoped{name: name, cmd: cmd, out: out, exited: make(chan error, 1), pid: cmd.Process.Pid, start: time.Now()}
 	go func() { s.exited <- cmd.Wait() }()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	// The scope's cgroup directory.
@@ -124,7 +124,7 @@ func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, b
 }
 
 // stop sends SIGTERM and returns the exit code (-1 on timeout).
-func (s *w9Scoped) stop(within time.Duration) int {
+func (s *harnessScoped) stop(within time.Duration) int {
 	_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case err := <-s.exited:
@@ -143,7 +143,7 @@ func (s *w9Scoped) stop(within time.Duration) int {
 
 // ---- sampling -----------------------------------------------------------------------
 
-type w9Sample struct {
+type harnessSample struct {
 	T         float64 `json:"t"`
 	Proc      string  `json:"proc"`
 	RSSMiB    float64 `json:"rss_mib"`
@@ -164,11 +164,11 @@ func cgCPUSeconds(cg string) float64 {
 	return 0
 }
 
-type w9Sampler struct {
+type harnessSampler struct {
 	start   time.Time
 	mu      sync.Mutex
-	samples []w9Sample
-	queue   []w9Point // ingest queue depth
+	samples []harnessSample
+	queue   []harnessPoint // ingest queue depth
 	// qTries counts the queue samples attempted; qFails those that produced no
 	// reading (no connection, a failed or timed-out query). Both are reported.
 	qTries, qFails int
@@ -176,13 +176,13 @@ type w9Sampler struct {
 	wg             sync.WaitGroup
 }
 
-type w9Point struct {
+type harnessPoint struct {
 	T float64 `json:"t"`
 	V float64 `json:"v"`
 }
 
-func startSampler(procs []*w9Scoped, dsn string) *w9Sampler {
-	s := &w9Sampler{start: time.Now(), stop: make(chan struct{})}
+func startSampler(procs []*harnessScoped, dsn string) *harnessSampler {
+	s := &harnessSampler{start: time.Now(), stop: make(chan struct{})}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -192,7 +192,7 @@ func startSampler(procs []*w9Scoped, dsn string) *w9Sampler {
 				conn.Close(context.Background())
 			}
 		}()
-		tk := time.NewTicker(w9SampleInterval)
+		tk := time.NewTicker(harnessSampleInterval)
 		defer tk.Stop()
 		for {
 			select {
@@ -204,14 +204,14 @@ func startSampler(procs []*w9Scoped, dsn string) *w9Sampler {
 			s.mu.Lock()
 			for _, p := range procs {
 				rss, _, th := readStatusOf(p.pid)
-				s.samples = append(s.samples, w9Sample{T: now, Proc: p.name, RSSMiB: float64(rss) / (1 << 20),
+				s.samples = append(s.samples, harnessSample{T: now, Proc: p.name, RSSMiB: float64(rss) / (1 << 20),
 					CgroupMiB: float64(readUint(p.cg+"/memory.current")) / (1 << 20), CPUSec: cgCPUSeconds(p.cg), Threads: th, FDs: countFDs(p.pid)})
 			}
 			s.mu.Unlock()
 			s.mu.Lock()
 			s.qTries++
 			s.mu.Unlock()
-			qctx, cancel := context.WithTimeout(context.Background(), w9QueryTimeout)
+			qctx, cancel := context.WithTimeout(context.Background(), harnessQueryTimeout)
 			if conn == nil {
 				conn, _ = pgx.Connect(qctx, dsn)
 			}
@@ -221,7 +221,7 @@ func startSampler(procs []*w9Scoped, dsn string) *w9Sampler {
 				// The queue table is bounded by the admission quota: a cheap count.
 				if err := conn.QueryRow(qctx, `SELECT count(*) FROM magnetico_ingest.queue`).Scan(&n); err == nil {
 					s.mu.Lock()
-					s.queue = append(s.queue, w9Point{now, float64(n)})
+					s.queue = append(s.queue, harnessPoint{now, float64(n)})
 					s.mu.Unlock()
 					got = true
 				} else {
@@ -240,14 +240,14 @@ func startSampler(procs []*w9Scoped, dsn string) *w9Sampler {
 	return s
 }
 
-func (s *w9Sampler) finish() {
+func (s *harnessSampler) finish() {
 	close(s.stop)
 	s.wg.Wait()
 }
 
 // ---- identities and requests --------------------------------------------------------
 
-type w9Ident struct {
+type harnessIdent struct {
 	user    string
 	xff     string
 	session string // "name=value"
@@ -255,25 +255,25 @@ type w9Ident struct {
 	rss     []string
 }
 
-type w9Pools struct {
+type harnessPools struct {
 	small, medium, large, huge []int
-	idents                     []*w9Ident
+	idents                     []*harnessIdent
 	apiSeq, rssSeq             atomic.Int64
 }
 
-func (p *w9Pools) nextAPI() string {
+func (p *harnessPools) nextAPI() string {
 	n := p.apiSeq.Add(1)
 	id := p.idents[int(n)%len(p.idents)]
 	return id.api[int(n/int64(len(p.idents)))%len(id.api)]
 }
 
-func (p *w9Pools) nextRSS() string {
+func (p *harnessPools) nextRSS() string {
 	n := p.rssSeq.Add(1)
 	id := p.idents[int(n)%len(p.idents)]
 	return id.rss[int(n/int64(len(p.idents)))%len(id.rss)]
 }
 
-type w9Req struct {
+type harnessReq struct {
 	class  string
 	path   string
 	hdr    map[string]string
@@ -281,16 +281,16 @@ type w9Req struct {
 }
 
 var (
-	w9Common = []string{"1080p", "720p", "x264", "x265", "bluray", "webrip", "complete", "season", "ubuntu", "linux", "multi", "remux"}
-	w9Mixes  = []struct {
+	harnessCommon = []string{"1080p", "720p", "x264", "x265", "bluray", "webrip", "complete", "season", "ubuntu", "linux", "multi", "remux"}
+	harnessMixes  = []struct {
 		class  string
 		weight int
 	}{{"search", 45}, {"details", 20}, {"dirs", 12}, {"tree", 5}, {"api", 10}, {"rss", 3}, {"magnet", 3}, {"apifiles", 2}}
 )
 
-func w9PickClass(rng *rand.Rand) string {
+func harnessPickClass(rng *rand.Rand) string {
 	n := rng.IntN(100)
-	for _, m := range w9Mixes {
+	for _, m := range harnessMixes {
 		if n < m.weight {
 			return m.class
 		}
@@ -299,12 +299,12 @@ func w9PickClass(rng *rand.Rand) string {
 	return "search"
 }
 
-func w9Term(rng *rand.Rand) string {
+func harnessTerm(rng *rand.Rand) string {
 	switch n := rng.IntN(100); {
 	case n < 50:
-		return w9Common[rng.IntN(len(w9Common))]
+		return harnessCommon[rng.IntN(len(harnessCommon))]
 	case n < 60:
-		return w9Common[rng.IntN(len(w9Common))] + " " + w9Common[rng.IntN(len(w9Common))]
+		return harnessCommon[rng.IntN(len(harnessCommon))] + " " + harnessCommon[rng.IntN(len(harnessCommon))]
 	case n < 80:
 		return "m" + strconv.Itoa(int(math.Pow(rng.Float64(), 2)*400))
 	case n < 92:
@@ -317,7 +317,7 @@ func w9Term(rng *rand.Rand) string {
 	return ""
 }
 
-func (p *w9Pools) pick(rng *rand.Rand, id *w9Ident) w9Req {
+func (p *harnessPools) pick(rng *rand.Rand, id *harnessIdent) harnessReq {
 	ses := map[string]string{"Cookie": id.session}
 	multi := func() int {
 		switch n := rng.IntN(100); {
@@ -330,58 +330,58 @@ func (p *w9Pools) pick(rng *rand.Rand, id *w9Ident) w9Req {
 		}
 		return p.huge[rng.IntN(len(p.huge))]
 	}
-	cls := w9PickClass(rng)
+	cls := harnessPickClass(rng)
 	switch cls {
 	case "search":
 		q := url.Values{}
-		if t := w9Term(rng); t != "" {
+		if t := harnessTerm(rng); t != "" {
 			q.Set("q", t)
 		}
 		q.Set("sort", []string{"discovered", "discovered", "discovered", "size", "name"}[rng.IntN(5)])
 		q.Set("order", []string{"asc", "desc"}[rng.IntN(2)])
 		q.Set("size", []string{"20", "50", "100"}[rng.IntN(3)])
-		return w9Req{cls, "/torrents?" + q.Encode(), ses, []int{200}}
+		return harnessReq{cls, "/torrents?" + q.Encode(), ses, []int{200}}
 	case "details":
-		return w9Req{cls, "/torrents/" + strconv.Itoa(multi()), ses, []int{200}}
+		return harnessReq{cls, "/torrents/" + strconv.Itoa(multi()), ses, []int{200}}
 	case "dirs":
-		return w9Req{cls, fmt.Sprintf("/torrents/%d/files?dir=&limit=160", multi()), ses, []int{200}}
+		return harnessReq{cls, fmt.Sprintf("/torrents/%d/files?dir=&limit=160", multi()), ses, []int{200}}
 	case "tree":
 		// Torrents the backend serves as a complete tree (up to 4,000 files); the
 		// rest answer 422 and the client falls back to pages, both are expected.
-		return w9Req{cls, fmt.Sprintf("/torrents/%d/files/tree", multi()), ses, []int{200, 422}}
+		return harnessReq{cls, fmt.Sprintf("/torrents/%d/files/tree", multi()), ses, []int{200, 422}}
 	case "api":
 		q := url.Values{"limit": {[]string{"20", "50", "100"}[rng.IntN(3)]}}
-		if t := w9Term(rng); t != "" {
+		if t := harnessTerm(rng); t != "" {
 			q.Set("q", t)
 		}
-		return w9Req{cls, "/api/v2/torrents?" + q.Encode(), map[string]string{"Authorization": "Bearer " + p.nextAPI()}, []int{200}}
+		return harnessReq{cls, "/api/v2/torrents?" + q.Encode(), map[string]string{"Authorization": "Bearer " + p.nextAPI()}, []int{200}}
 	case "apifiles":
-		return w9Req{cls, fmt.Sprintf("/api/v2/torrents/%d/files?limit=200", multi()), map[string]string{"Authorization": "Bearer " + p.nextAPI()}, []int{200}}
+		return harnessReq{cls, fmt.Sprintf("/api/v2/torrents/%d/files?limit=200", multi()), map[string]string{"Authorization": "Bearer " + p.nextAPI()}, []int{200}}
 	case "rss":
 		if rng.IntN(2) == 0 {
-			return w9Req{cls, "/api/v2/feeds/latest.rss?feed_token=" + p.nextRSS() + "&page=" + strconv.Itoa(1+rng.IntN(3)), nil, []int{200}}
+			return harnessReq{cls, "/api/v2/feeds/latest.rss?feed_token=" + p.nextRSS() + "&page=" + strconv.Itoa(1+rng.IntN(3)), nil, []int{200}}
 		}
-		return w9Req{cls, "/api/v1/feed/rss/last?api-token=" + p.nextRSS(), nil, []int{200}}
+		return harnessReq{cls, "/api/v1/feed/rss/last?api-token=" + p.nextRSS(), nil, []int{200}}
 	}
-	return w9Req{"magnet", "/magnet/" + hex.EncodeToString(sha1Sum(strconv.Itoa(rng.IntN(1000000)))), nil, []int{307}}
+	return harnessReq{"magnet", "/magnet/" + hex.EncodeToString(sha1Sum(strconv.Itoa(rng.IntN(1000000)))), nil, []int{307}}
 }
 
 func sha1Sum(s string) []byte { h := sha1.Sum([]byte(s)); return h[:] }
 
 // ---- accumulators -------------------------------------------------------------------
 
-type w9Acc struct {
+type harnessAcc struct {
 	mu   sync.Mutex
 	n    map[string]int            // outcome -> count
 	durs map[string][]float32      // class -> ms (ok only)
 	cls  map[string]map[string]int // class -> outcome -> count
 }
 
-func newW9Acc() *w9Acc {
-	return &w9Acc{n: map[string]int{}, durs: map[string][]float32{}, cls: map[string]map[string]int{}}
+func newHarnessAcc() *harnessAcc {
+	return &harnessAcc{n: map[string]int{}, durs: map[string][]float32{}, cls: map[string]map[string]int{}}
 }
 
-func (a *w9Acc) add(class, outcome string, d time.Duration) {
+func (a *harnessAcc) add(class, outcome string, d time.Duration) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.n[outcome]++
@@ -403,7 +403,7 @@ func pct(v []float32, p float64) float64 {
 	return float64(c[min(len(c)-1, int(math.Ceil(p/100*float64(len(c))))-1)])
 }
 
-type w9ClassStat struct {
+type harnessClassStat struct {
 	N        int            `json:"n"`
 	Outcomes map[string]int `json:"outcomes"`
 	P50      float64        `json:"p50_ms"`
@@ -412,16 +412,16 @@ type w9ClassStat struct {
 	Max      float64        `json:"max_ms"`
 }
 
-func (a *w9Acc) stats() (total map[string]int, classes map[string]w9ClassStat) {
+func (a *harnessAcc) stats() (total map[string]int, classes map[string]harnessClassStat) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	total = map[string]int{}
 	for k, v := range a.n {
 		total[k] = v
 	}
-	classes = map[string]w9ClassStat{}
+	classes = map[string]harnessClassStat{}
 	for c, o := range a.cls {
-		st := w9ClassStat{Outcomes: map[string]int{}}
+		st := harnessClassStat{Outcomes: map[string]int{}}
 		for k, v := range o {
 			st.Outcomes[k] = v
 			st.N += v
@@ -438,36 +438,36 @@ func (a *w9Acc) stats() (total map[string]int, classes map[string]w9ClassStat) {
 
 // ---- load generation ----------------------------------------------------------------
 
-type w9Load struct {
-	// noContinuation switches the paging follow-ups off (MAGNETICO_W9_NO_CONTINUATION=1):
+type harnessLoad struct {
+	// noContinuation switches the paging follow-ups off (MAGNETICO_BENCH_NO_CONTINUATION=1):
 	// the workload of the earlier campaign, for comparisons across revisions.
 	noContinuation bool
 	addr           string
-	pools          *w9Pools
+	pools          *harnessPools
 	hc             *http.Client
 }
 
-func newW9Load(addr string, pools *w9Pools) *w9Load {
+func newHarnessLoad(addr string, pools *harnessPools) *harnessLoad {
 	tr := &http.Transport{MaxIdleConnsPerHost: 256, MaxConnsPerHost: 0, IdleConnTimeout: 90 * time.Second}
-	return &w9Load{noContinuation: os.Getenv("MAGNETICO_W9_NO_CONTINUATION") == "1", addr: addr, pools: pools, hc: &http.Client{Transport: tr, Timeout: w9ClientTimeout,
+	return &harnessLoad{noContinuation: os.Getenv("MAGNETICO_BENCH_NO_CONTINUATION") == "1", addr: addr, pools: pools, hc: &http.Client{Transport: tr, Timeout: harnessClientTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
-// w9FullTreeSlug identifies the one 422 the workload expects: the documented
+// harnessFullTreeSlug identifies the one 422 the workload expects: the documented
 // "complete tree unavailable, browse by directory" answer. Any other 422
 // (notably index-too-complex) is a file-index failure and must stay visible.
-const w9FullTreeSlug = "full-tree-unavailable"
+const harnessFullTreeSlug = "full-tree-unavailable"
 
-// w9BodyKeep is how much of a response body the client keeps for classification
+// harnessBodyKeep is how much of a response body the client keeps for classification
 // and link extraction; the rest is still read, to detect truncation.
-const w9BodyKeep = 4 << 20
+const harnessBodyKeep = 4 << 20
 
 // readBody reads the whole body. A read error (truncation, reset, a timeout
 // while the body is transferred) is returned, never swallowed: the caller counts
 // it as a transport failure.
 func readBody(r io.Reader) ([]byte, error) {
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, io.LimitReader(r, w9BodyKeep)); err != nil {
+	if _, err := io.Copy(&buf, io.LimitReader(r, harnessBodyKeep)); err != nil {
 		return nil, err
 	}
 	if _, err := io.Copy(io.Discard, r); err != nil {
@@ -477,7 +477,7 @@ func readBody(r io.Reader) ([]byte, error) {
 }
 
 // fetch performs one request and returns the outcome class and the body.
-func (l *w9Load) fetch(rq w9Req, id *w9Ident) (string, []byte, time.Duration) {
+func (l *harnessLoad) fetch(rq harnessReq, id *harnessIdent) (string, []byte, time.Duration) {
 	req, err := http.NewRequest("GET", "http://"+l.addr+rq.path, nil)
 	if err != nil {
 		return oTransport, nil, 0
@@ -503,16 +503,16 @@ func (l *w9Load) fetch(rq w9Req, id *w9Ident) (string, []byte, time.Duration) {
 var nextPageRe = regexp.MustCompile(`href="([^"]+)" rel="next"`)
 
 // nextPage returns the continuation request of a search page, if it has one.
-func nextPage(body []byte, ses map[string]string) (w9Req, bool) {
+func nextPage(body []byte, ses map[string]string) (harnessReq, bool) {
 	m := nextPageRe.FindSubmatch(body)
 	if m == nil {
-		return w9Req{}, false
+		return harnessReq{}, false
 	}
 	href := html.UnescapeString(string(m[1]))
 	if !strings.HasPrefix(href, "/torrents?") || !strings.Contains(href, "cursor=") {
-		return w9Req{}, false
+		return harnessReq{}, false
 	}
-	return w9Req{class: "searchpage", path: href, hdr: ses, expect: []int{200}}, true
+	return harnessReq{class: "searchpage", path: href, hdr: ses, expect: []int{200}}, true
 }
 
 func classify(status int, body []byte, expect []int) string {
@@ -520,7 +520,7 @@ func classify(status int, body []byte, expect []int) string {
 		if status != e {
 			continue
 		}
-		if status == http.StatusUnprocessableEntity && !bytes.Contains(body, []byte(w9FullTreeSlug)) {
+		if status == http.StatusUnprocessableEntity && !bytes.Contains(body, []byte(harnessFullTreeSlug)) {
 			return oUnexpect
 		}
 		return oOK
@@ -545,7 +545,7 @@ func classify(status int, body []byte, expect []int) string {
 
 // run drives conc workers for d and returns what they saw. A worker stops
 // starting requests at the deadline and finishes the one in flight.
-func (l *w9Load) run(conc int, d time.Duration, think time.Duration, acc *w9Acc) {
+func (l *harnessLoad) run(conc int, d time.Duration, think time.Duration, acc *harnessAcc) {
 	stop := time.Now().Add(d)
 	var wg sync.WaitGroup
 	for i := 0; i < conc; i++ {
@@ -585,7 +585,7 @@ func (l *w9Load) run(conc int, d time.Duration, think time.Duration, acc *w9Acc)
 
 // ---- ingest producer ----------------------------------------------------------------
 
-type w9Producer struct {
+type harnessProducer struct {
 	addr, token string
 	hc          *http.Client
 	sent, acked atomic.Int64
@@ -596,8 +596,8 @@ type w9Producer struct {
 	wg          sync.WaitGroup
 }
 
-func startProducer(addr, token string, rate int) *w9Producer {
-	p := &w9Producer{addr: addr, token: token, hc: &http.Client{Timeout: 30 * time.Second}, refused: map[int]int{}, stop: make(chan struct{})}
+func startProducer(addr, token string, rate int) *harnessProducer {
+	p := &harnessProducer{addr: addr, token: token, hc: &http.Client{Timeout: 30 * time.Second}, refused: map[int]int{}, stop: make(chan struct{})}
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
@@ -663,25 +663,25 @@ func startProducer(addr, token string, rate int) *w9Producer {
 	return p
 }
 
-func (p *w9Producer) halt() { close(p.stop); p.wg.Wait() }
+func (p *harnessProducer) halt() { close(p.stop); p.wg.Wait() }
 
 // ---- gc trace -----------------------------------------------------------------------
 
-var w9GCRe = regexp.MustCompile(`gc (\d+) @([\d.]+)s (\d+)%: ([\d.]+)\+([\d.]+)\+([\d.]+) ms clock, .*?, (\d+)->(\d+)->(\d+) MB`)
+var harnessGCRe = regexp.MustCompile(`gc (\d+) @([\d.]+)s (\d+)%: ([\d.]+)\+([\d.]+)\+([\d.]+) ms clock, .*?, (\d+)->(\d+)->(\d+) MB`)
 
-type w9GC struct {
+type harnessGC struct {
 	T, LiveMB, HeapMB float64
 }
 
-func parseGC(out string) (pts []w9GC, count int, pauseMs float64) {
+func parseGC(out string) (pts []harnessGC, count int, pauseMs float64) {
 	for _, l := range strings.Split(out, "\n") {
-		if m := w9GCRe.FindStringSubmatch(l); m != nil {
+		if m := harnessGCRe.FindStringSubmatch(l); m != nil {
 			t, _ := strconv.ParseFloat(m[2], 64)
 			a, _ := strconv.ParseFloat(m[4], 64)
 			c, _ := strconv.ParseFloat(m[6], 64)
 			h, _ := strconv.ParseFloat(m[7], 64)
 			live, _ := strconv.ParseFloat(m[9], 64)
-			pts = append(pts, w9GC{t, live, h})
+			pts = append(pts, harnessGC{t, live, h})
 			count++
 			pauseMs += a + c
 		}
@@ -691,12 +691,12 @@ func parseGC(out string) (pts []w9GC, count int, pauseMs float64) {
 
 // ---- setup --------------------------------------------------------------------------
 
-func w9LoadEnv(extra ...string) []string { return webEnv(extra...) }
+func harnessLoadEnv(extra ...string) []string { return webEnv(extra...) }
 
-// w9Prepare makes the dataset database ready: web and ingest schemas, the load
+// harnessPrepare makes the dataset database ready: web and ingest schemas, the load
 // users, their sessions and tokens (through the real interfaces), and the id
 // pools. webAddr must already serve the database.
-func w9Accounts(t *testing.T, bin, dsn string) {
+func harnessAccounts(t *testing.T, bin, dsn string) {
 	t.Helper()
 	for _, cmd := range []string{"web-schema-init", "ingest-schema-init"} {
 		if out, code := runWebSchemaInit(t, bin, dsn, cmd); code != 0 {
@@ -707,9 +707,9 @@ func w9Accounts(t *testing.T, bin, dsn string) {
 	// per-user cap of 50 unrevoked tokens leaves room for this run's pools. Only the
 	// exact generated identities and only credentials carrying the harness label are
 	// touched.
-	names := w9UserNames()
+	names := harnessUserNames()
 	for _, tbl := range []string{"api_tokens", "rss_tokens"} {
-		sqlExec(t, dsn, `UPDATE magnetico_web.`+tbl+` SET revoked_at = now() WHERE revoked_at IS NULL AND label = $2 AND user_id IN (SELECT id FROM magnetico_web.users WHERE username = ANY($1))`, names, w9TokenLabel)
+		sqlExec(t, dsn, `UPDATE magnetico_web.`+tbl+` SET revoked_at = now() WHERE revoked_at IS NULL AND label = $2 AND user_id IN (SELECT id FROM magnetico_web.users WHERE username = ANY($1))`, names, harnessTokenLabel)
 	}
 	for _, name := range names {
 		if sqlCount(t, dsn, `SELECT count(*) FROM magnetico_web.users WHERE username = $1`, name) == 1 {
@@ -718,32 +718,32 @@ func w9Accounts(t *testing.T, bin, dsn string) {
 		if out, errOut, code := runWebAdminBinary(t, bin, dsn, "", nil, "user", "add", name); code != 0 {
 			t.Fatalf("user add: %d %s%s", code, out, errOut)
 		}
-		if out, errOut, code := runWebAdminBinary(t, bin, dsn, w9LoadPassword+"\n", nil, "user", "set-password", name); code != 0 {
+		if out, errOut, code := runWebAdminBinary(t, bin, dsn, harnessLoadPassword+"\n", nil, "user", "set-password", name); code != 0 {
 			t.Fatalf("set-password: %d %s%s", code, out, errOut)
 		}
 	}
 }
 
-func w9Identities(t *testing.T, addr, dsn string) *w9Pools {
+func harnessIdentities(t *testing.T, addr, dsn string) *harnessPools {
 	t.Helper()
-	p := &w9Pools{}
-	for i := 0; i < w9LoadUsers; i++ {
-		name := w9UserNames()[i]
+	p := &harnessPools{}
+	for i := 0; i < harnessLoadUsers; i++ {
+		name := harnessUserNames()[i]
 		xff := fmt.Sprintf("10.77.%d.%d", i, 1)
 		b := newBrowser(t, addr)
 		b.get("/login", "X-Forwarded-For", xff)
-		if resp := b.post("/login", url.Values{"username": {name}, "password": {w9LoadPassword}, "csrf_token": {b.token()}}, "X-Forwarded-For", xff); resp.StatusCode != 303 {
+		if resp := b.post("/login", url.Values{"username": {name}, "password": {harnessLoadPassword}, "csrf_token": {b.token()}}, "X-Forwarded-For", xff); resp.StatusCode != 303 {
 			t.Fatalf("login %s: %d", name, resp.StatusCode)
 		}
-		id := &w9Ident{user: name, xff: xff, session: sessionCookieOf(b, addr)}
+		id := &harnessIdent{user: name, xff: xff, session: sessionCookieOf(b, addr)}
 		for _, kind := range []string{"api", "rss"} {
-			for k := 0; k < w9TokensPerUser; k++ {
+			for k := 0; k < harnessTokensPerUser; k++ {
 				tab, path := "api", "/account/api-tokens"
 				if kind == "rss" {
 					tab, path = "rss", "/account/rss-tokens"
 				}
 				b.get("/account?tab="+tab, "X-Forwarded-For", xff)
-				if resp := b.post(path, url.Values{"label": {w9TokenLabel}, "csrf_token": {b.token()}}, "X-Forwarded-For", xff); resp.StatusCode != 200 {
+				if resp := b.post(path, url.Values{"label": {harnessTokenLabel}, "csrf_token": {b.token()}}, "X-Forwarded-For", xff); resp.StatusCode != 200 {
 					t.Fatalf("mint %s for %s: %d", kind, name, resp.StatusCode)
 				}
 				m := tokenInPage.FindStringSubmatch(b.body)
@@ -791,7 +791,7 @@ func w9Identities(t *testing.T, addr, dsn string) *w9Pools {
 
 // ---- the run ------------------------------------------------------------------------
 
-type w9Env struct {
+type harnessEnv struct {
 	t         *testing.T
 	bin       string
 	dsn       string
@@ -799,40 +799,40 @@ type w9Env struct {
 	label     string
 	webMem    string
 	goMem     string
-	web       *w9Scoped
+	web       *harnessScoped
 	webAddr   string
-	ingest    *w9Scoped
+	ingest    *harnessScoped
 	ingAddr   string
 	ingTok    string
-	pools     *w9Pools
-	samp      *w9Sampler
+	pools     *harnessPools
+	samp      *harnessSampler
 	failed    []string
-	producers []*w9Producer
+	producers []*harnessProducer
 	diagAddr  string
 
-	// drainDeadline overrides w9DrainDeadline (tests only); onFail, when set,
+	// drainDeadline overrides harnessDrainDeadline (tests only); onFail, when set,
 	// receives gate failures instead of the test (tests of the harness itself).
 	drainDeadline time.Duration
 	onFail        func(string)
 }
 
-func (e *w9Env) startWeb() {
+func (e *harnessEnv) startWeb() {
 	e.t.Helper()
 	e.webAddr = freeLoopbackAddr(e.t)
-	env := w9LoadEnv("MAGNETICO_WEB_DATABASE="+e.dsn, "MAGNETICO_WEB_LISTEN="+e.webAddr, "MAGNETICO_WEB_PUBLIC_URL=http://"+e.webAddr,
+	env := harnessLoadEnv("MAGNETICO_WEB_DATABASE="+e.dsn, "MAGNETICO_WEB_LISTEN="+e.webAddr, "MAGNETICO_WEB_PUBLIC_URL=http://"+e.webAddr,
 		"MAGNETICO_WEB_TRUSTED_PROXIES=127.0.0.1/32", "MAGNETICO_WEB_POOL_MAX_CONNS=20", "GOMAXPROCS=2", "GODEBUG=gctrace=1", "GOMEMLIMIT="+e.goMem)
-	if v := os.Getenv("MAGNETICO_W9_SEARCH_CONCURRENCY"); v != "" {
+	if v := os.Getenv("MAGNETICO_BENCH_SEARCH_CONCURRENCY"); v != "" {
 		env = append(env, "MAGNETICO_WEB_SEARCH_CONCURRENCY="+v)
 	}
-	if strings.Contains(os.Getenv("MAGNETICO_W9_TAGS"), "w9diag") {
+	if strings.Contains(os.Getenv("MAGNETICO_BENCH_TAGS"), "diag") {
 		e.diagAddr = freeLoopbackAddr(e.t)
-		env = append(env, "MAGNETICO_W9_DIAG_ADDR="+e.diagAddr)
+		env = append(env, "MAGNETICO_DIAG_ADDR="+e.diagAddr)
 	}
 	e.web = startScoped(e.t, "web", e.webMem, 200, env, e.bin, "web")
 	e.waitReady("http://" + e.webAddr + "/readyz")
 }
 
-func (e *w9Env) startIngest() {
+func (e *harnessEnv) startIngest() {
 	e.t.Helper()
 	e.ingAddr = freeLoopbackAddr(e.t)
 	tok := make([]byte, 24)
@@ -840,7 +840,7 @@ func (e *w9Env) startIngest() {
 		tok[i] = byte(rand.IntN(256))
 	}
 	e.ingTok = hex.EncodeToString(tok)
-	env := w9LoadEnv("MAGNETICO_INGEST_TOKEN="+e.ingTok, "MAGNETICO_INGEST_DATABASE="+e.dsn, "MAGNETICO_INGEST_LISTEN="+e.ingAddr, "GOMAXPROCS=2", "GOMEMLIMIT=256MiB")
+	env := harnessLoadEnv("MAGNETICO_INGEST_TOKEN="+e.ingTok, "MAGNETICO_INGEST_DATABASE="+e.dsn, "MAGNETICO_INGEST_LISTEN="+e.ingAddr, "GOMAXPROCS=2", "GOMEMLIMIT=256MiB")
 	e.ingest = startScoped(e.t, "ingest", "1G", 100, env, e.bin, "ingest")
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -858,7 +858,7 @@ func (e *w9Env) startIngest() {
 	e.t.Fatalf("ingest not ready:\n%s", e.ingest.out.String())
 }
 
-func (e *w9Env) waitReady(u string) {
+func (e *harnessEnv) waitReady(u string) {
 	e.t.Helper()
 	deadline := time.Now().Add(120 * time.Second)
 	for time.Now().Before(deadline) {
@@ -873,7 +873,7 @@ func (e *w9Env) waitReady(u string) {
 	e.t.Fatalf("%s never became ready", u)
 }
 
-func (e *w9Env) write(kind string, v any) {
+func (e *harnessEnv) write(kind string, v any) {
 	e.t.Helper()
 	b, _ := json.Marshal(map[string]any{"kind": kind, "label": e.label, "when": time.Now().UTC().Format(time.RFC3339), "data": v})
 	e.t.Logf("%s", b)
@@ -885,7 +885,7 @@ func (e *w9Env) write(kind string, v any) {
 	_, _ = f.Write(append(b, '\n'))
 }
 
-func (e *w9Env) gate(cond bool, format string, args ...any) {
+func (e *harnessEnv) gate(cond bool, format string, args ...any) {
 	if !cond {
 		msg := fmt.Sprintf(format, args...)
 		e.failed = append(e.failed, msg)
@@ -898,13 +898,13 @@ func (e *w9Env) gate(cond bool, format string, args ...any) {
 }
 
 // segment runs one load segment and records and gates what it saw.
-func (e *w9Env) segment(name string, conc int, d time.Duration, ingest bool, gates segGates) {
+func (e *harnessEnv) segment(name string, conc int, d time.Duration, ingest bool, gates segGates) {
 	e.t.Helper()
-	acc := newW9Acc()
-	load := newW9Load(e.webAddr, e.pools)
-	var prod *w9Producer
+	acc := newHarnessAcc()
+	load := newHarnessLoad(e.webAddr, e.pools)
+	var prod *harnessProducer
 	if ingest {
-		prod = startProducer(e.ingAddr, e.ingTok, w9IngestRate)
+		prod = startProducer(e.ingAddr, e.ingTok, harnessIngestRate)
 	}
 	start := time.Now()
 	tStart := time.Since(e.samp.start).Seconds()
@@ -975,10 +975,10 @@ type segGates struct {
 // deadline and then verifies that every acknowledged record is stored. Every
 // query error is a gate failure (never read as "queue empty"), and every query
 // runs under a context, so a blocked statement cannot outlive the deadline.
-func (e *w9Env) drain() {
+func (e *harnessEnv) drain() {
 	e.t.Helper()
 	start := time.Now()
-	limit := w9DrainDeadline
+	limit := harnessDrainDeadline
 	if e.drainDeadline > 0 {
 		limit = e.drainDeadline
 	}
@@ -1014,7 +1014,7 @@ func (e *w9Env) drain() {
 	}
 	took := time.Since(start)
 	e.gate(depth == 0, "drain: the ingest queue holds %d rows (-1: unknown) after %s (deadline %s)", depth, took.Round(time.Second), limit)
-	verifyCtx, cancelVerify := context.WithTimeout(context.Background(), w9VerifyTimeout)
+	verifyCtx, cancelVerify := context.WithTimeout(context.Background(), harnessVerifyTimeout)
 	defer cancelVerify()
 	var quarantined int
 	if err := conn.QueryRow(verifyCtx, `SELECT count(*) FROM magnetico_ingest.quarantine`).Scan(&quarantined); err != nil {
@@ -1054,18 +1054,18 @@ func (e *w9Env) drain() {
 
 // finish stops the services, collects gc and cache information and writes the
 // per-process report.
-func (e *w9Env) finish(prefix string) {
+func (e *harnessEnv) finish(prefix string) {
 	e.t.Helper()
 	e.samp.finish()
 	e.samp.mu.Lock()
-	samples, queue := append([]w9Sample(nil), e.samp.samples...), append([]w9Point(nil), e.samp.queue...)
+	samples, queue := append([]harnessSample(nil), e.samp.samples...), append([]harnessPoint(nil), e.samp.queue...)
 	qTries, qFails := e.samp.qTries, e.samp.qFails
 	e.samp.mu.Unlock()
 	// Missing queue samples are reported, and too many of them fail the run: a
 	// queue-depth series with holes cannot support the backlog-slope gate.
 	e.write("queue_samples", map[string]any{"attempted": qTries, "missing": qFails, "taken": len(queue)})
 	e.gate(qTries < 3 || qFails*10 <= qTries, "queue-depth sampling: %d of %d samples are missing", qFails, qTries)
-	for _, p := range []*w9Scoped{e.web, e.ingest} {
+	for _, p := range []*harnessScoped{e.web, e.ingest} {
 		rep := map[string]any{"proc": p.name}
 		_, hwm, _ := readStatusOf(p.pid)
 		rep["vmhwm_mib"] = float64(hwm) / (1 << 20)
@@ -1119,64 +1119,64 @@ func maxOf(v []float64) float64 {
 	return m
 }
 
-func thin(g []w9GC, n int) []w9GC {
+func thin(g []harnessGC, n int) []harnessGC {
 	if len(g) <= n {
 		return g
 	}
 	step := len(g) / n
-	var out []w9GC
+	var out []harnessGC
 	for i := 0; i < len(g); i += step {
 		out = append(out, g[i])
 	}
 	return out
 }
 
-func thinS(s []w9Sample, n int) []w9Sample {
+func thinS(s []harnessSample, n int) []harnessSample {
 	if len(s) <= n {
 		return s
 	}
 	step := len(s) / n
-	var out []w9Sample
+	var out []harnessSample
 	for i := 0; i < len(s); i += step {
 		out = append(out, s[i])
 	}
 	return out
 }
 
-func newW9Env(t *testing.T) *w9Env {
+func newHarnessEnv(t *testing.T) *harnessEnv {
 	t.Helper()
 	if !benchkit.Enabled() {
-		t.Skip("set MAGNETICO_BENCH_LARGE=1 to run the W9 load profiles")
+		t.Skip("set MAGNETICO_BENCH_LARGE=1 to run the load profiles")
 	}
-	dsn, out := os.Getenv("MAGNETICO_W9_DSN"), os.Getenv("MAGNETICO_W9_OUT")
+	dsn, out := os.Getenv("MAGNETICO_BENCH_DSN"), os.Getenv("MAGNETICO_BENCH_OUT")
 	if dsn == "" || out == "" {
-		t.Fatal("MAGNETICO_W9_DSN and MAGNETICO_W9_OUT are required")
+		t.Fatal("MAGNETICO_BENCH_DSN and MAGNETICO_BENCH_OUT are required")
 	}
 	// Before anything is built, started or mutated: the target must be the
-	// confirmed, local, benchmark-shaped database (see main_w9_safety_test.go).
-	w9RequireDisposable(t, dsn)
+	// confirmed, local, benchmark-shaped database (see benchguard_test.go).
+	harnessRequireDisposable(t, dsn)
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	var tags []string
-	if v := os.Getenv("MAGNETICO_W9_TAGS"); v != "" {
+	if v := os.Getenv("MAGNETICO_BENCH_TAGS"); v != "" {
 		tags = []string{v}
 	}
 	bin := testkit.Binary(t, tags...)
-	e := &w9Env{t: t, bin: bin, dsn: dsn, outDir: out, label: envOr("MAGNETICO_W9_LABEL", "w9"),
-		webMem: envOr("MAGNETICO_W9_WEB_MEM", "1G"), goMem: envOr("MAGNETICO_W9_WEB_GOMEMLIMIT", "768MiB")}
-	w9Accounts(t, bin, dsn)
+	e := &harnessEnv{t: t, bin: bin, dsn: dsn, outDir: out, label: envOr("MAGNETICO_BENCH_LABEL", "w9"),
+		webMem: envOr("MAGNETICO_BENCH_WEB_MEM", "1G"), goMem: envOr("MAGNETICO_BENCH_WEB_GOMEMLIMIT", "768MiB")}
+	harnessAccounts(t, bin, dsn)
 	return e
 }
 
 // begin starts (or restarts) the services, creates the identities and starts
 // sampling.
-func (e *w9Env) begin() {
+func (e *harnessEnv) begin() {
 	e.t.Helper()
 	e.startIngest()
 	e.startWeb()
-	e.pools = w9Identities(e.t, e.webAddr, e.dsn)
-	e.samp = startSampler([]*w9Scoped{e.web, e.ingest}, e.dsn)
+	e.pools = harnessIdentities(e.t, e.webAddr, e.dsn)
+	e.samp = startSampler([]*harnessScoped{e.web, e.ingest}, e.dsn)
 	e.write("start", map[string]any{
 		// The web process started this long before the sampler's clock: add it to a
 		// gctrace timestamp to compare it with a sample time.
@@ -1186,8 +1186,8 @@ func (e *w9Env) begin() {
 	})
 }
 
-// poll records one reading of the diagnostic endpoint (the w9diag build only).
-func (e *w9Env) poll(label string) {
+// poll records one reading of the diagnostic endpoint (the diag build only).
+func (e *harnessEnv) poll(label string) {
 	e.t.Helper()
 	if e.diagAddr == "" {
 		return
@@ -1220,7 +1220,7 @@ func (e *w9Env) poll(label string) {
 }
 
 // pollEvery polls every d until stop is closed.
-func (e *w9Env) pollEvery(d time.Duration, label string, stop <-chan struct{}) {
+func (e *harnessEnv) pollEvery(d time.Duration, label string, stop <-chan struct{}) {
 	for {
 		select {
 		case <-stop:
@@ -1236,10 +1236,10 @@ func gitSHA() string {
 	return strings.TrimSpace(string(b))
 }
 
-func TestW9Load(t *testing.T) {
-	e := newW9Env(t)
-	profile := envOr("MAGNETICO_W9_PROFILE", "steps")
-	stepSec, _ := strconv.Atoi(envOr("MAGNETICO_W9_STEP_SECONDS", "180"))
+func TestLoad(t *testing.T) {
+	e := newHarnessEnv(t)
+	profile := envOr("MAGNETICO_BENCH_PROFILE", "steps")
+	stepSec, _ := strconv.Atoi(envOr("MAGNETICO_BENCH_STEP_SECONDS", "180"))
 	step := time.Duration(stepSec) * time.Second
 	switch profile {
 	case "steps":
@@ -1286,7 +1286,7 @@ func TestW9Load(t *testing.T) {
 		e.segment("memfloor-c32", 32, 3*step, false, segGates{noTimeouts: true, overload: true})
 		e.finish("memfloor")
 	case "soak":
-		scale, _ := strconv.ParseFloat(envOr("MAGNETICO_W9_SOAK_SCALE", "1"), 64)
+		scale, _ := strconv.ParseFloat(envOr("MAGNETICO_BENCH_SOAK_SCALE", "1"), 64)
 		dur := func(min float64) time.Duration { return time.Duration(min * scale * float64(time.Minute)) }
 		e.begin()
 		e.segment("warmup", 16, dur(30), false, segGates{noTimeouts: true, noBusy: true})
@@ -1296,22 +1296,22 @@ func TestW9Load(t *testing.T) {
 		e.finish("soak")
 	case "knee":
 		// How the interactive capacity depends on the number of search slots
-		// (MAGNETICO_W9_SEARCH_CONCURRENCY): the same interactive tiers once.
+		// (MAGNETICO_BENCH_SEARCH_CONCURRENCY): the same interactive tiers once.
 		e.begin()
 		for _, users := range []int{150, 400, 800} {
 			e.segment(fmt.Sprintf("knee-u%d", users), users, step, false, segGates{noTimeouts: true, overload: true, think: time.Second})
 		}
 		e.finish("knee")
 	case "diag":
-		// The diagnostic run (build tag w9diag): the soak timeline, shorter, with
+		// The diagnostic run (build tag diag): the soak timeline, shorter, with
 		// non-destructive readings of one process before, during and after the
 		// load. Its numbers are not used for performance (the polling would
 		// perturb the idle phase); it explains growth and shows leaks.
-		scale, _ := strconv.ParseFloat(envOr("MAGNETICO_W9_SOAK_SCALE", "0.35"), 64)
+		scale, _ := strconv.ParseFloat(envOr("MAGNETICO_BENCH_SOAK_SCALE", "0.35"), 64)
 		dur := func(min float64) time.Duration { return time.Duration(min * scale * float64(time.Minute)) }
 		e.begin()
 		if e.diagAddr == "" {
-			t.Fatal("the diag profile needs MAGNETICO_W9_TAGS=w9diag")
+			t.Fatal("the diag profile needs MAGNETICO_BENCH_TAGS=diag")
 		}
 		e.poll("baseline-after-start")
 		stop := make(chan struct{})

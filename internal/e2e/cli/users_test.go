@@ -184,7 +184,7 @@ INSERT INTO users.api_tokens (key, user_id, created_at) VALUES
 	// A migrated historical address is unverified. The service here has no SMTP,
 	// so the page says recovery is unavailable and that the address cannot be
 	// verified (never the generic "verify your address" instruction), offers no
-	// verification action and still lets the user remove the address (W9).
+	// verification action and still lets the user remove the address.
 	ab := newBrowser(t, w.addr)
 	if resp := ab.login("alice", sodiumPW); resp.StatusCode != 303 {
 		t.Fatalf("alice login: %d", resp.StatusCode)

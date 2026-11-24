@@ -1,6 +1,6 @@
 package cli
 
-// Regression tests for the W9 load client itself (not gated: they need no
+// Regression tests for the load client itself (not gated: they need no
 // database and no binary). The load numbers are only as honest as the client's
 // classification, so these pin it: a response that cannot be read to the end is
 // a transport failure, a 422 counts as expected only when it is the documented
@@ -37,24 +37,24 @@ func (r *errAfter) Read(p []byte) (int, error) {
 	return copy(p, r.data), nil
 }
 
-func TestW9ReadBodyReportsReadErrors(t *testing.T) {
+func TestReadBodyReportsReadErrors(t *testing.T) {
 	boom := errors.New("connection reset")
 	if _, err := readBody(&errAfter{data: "partial", err: boom}); !errors.Is(err, boom) {
 		t.Fatalf("readBody swallowed the read error: %v", err)
 	}
-	b, err := readBody(strings.NewReader(strings.Repeat("x", w9BodyKeep+10)))
-	if err != nil || len(b) != w9BodyKeep {
-		t.Fatalf("an oversized body keeps %d bytes and no error, got %d / %v", w9BodyKeep, len(b), err)
+	b, err := readBody(strings.NewReader(strings.Repeat("x", harnessBodyKeep+10)))
+	if err != nil || len(b) != harnessBodyKeep {
+		t.Fatalf("an oversized body keeps %d bytes and no error, got %d / %v", harnessBodyKeep, len(b), err)
 	}
 }
 
-func w9TestLoad(addr string, timeout time.Duration) (*w9Load, *w9Ident) {
+func harnessTestLoad(addr string, timeout time.Duration) (*harnessLoad, *harnessIdent) {
 	hc := &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	return &w9Load{addr: addr, hc: hc}, &w9Ident{xff: "10.0.0.1"}
+	return &harnessLoad{addr: addr, hc: hc}, &harnessIdent{xff: "10.0.0.1"}
 }
 
-func TestW9TruncatedAndStalledBodiesAreTransportFailures(t *testing.T) {
+func TestTruncatedAndStalledBodiesAreTransportFailures(t *testing.T) {
 	// Truncated: the promised length is never delivered.
 	truncated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, buf, err := w.(http.Hijacker).Hijack()
@@ -66,8 +66,8 @@ func TestW9TruncatedAndStalledBodiesAreTransportFailures(t *testing.T) {
 		_ = conn.Close()
 	}))
 	defer truncated.Close()
-	l, id := w9TestLoad(strings.TrimPrefix(truncated.URL, "http://"), 5*time.Second)
-	out, _, _ := l.fetch(w9Req{class: "details", path: "/x", expect: []int{200}}, id)
+	l, id := harnessTestLoad(strings.TrimPrefix(truncated.URL, "http://"), 5*time.Second)
+	out, _, _ := l.fetch(harnessReq{class: "details", path: "/x", expect: []int{200}}, id)
 	if out != oTransport {
 		t.Fatalf("a truncated 200 response was classified %q, want %q", out, oTransport)
 	}
@@ -86,8 +86,8 @@ func TestW9TruncatedAndStalledBodiesAreTransportFailures(t *testing.T) {
 	}))
 	defer stalled.Close()
 	defer close(release)
-	l, id = w9TestLoad(strings.TrimPrefix(stalled.URL, "http://"), 300*time.Millisecond)
-	out, _, _ = l.fetch(w9Req{class: "details", path: "/x", expect: []int{200}}, id)
+	l, id = harnessTestLoad(strings.TrimPrefix(stalled.URL, "http://"), 300*time.Millisecond)
+	out, _, _ = l.fetch(harnessReq{class: "details", path: "/x", expect: []int{200}}, id)
 	if out != oTransport {
 		t.Fatalf("a body that timed out mid-transfer was classified %q, want %q", out, oTransport)
 	}
@@ -95,26 +95,26 @@ func TestW9TruncatedAndStalledBodiesAreTransportFailures(t *testing.T) {
 	// A complete body is still ok.
 	okSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "fine") }))
 	defer okSrv.Close()
-	l, id = w9TestLoad(strings.TrimPrefix(okSrv.URL, "http://"), 5*time.Second)
-	if out, body, _ := l.fetch(w9Req{class: "details", path: "/x", expect: []int{200}}, id); out != oOK || string(body) != "fine" {
+	l, id = harnessTestLoad(strings.TrimPrefix(okSrv.URL, "http://"), 5*time.Second)
+	if out, body, _ := l.fetch(harnessReq{class: "details", path: "/x", expect: []int{200}}, id); out != oOK || string(body) != "fine" {
 		t.Fatalf("complete response: %q %q", out, body)
 	}
 }
 
-func TestW9ConnectionRefusedIsATransportFailure(t *testing.T) {
+func TestConnectionRefusedIsATransportFailure(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := ln.Addr().String()
 	ln.Close()
-	l, id := w9TestLoad(addr, time.Second)
-	if out, _, _ := l.fetch(w9Req{class: "details", path: "/x", expect: []int{200}}, id); out != oTransport {
+	l, id := harnessTestLoad(addr, time.Second)
+	if out, _, _ := l.fetch(harnessReq{class: "details", path: "/x", expect: []int{200}}, id); out != oTransport {
 		t.Fatalf("refused connection classified %q", out)
 	}
 }
 
-func TestW9ClassifyTreeUnprocessable(t *testing.T) {
+func TestClassifyTreeUnprocessable(t *testing.T) {
 	expect := []int{200, 422}
 	for _, c := range []struct {
 		name   string
@@ -141,7 +141,7 @@ func TestW9ClassifyTreeUnprocessable(t *testing.T) {
 	}
 }
 
-func TestW9SearchContinuationFollowsTheNextLink(t *testing.T) {
+func TestSearchContinuationFollowsTheNextLink(t *testing.T) {
 	page := []byte(`<a class="btn small" href="/torrents?q=1080p&amp;sort=discovered&amp;cursor=AbC_-9&amp;size=20" rel="next">Next</a>`)
 	next, ok := nextPage(page, map[string]string{"Cookie": "s=1"})
 	if !ok || next.path != "/torrents?q=1080p&sort=discovered&cursor=AbC_-9&size=20" || next.class != "searchpage" || next.hdr["Cookie"] != "s=1" {
@@ -169,9 +169,9 @@ func TestW9SearchContinuationFollowsTheNextLink(t *testing.T) {
 		_, _ = io.WriteString(w, `<a href="/torrents?cursor=zz&amp;q=a" rel="next">Next</a>`)
 	}))
 	defer srv.Close()
-	l, id := w9TestLoad(strings.TrimPrefix(srv.URL, "http://"), 5*time.Second)
+	l, id := harnessTestLoad(strings.TrimPrefix(srv.URL, "http://"), 5*time.Second)
 	for i := 0; i < 20; i++ {
-		out, body, _ := l.fetch(w9Req{class: "search", path: "/torrents?q=a", expect: []int{200}}, id)
+		out, body, _ := l.fetch(harnessReq{class: "search", path: "/torrents?q=a", expect: []int{200}}, id)
 		if out != oOK {
 			t.Fatal(out)
 		}
@@ -188,20 +188,20 @@ func TestW9SearchContinuationFollowsTheNextLink(t *testing.T) {
 
 // ---- the ingest drain ----------------------------------------------------------------
 
-func w9DrainEnv(t *testing.T, dsn string, deadline time.Duration) (*w9Env, *[]string) {
+func harnessDrainEnv(t *testing.T, dsn string, deadline time.Duration) (*harnessEnv, *[]string) {
 	t.Helper()
 	var fails []string
-	e := &w9Env{t: t, dsn: dsn, outDir: t.TempDir(), label: "drain", drainDeadline: deadline,
+	e := &harnessEnv{t: t, dsn: dsn, outDir: t.TempDir(), label: "drain", drainDeadline: deadline,
 		onFail: func(m string) { fails = append(fails, m) }}
 	return e, &fails
 }
 
-func TestW9DrainReportsQueryErrorsAndEnforcesItsDeadline(t *testing.T) {
+func TestDrainReportsQueryErrorsAndEnforcesItsDeadline(t *testing.T) {
 	ctx := context.Background()
 	dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
 
 	// 1. No ingest schema: the failed query must fail the gate, not read as an empty queue.
-	e, fails := w9DrainEnv(t, dsn, 5*time.Second)
+	e, fails := harnessDrainEnv(t, dsn, 5*time.Second)
 	e.drain()
 	if len(*fails) == 0 || !strings.Contains((*fails)[0], "queue depth query failed") {
 		t.Fatalf("a failed queue query was not reported: %v", *fails)
@@ -224,7 +224,7 @@ func TestW9DrainReportsQueryErrorsAndEnforcesItsDeadline(t *testing.T) {
 	}
 
 	// 2. A queue that never empties: the deadline ends the wait and fails the gate.
-	e, fails = w9DrainEnv(t, dsn, 1500*time.Millisecond)
+	e, fails = harnessDrainEnv(t, dsn, 1500*time.Millisecond)
 	start := time.Now()
 	e.drain()
 	if took := time.Since(start); took > 6*time.Second {
@@ -244,7 +244,7 @@ func TestW9DrainReportsQueryErrorsAndEnforcesItsDeadline(t *testing.T) {
 	if _, err := tx.Exec(ctx, `LOCK TABLE magnetico_ingest.queue IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
-	e, fails = w9DrainEnv(t, dsn, 1500*time.Millisecond)
+	e, fails = harnessDrainEnv(t, dsn, 1500*time.Millisecond)
 	start = time.Now()
 	e.drain()
 	if took := time.Since(start); took > 6*time.Second {

@@ -1,6 +1,6 @@
 package cli
 
-// W9 security regression (task 07J, stage S4). The web service runs in-process
+// Security regression. The web service runs in-process
 // with the exact production wiring (assemble.Web), so every sweep walks the
 // route table that actually serves requests: a route added without an
 // expectation here fails the test.
@@ -46,9 +46,9 @@ const (
 	secAdminPW = "w9-security-admin-password-2"
 )
 
-// w9Sec is an initialized database with two accounts (a user and an admin) and
+// harnessSec is an initialized database with two accounts (a user and an admin) and
 // an in-process web service on it.
-type w9Sec struct {
+type harnessSec struct {
 	t   *testing.T
 	bin string
 	dsn string
@@ -67,9 +67,9 @@ func trustLoopbackProxy(o *opflags.WebOptions) {
 	o.TrustedProxyPrefixes = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
 }
 
-func newW9Sec(t *testing.T, mod func(o *opflags.WebOptions)) *w9Sec {
+func newHarnessSec(t *testing.T, mod func(o *opflags.WebOptions)) *harnessSec {
 	t.Helper()
-	s := &w9Sec{t: t, bin: buildBinary(t), dsn: w9AppAccount(t)}
+	s := &harnessSec{t: t, bin: buildBinary(t), dsn: harnessAppAccount(t)}
 	for _, cmd := range []string{"schema-init", "web-schema-init"} {
 		if out, code := runWebSchemaInit(t, s.bin, s.dsn, cmd); code != 0 {
 			t.Fatalf("migrate %s: exit %d: %s", cmd, code, out)
@@ -82,7 +82,7 @@ func newW9Sec(t *testing.T, mod func(o *opflags.WebOptions)) *w9Sec {
 }
 
 // addUser creates an account through the operator CLI.
-func (s *w9Sec) addUser(name, pw, role string) {
+func (s *harnessSec) addUser(name, pw, role string) {
 	s.t.Helper()
 	steps := []struct {
 		stdin string
@@ -102,7 +102,7 @@ func (s *w9Sec) addUser(name, pw, role string) {
 }
 
 // login returns a signed-in browser.
-func (s *w9Sec) login(user, pw string) *webBrowser {
+func (s *harnessSec) login(user, pw string) *webBrowser {
 	s.t.Helper()
 	b := newBrowser(s.t, s.web.addr)
 	if resp := b.login(user, pw); resp.StatusCode != 303 {
@@ -118,7 +118,7 @@ type secResp struct {
 }
 
 // raw sends one request with no cookie jar and no redirect following.
-func (s *w9Sec) raw(method, path string, hdr map[string]string, body string) secResp {
+func (s *harnessSec) raw(method, path string, hdr map[string]string, body string) secResp {
 	s.t.Helper()
 	var rd io.Reader
 	if body != "" {
@@ -181,8 +181,8 @@ func isProblemJSON(r secResp) bool {
 
 // --- anonymous requests and method restrictions, by access class ---
 
-func TestW9RouteTableAnonymousAndMethodRestrictions(t *testing.T) {
-	s := newW9Sec(t, nil)
+func TestRouteTableAnonymousAndMethodRestrictions(t *testing.T) {
+	s := newHarnessSec(t, nil)
 	routes := s.web.routes()
 	if len(routes) < 40 {
 		t.Fatalf("suspiciously small route table: %d", len(routes))
@@ -293,8 +293,8 @@ func TestW9RouteTableAnonymousAndMethodRestrictions(t *testing.T) {
 
 // --- authenticated sessions: CSRF and cross-origin ---
 
-func TestW9RouteTableCSRFAndCrossOrigin(t *testing.T) {
-	s := newW9Sec(t, nil)
+func TestRouteTableCSRFAndCrossOrigin(t *testing.T) {
+	s := newHarnessSec(t, nil)
 	b := s.login("alice", secUserPW)
 	b.get("/account")
 	good := b.token()
@@ -401,8 +401,8 @@ func TestW9RouteTableCSRFAndCrossOrigin(t *testing.T) {
 
 // --- an administrator has no extra web capability ---
 
-func TestW9AdministratorHasNoExtraWebCapability(t *testing.T) {
-	s := newW9Sec(t, nil)
+func TestAdministratorHasNoExtraWebCapability(t *testing.T) {
+	s := newHarnessSec(t, nil)
 	user := s.login("alice", secUserPW)
 	admin := s.login("boss", secAdminPW)
 	if n := sqlCount(t, s.dsn, `SELECT count(*) FROM magnetico_web.users WHERE role = 'admin'`); n != 1 {
@@ -454,8 +454,8 @@ func TestW9AdministratorHasNoExtraWebCapability(t *testing.T) {
 // without letting it become markup, and each representation keeps its own
 // contract: HTML shows control and bidi characters as visible markers, JSON is
 // lossless, XML keeps every character XML 1.0 allows.
-func TestW9HostileTorrentNamesRenderSafely(t *testing.T) {
-	s := newW9Sec(t, nil)
+func TestHostileTorrentNamesRenderSafely(t *testing.T) {
+	s := newHarnessSec(t, nil)
 	b := s.login("alice", secUserPW)
 	api := b.mint("api")
 	rssTok := b.mint("rss")
@@ -614,7 +614,7 @@ func firstWord(name string) string {
 }
 
 // rawStatus is raw returning the pieces.
-func (s *w9Sec) rawStatus(method, path string, hdr map[string]string) (int, http.Header, string) {
+func (s *harnessSec) rawStatus(method, path string, hdr map[string]string) (int, http.Header, string) {
 	r := s.raw(method, path, hdr, "")
 	return r.status, r.hdr, r.body
 }

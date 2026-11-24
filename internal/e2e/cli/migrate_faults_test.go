@@ -58,7 +58,7 @@ func faultTS() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 // line that can carry DSN material goes through redactDSN/redactArgs; the
 // actual exec.Cmd arguments never do.
 //
-// The product already redacts its own output (redactDatabaseURL in main.go,
+// The product already redacts its own output (redactDatabaseURL in app.go,
 // pgconn's redactPW), so the harness only needs to guard its own log sites —
 // but captured process output is redacted too, as defense in depth.
 

@@ -1,6 +1,6 @@
 package cli
 
-// W9 security regression: forged Host and forwarding headers, canonical public
+// Security regression: forged Host and forwarding headers, canonical public
 // URLs, and the trusted-proxy boundary.
 
 import (
@@ -17,9 +17,9 @@ import (
 // Host header or any forwarding header: password-recovery email links, invitation
 // links on the account page, the RSS self, item and comment links. A forged
 // Host that matches a forged Origin is still a cross-origin request.
-func TestW9ForgedHostAndForwardedHeadersDoNotChangeLinks(t *testing.T) {
+func TestForgedHostAndForwardedHeadersDoNotChangeLinks(t *testing.T) {
 	bin := buildBinary(t)
-	dsn := w9AppAccount(t)
+	dsn := harnessAppAccount(t)
 	for _, c := range []string{"schema-init", "web-schema-init"} {
 		if out, code := runWebSchemaInit(t, bin, dsn, c); code != 0 {
 			t.Fatalf("%s: %d %s", c, code, out)
@@ -157,8 +157,8 @@ func TestW9ForgedHostAndForwardedHeadersDoNotChangeLinks(t *testing.T) {
 // of X-Forwarded-For; a client cannot pick its identity by prepending
 // addresses, a malformed chain falls back to the peer, and identities are
 // independent of each other.
-func TestW9TrustedProxyBoundaryDecidesTheRateLimitIdentity(t *testing.T) {
-	s := newW9Sec(t, trustLoopbackProxy)
+func TestTrustedProxyBoundaryDecidesTheRateLimitIdentity(t *testing.T) {
+	s := newHarnessSec(t, trustLoopbackProxy)
 	n := 0
 	attempt := func(xff string) int {
 		t.Helper()

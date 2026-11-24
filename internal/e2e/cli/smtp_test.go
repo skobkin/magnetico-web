@@ -1,6 +1,6 @@
 package cli
 
-// W9 security regression: SMTP failures. Mail is delivered over strictly
+// Security regression: SMTP failures. Mail is delivered over strictly
 // verified TLS or not at all; a failing mail server never changes what a client
 // sees, never receives a credential or a message in the clear, and never gets
 // its failure text, an address or a link into the service log.
@@ -90,9 +90,9 @@ func (f *fakeSMTP) commands() []string {
 
 var linkTokenInLog = regexp.MustCompile(`/(reset|setup|verify|register)/[A-Za-z0-9_-]{16,}`)
 
-func TestW9SMTPFailuresAreContainedAndLeakNothing(t *testing.T) {
+func TestSMTPFailuresAreContainedAndLeakNothing(t *testing.T) {
 	bin := buildBinary(t)
-	dsn := w9AppAccount(t)
+	dsn := harnessAppAccount(t)
 	for _, c := range []string{"schema-init", "web-schema-init"} {
 		if out, code := runWebSchemaInit(t, bin, dsn, c); code != 0 {
 			t.Fatalf("%s: %d %s", c, code, out)

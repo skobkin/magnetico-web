@@ -1,6 +1,6 @@
 package cli
 
-// W9 security regression: malformed, oversized and unsupported input. Whatever
+// Security regression: malformed, oversized and unsupported input. Whatever
 // a client sends, the service answers with a controlled 4xx (never a 5xx, never
 // a panic), changes no state, and keeps serving afterwards.
 
@@ -46,8 +46,8 @@ func rawTCP(t *testing.T, addr, request string) (int, string) {
 	return resp.StatusCode, b.String()
 }
 
-func TestW9MalformedAndOversizedRequests(t *testing.T) {
-	s := newW9Sec(t, trustLoopbackProxy)
+func TestMalformedAndOversizedRequests(t *testing.T) {
+	s := newHarnessSec(t, trustLoopbackProxy)
 	s.uniqueClients = true
 	alice := s.login("alice", secUserPW)
 	api := alice.mint("api")
@@ -249,8 +249,8 @@ func sessionCookieOf(b *webBrowser, addr string) string {
 // The headers of a slow client are bounded in time: a connection that never
 // finishes its request line or headers is closed by the server, and the
 // service keeps answering others meanwhile.
-func TestW9SlowHeaderConnectionsAreClosed(t *testing.T) {
-	s := newW9Sec(t, func(o *opflags.WebOptions) { o.ShutdownTimeout = 5 * time.Second })
+func TestSlowHeaderConnectionsAreClosed(t *testing.T) {
+	s := newHarnessSec(t, func(o *opflags.WebOptions) { o.ShutdownTimeout = 5 * time.Second })
 	conn, err := net.DialTimeout("tcp", s.web.addr, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)

@@ -2,9 +2,9 @@ package cli
 
 // The W9 large synthetic dataset "w9-large-v1" (task 07J, stage S5). Nothing
 // here runs in the ordinary suite: it needs MAGNETICO_BENCH_LARGE=1,
-// MAGNETICO_W9_CONFIRM_DISPOSABLE_DB (the database name, an explicit statement that
-// it is disposable), MAGNETICO_W9_DSN (the owner DSN of a disposable database whose torrent schema
-// already exists) and MAGNETICO_W9_DATADIR (the directory holding that
+// MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB (the database name, an explicit statement that
+// it is disposable), MAGNETICO_BENCH_DSN (the owner DSN of a disposable database whose torrent schema
+// already exists) and MAGNETICO_BENCH_DATADIR (the directory holding that
 // database's files, for the free-space guard). Synthetic data only.
 //
 //	population                    count (scale 1)   written how
@@ -14,7 +14,7 @@ package cli
 //	large multi-file (501-4,000)      1,900         "
 //	huge multi-file (75k-225k)           24         "
 //
-// MAGNETICO_W9_SCALE (default 1) scales every count; the pilot runs at 0.01.
+// MAGNETICO_BENCH_SCALE (default 1) scales every count; the pilot runs at 0.01.
 
 import (
 	"context"
@@ -31,9 +31,9 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/synth"
 )
 
-const w9MinFreeBytes = 40 << 30
+const harnessMinFreeBytes = 40 << 30
 
-func w9FreeBytes(t *testing.T, dir string) uint64 {
+func harnessFreeBytes(t *testing.T, dir string) uint64 {
 	t.Helper()
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(dir, &st); err != nil {
@@ -42,30 +42,30 @@ func w9FreeBytes(t *testing.T, dir string) uint64 {
 	return st.Bavail * uint64(st.Bsize)
 }
 
-func TestW9SeedLargeDataset(t *testing.T) {
+func TestSeedLargeDataset(t *testing.T) {
 	if !benchkit.Enabled() {
-		t.Skip("set MAGNETICO_BENCH_LARGE=1 (and MAGNETICO_W9_DSN, MAGNETICO_W9_DATADIR) to seed the W9 dataset")
+		t.Skip("set MAGNETICO_BENCH_LARGE=1 (and MAGNETICO_BENCH_DSN, MAGNETICO_BENCH_DATADIR) to seed the benchmark dataset")
 	}
-	dsn, dir := os.Getenv("MAGNETICO_W9_DSN"), os.Getenv("MAGNETICO_W9_DATADIR")
+	dsn, dir := os.Getenv("MAGNETICO_BENCH_DSN"), os.Getenv("MAGNETICO_BENCH_DATADIR")
 	if dsn == "" || dir == "" {
-		t.Fatal("MAGNETICO_W9_DSN and MAGNETICO_W9_DATADIR are required")
+		t.Fatal("MAGNETICO_BENCH_DSN and MAGNETICO_BENCH_DATADIR are required")
 	}
 	// The seeder writes millions of rows: only into the confirmed, local database.
-	if err := w9CheckTarget(dsn, os.Getenv(w9ConfirmEnv)); err != nil {
-		t.Fatalf("refusing to seed MAGNETICO_W9_DSN: %v", err)
+	if err := harnessCheckTarget(dsn, os.Getenv(harnessConfirmEnv)); err != nil {
+		t.Fatalf("refusing to seed MAGNETICO_BENCH_DSN: %v", err)
 	}
 	scale := 1.0
-	if v := os.Getenv("MAGNETICO_W9_SCALE"); v != "" {
+	if v := os.Getenv("MAGNETICO_BENCH_SCALE"); v != "" {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || f <= 0 || f > 1 {
-			t.Fatalf("MAGNETICO_W9_SCALE=%q", v)
+			t.Fatalf("MAGNETICO_BENCH_SCALE=%q", v)
 		}
 		scale = f
 	}
 	guard := func(phase string) {
 		t.Helper()
-		if free := w9FreeBytes(t, dir); free < w9MinFreeBytes {
-			t.Fatalf("%s: only %d GiB free under %s, the guard is %d GiB", phase, free>>30, dir, w9MinFreeBytes>>30)
+		if free := harnessFreeBytes(t, dir); free < harnessMinFreeBytes {
+			t.Fatalf("%s: only %d GiB free under %s, the guard is %d GiB", phase, free>>30, dir, harnessMinFreeBytes>>30)
 		}
 	}
 	ctx := context.Background()
@@ -83,7 +83,7 @@ func TestW9SeedLargeDataset(t *testing.T) {
 	}
 	// The marker goes on before the first row: a partially seeded database is
 	// still identifiable, and the load harness refuses any database without it.
-	if err := w9MarkDatabase(ctx, conn); err != nil {
+	if err := harnessMarkDatabase(ctx, conn); err != nil {
 		t.Fatalf("marking the benchmark database: %v", err)
 	}
 	size := func() (db, tbl, idx, toast int64) {
@@ -93,7 +93,7 @@ func TestW9SeedLargeDataset(t *testing.T) {
 		return
 	}
 	start := time.Now()
-	t.Logf("free before: %d GiB, scale %.4g", w9FreeBytes(t, dir)>>30, scale)
+	t.Logf("free before: %d GiB, scale %.4g", harnessFreeBytes(t, dir)>>30, scale)
 
 	// --- Phase 1: single-file rows without blobs, in chunks.
 	singles := int(3_480_000 * scale)
@@ -151,7 +151,7 @@ func TestW9SeedLargeDataset(t *testing.T) {
 	_ = conn.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE file_count > 1) FROM magneticod.torrents`).Scan(&total, &withBlob)
 	db, tbl, idx, blobs := size()
 	t.Logf("RESULT scale=%.4g torrents=%d multi_file=%d files_in_blobs=%d wall=%s pg_database_size=%dMiB torrents_table=%dMiB torrents_indexes=%dMiB blobs_total=%dMiB free_after=%dGiB",
-		scale, total, withBlob, files, time.Since(start).Round(time.Second), db>>20, tbl>>20, idx>>20, blobs>>20, w9FreeBytes(t, dir)>>30)
+		scale, total, withBlob, files, time.Since(start).Round(time.Second), db>>20, tbl>>20, idx>>20, blobs>>20, harnessFreeBytes(t, dir)>>30)
 }
 
 // singleFileSQL inserts rows [$1,$2] of single-file torrents without blobs.

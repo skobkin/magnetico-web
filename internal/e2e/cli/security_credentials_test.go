@@ -1,8 +1,8 @@
 package cli
 
-// W9 security regression: credential separation, account-state lifecycle and
+// Security regression: credential separation, account-state lifecycle and
 // session expiry, against the in-process production wiring (see
-// main_w9_security_test.go for the model).
+// security_sweep_test.go for the model).
 
 import (
 	"context"
@@ -63,8 +63,8 @@ func legacyRSSToken(t *testing.T, dsn, user, key string) {
 
 // --- credential separation ---
 
-func TestW9CredentialSeparationMatrix(t *testing.T) {
-	s := newW9Sec(t, trustLoopbackProxy)
+func TestCredentialSeparationMatrix(t *testing.T) {
+	s := newHarnessSec(t, trustLoopbackProxy)
 	s.uniqueClients = true
 	b := s.login("alice", secUserPW)
 	api, rss := b.mint("api"), b.mint("rss")
@@ -194,8 +194,8 @@ func TestW9CredentialSeparationMatrix(t *testing.T) {
 
 // --- account state and credential lifecycle ---
 
-func TestW9AccountStateAndCredentialLifecycle(t *testing.T) {
-	s := newW9Sec(t, nil)
+func TestAccountStateAndCredentialLifecycle(t *testing.T) {
+	s := newHarnessSec(t, nil)
 	cli := func(args ...string) string {
 		t.Helper()
 		out, errOut, code := runWebAdminBinary(t, s.bin, s.dsn, "", nil, append([]string{"user"}, args...)...)
@@ -315,11 +315,11 @@ func TestW9AccountStateAndCredentialLifecycle(t *testing.T) {
 
 // --- session expiry, idle timeout, remember-me, cookie attributes ---
 
-func TestW9SessionExpiryIdleAndRemember(t *testing.T) {
+func TestSessionExpiryIdleAndRemember(t *testing.T) {
 	// The shortest permitted idle timeout (5 minutes), so a moved timestamp is
 	// decisive; the other lifetimes are short but ordered (idle <= absolute <=
 	// remember).
-	s := newW9Sec(t, func(o *opflags.WebOptions) {
+	s := newHarnessSec(t, func(o *opflags.WebOptions) {
 		o.SessionIdleTimeout, o.SessionAbsoluteLifetime, o.SessionRememberLifetime = 5*time.Minute, 24*time.Hour, 48*time.Hour
 	})
 	signIn := func(remember bool) (*webBrowser, *http.Response) {
@@ -429,8 +429,8 @@ func TestW9SessionExpiryIdleAndRemember(t *testing.T) {
 // whose stored hash format is unsupported ("needs reset") and a disabled one
 // all fail with the same status and the same page, and none of them gets a
 // session; the failures also share one rate-limit bucket per address.
-func TestW9AuthenticationFailuresAreIndistinguishable(t *testing.T) {
-	s := newW9Sec(t, trustLoopbackProxy)
+func TestAuthenticationFailuresAreIndistinguishable(t *testing.T) {
+	s := newHarnessSec(t, trustLoopbackProxy)
 	s.uniqueClients = true
 	for _, name := range []string{"nopass", "oldhash", "gone"} {
 		if out, errOut, code := runWebAdminBinary(t, s.bin, s.dsn, "", nil, "user", "add", name); code != 0 {
