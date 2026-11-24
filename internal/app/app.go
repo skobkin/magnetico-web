@@ -24,8 +24,11 @@ func Main() {
 
 	// TEMPORARY (planned removal around 0.10.0): explain the cause before any
 	// configuration failure when the PHP deployment's environment is present.
-	// Help and the no-command usage stay quiet.
-	if !helpOrNoCommand(os.Args[1:]) {
+	// Only help (and --version, answered above) stays quiet. The no-command usage does
+	// not: the PHP image had no command of its own, so a legacy deployment whose tag
+	// is merely bumped starts this image without arguments, where a bare "Please
+	// specify one command" would hide the real reason.
+	if !askedForHelp(os.Args[1:]) {
 		legacywarn.Warn(os.Stderr, os.Environ())
 	}
 
@@ -80,11 +83,8 @@ func Main() {
 	}
 }
 
-// helpOrNoCommand reports whether args ask for help or name no command at all.
-func helpOrNoCommand(args []string) bool {
-	if len(args) == 0 {
-		return true
-	}
+// askedForHelp reports whether args ask for help.
+func askedForHelp(args []string) bool {
 	for _, a := range args {
 		if a == "-h" || a == "--help" {
 			return true

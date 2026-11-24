@@ -74,21 +74,39 @@ func TestLegacyWarningCoversServiceCommands(t *testing.T) {
 	}
 }
 
-func TestNoLegacyWarningForHelpVersionOrNoArguments(t *testing.T) {
+func TestNoLegacyWarningForHelpOrVersion(t *testing.T) {
 	bin := testkit.Binary(t)
 	env := []string{"APP_DATABASE_URL=" + legacyDSN, "MAGNETICOD_DATABASE_URL=" + legacyDSN}
 	for _, args := range [][]string{
-		nil, {"--help"}, {"-h"}, {"--version"}, {"web", "--help"}, {"crawl", "--help"}, {"migrate", "--help"}, {"ingest", "-h"},
+		{"--help"}, {"-h"}, {"--version"}, {"web", "--help"}, {"crawl", "--help"}, {"migrate", "--help"}, {"ingest", "-h"},
 	} {
 		res := testkit.Run(t, bin, testkit.RunOptions{Args: args, Env: env})
 		if strings.Contains(res.Output, legacyUpgradeURL) || strings.Contains(res.Output, "rewritten in Go") {
 			t.Errorf("%v must stay quiet, got %q", args, res.Output)
 		}
 	}
-	none := testkit.Run(t, bin, testkit.RunOptions{Env: env})
-	if none.ExitCode != 1 || !strings.Contains(none.Output, "Please specify one command of: crawl, dev, ingest, migrate or web") {
-		t.Errorf("no-argument behaviour changed with legacy variables: exit=%d %q", none.ExitCode, none.Output)
+}
+
+// The old PHP image had no command of its own, so a legacy deployment whose tag
+// is merely bumped starts this image WITHOUT arguments: exactly the case where
+// the plain usage error would hide the real reason. The banner comes first; the
+// usage text and the exit code are unchanged.
+func TestLegacyWarningIsPrintedBeforeTheNoArgumentUsage(t *testing.T) {
+	bin := testkit.Binary(t)
+	plain := testkit.Run(t, bin, testkit.RunOptions{})
+	legacy := testkit.Run(t, bin, testkit.RunOptions{Env: []string{"APP_DATABASE_URL=" + legacyDSN}})
+	if plain.ExitCode != 1 || legacy.ExitCode != plain.ExitCode {
+		t.Fatalf("the exit code must stay 1: plain=%d legacy=%d", plain.ExitCode, legacy.ExitCode)
 	}
+	const usage = "Please specify one command of: crawl, dev, ingest, migrate or web"
+	iBanner, iUsage := strings.Index(legacy.Output, legacyUpgradeURL), strings.Index(legacy.Output, usage)
+	if iBanner < 0 || iUsage < 0 || iBanner > iUsage {
+		t.Fatalf("banner at %d must precede the unchanged usage error at %d:\n%s", iBanner, iUsage, legacy.Output)
+	}
+	if strings.Contains(plain.Output, legacyUpgradeURL) {
+		t.Errorf("no legacy variable, no banner: %q", plain.Output)
+	}
+	assertNoSecret(t, "output", legacy.Output)
 }
 
 // The warning does not replace or weaken the fail-closed schema verification.
