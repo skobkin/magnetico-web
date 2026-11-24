@@ -10,8 +10,11 @@ import (
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
-// initAdvisoryKey serialises concurrent stats-schema-init runs.
-const initAdvisoryKey int64 = 7881644658832750187
+// initAdvisoryKey serialises concurrent stats-schema-init runs. It must differ
+// from the keys of every other command (internal/ingest/pgqueue: schema-init ...186 and the
+// consumer's session lock ...187): the consumer holds its lock for as long as
+// ingest runs, and initialising statistics must never wait for it.
+const initAdvisoryKey int64 = 7881644658832750191
 
 // InitSchema creates magnetico_stats. It is non-destructive and idempotent,
 // runs under pg_advisory_xact_lock, requires a verified magneticod schema

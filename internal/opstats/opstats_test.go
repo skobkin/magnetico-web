@@ -117,6 +117,29 @@ func TestInitSchemaTakesAdvisoryLock(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("InitSchema did not proceed after the lock was released")
 	}
+	// The ingest consumer holds a session advisory lock for as long as it runs; statistics
+	// initialisation must not share its key and so never waits for it.
+	dsn3, _ := newDB(t, false)
+	consumer, err := pgx.Connect(bg, dsn3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consumer.Close(bg)
+	for _, key := range []int64{7881644658832750185, 7881644658832750186, 7881644658832750187, 7881644658832750188, 7881644658832750189, 7881644658832750190} {
+		if _, err := consumer.Exec(bg, "SELECT pg_advisory_lock($1)", key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, k := range []int64{7881644658832750185, 7881644658832750186, 7881644658832750187, 7881644658832750188, 7881644658832750189, 7881644658832750190} {
+		if initAdvisoryKey == k {
+			t.Fatalf("the stats init key collides with the advisory key %d of another command", k)
+		}
+	}
+	ctx3, cancel3 := context.WithTimeout(bg, 20*time.Second)
+	defer cancel3()
+	if err := InitSchema(ctx3, dsn3); err != nil {
+		t.Fatalf("InitSchema while an ingest consumer holds its advisory lock: %v", err)
+	}
 	// Concurrent runs create the schema exactly once.
 	dsn2, _ := newDB(t, false)
 	var wg sync.WaitGroup
