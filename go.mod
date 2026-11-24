@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.27.0
 
 require (
-	github.com/andybalholm/brotli v1.2.6
+	github.com/andybalholm/brotli v1.2.7
 	github.com/goccy/go-yaml v1.19.2
 	github.com/grafana/pyroscope-go v1.4.3
 	github.com/jackc/pgx/v5 v5.11.0
