@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	"github.com/skobkin/magnetico-web/opflags"
 )

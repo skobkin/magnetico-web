@@ -48,7 +48,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
 	"github.com/skobkin/magnetico-web/internal/web/benchkit"
@@ -75,8 +74,6 @@ const (
 	oUnexpect  = "unexpected4xx"
 	oTransport = "transport"
 )
-
-var w9Outcomes = []string{oOK, o429, oBusy, oTimeout, oOther5xx, oUnexpect, oTransport}
 
 // ---- processes in their own scopes --------------------------------------------------
 
@@ -594,26 +591,6 @@ func parseGC(out string) (pts []w9GC, count int, pauseMs float64) {
 		}
 	}
 	return
-}
-
-// slope is the least-squares slope of v over t (units per second).
-func slope(ts, vs []float64) float64 {
-	n := float64(len(ts))
-	if n < 2 {
-		return 0
-	}
-	var st, sv, stt, stv float64
-	for i := range ts {
-		st += ts[i]
-		sv += vs[i]
-		stt += ts[i] * ts[i]
-		stv += ts[i] * vs[i]
-	}
-	den := n*stt - st*st
-	if den == 0 {
-		return 0
-	}
-	return (n*stv - st*sv) / den
 }
 
 // ---- setup --------------------------------------------------------------------------

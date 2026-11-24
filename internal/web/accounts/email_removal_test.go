@@ -567,12 +567,12 @@ func TestRecoveryInvariantUnderConcurrentEmailChanges(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(3)
-		go func() { defer wg.Done(); s.IssueRecoveryLink(ctx, "ruth@example.org") }()
-		go func() { defer wg.Done(); s.RemoveEmail(ctx, u.ID) }()
+		go func() { defer wg.Done(); _, _ = s.IssueRecoveryLink(ctx, "ruth@example.org") }()
+		go func() { defer wg.Done(); _, _ = s.RemoveEmail(ctx, u.ID) }()
 		go func() {
 			defer wg.Done()
 			if l, err := s.IssueEmailVerifyLink(ctx, u.ID, "ruth@example.org"); err == nil {
-				s.CompleteEmailVerify(ctx, l.Token)
+				_, _ = s.CompleteEmailVerify(ctx, l.Token)
 			}
 		}()
 	}
