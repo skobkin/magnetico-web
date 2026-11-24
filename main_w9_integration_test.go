@@ -665,6 +665,23 @@ func TestW9IngestToWebAndAPI(t *testing.T) {
 	if code := w.ingest.terminate(t, 30*time.Second); code != 0 {
 		t.Fatalf("ingest exit after SIGTERM: %d\n%s", code, w.ingest.out.String())
 	}
+
+	// Nothing sensitive reached the output of either service: not the ingest
+	// bearer token, the database password, user credentials, or the tokens that
+	// were used against the web service.
+	for name, out := range map[string]string{"web": w.web.out.String(), "ingest": w.ingest.out.String()} {
+		for what, secret := range map[string]string{
+			"ingest token": w.ingestToken, "database password": "w9-role-secret-pw", "user password": w9Password,
+			"API token": api, "RSS token": rssTok,
+		} {
+			if strings.Contains(out, secret) {
+				t.Errorf("the %s output contains the %s", name, what)
+			}
+		}
+		if len(out) < 200 {
+			t.Errorf("the %s output is suspiciously small (%d bytes): the scan would be vacuous", name, len(out))
+		}
+	}
 }
 
 // A legacy v0.12.0 source is imported with `migrate torrents`, verified with

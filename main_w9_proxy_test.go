@@ -134,6 +134,22 @@ func TestW9ForgedHostAndForwardedHeadersDoNotChangeLinks(t *testing.T) {
 		t.Errorf("state change with Host and Origin evil.example and a guessed token: %d, want 403", resp.StatusCode)
 	}
 	_ = good
+
+	// 4. Nothing sensitive reached the service output: not the SMTP password, the
+	// token of the mailed recovery link, the account's address, its password or
+	// its session.
+	out := w.out.String()
+	for what, secret := range map[string]string{
+		"SMTP password": "smtp-secret-pw-88", "recovery link token": link[strings.LastIndex(link, "/")+1:],
+		"email address": "alice@example.org", "user password": pw, "RSS token": rss, "database password": "w9-role-secret-pw",
+	} {
+		if strings.Contains(out, secret) {
+			t.Errorf("the service output contains the %s", what)
+		}
+	}
+	if len(out) < 200 {
+		t.Errorf("the service output is suspiciously small (%d bytes)", len(out))
+	}
 }
 
 // The trusted-proxy boundary: with the test client trusted as a proxy, the
