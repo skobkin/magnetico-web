@@ -47,7 +47,25 @@ else
 	echo '{}' >"$cfg/config.json"
 fi
 
+# A release tag that already resolves to other bytes is never overwritten: a re-run
+# after a partial publication rebuilds the image (its digest differs per build), and
+# silently replacing a published tag would be worse than stopping. Checked for every
+# repository BEFORE anything is pushed.
 for repo in $REPOS; do
+	# shellcheck disable=SC2086
+	existing="$($CRANE digest "$repo:$TAG" 2>/dev/null)" || existing=""
+	if [ -n "$existing" ] && [ "$existing" != "$digest" ]; then
+		fail "$repo:$TAG already resolves to $existing, not the qualified $digest: refusing to overwrite a published tag (delete it on the registry deliberately, or cut a new release tag; see docs/release-engineering.md)"
+	fi
+done
+
+for repo in $REPOS; do
+	# shellcheck disable=SC2086
+	existing="$($CRANE digest "$repo:$TAG" 2>/dev/null)" || existing=""
+	if [ "$existing" = "$digest" ]; then
+		echo "already published $repo:$TAG -> $digest (nothing to push)"
+		continue
+	fi
 	# shellcheck disable=SC2086
 	out="$($CRANE push "$LAYOUT" "$repo:$TAG")" || fail "pushing to $repo failed"
 	pushed="$(printf '%s\n' "$out" | sed -n 's/.*@\(sha256:[0-9a-f]\{64\}\)$/\1/p' | tail -n 1)"

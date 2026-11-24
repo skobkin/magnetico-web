@@ -33,8 +33,11 @@ push)
 	;;
 digest)
 	repo="${2%:*}"
-	v="STUB_DIGEST_FOR_$(echo "$repo" | tr -c 'A-Za-z0-9\n' '_')"
-	eval "d=\${$v:-}"
+	key="$(echo "$repo" | tr -c 'A-Za-z0-9\n' '_')"
+	eval "x=\${STUB_EXISTING_$key:-}"
+	if [ -n "$x" ]; then echo "$x"; exit 0; fi
+	if [ "${STUB_ABSENT:-}" = 1 ]; then echo "MANIFEST_UNKNOWN: not found" >&2; exit 1; fi
+	eval "d=\${STUB_DIGEST_FOR_$key:-}"
 	[ -n "$d" ] || d="$STUB_DIGEST"
 	echo "$d"
 	;;
@@ -83,7 +86,7 @@ func script(t *testing.T, name string, env []string, args ...string) (string, in
 
 func rehearsal(crane, digest string, extra ...string) []string {
 	return append([]string{
-		"CRANE=" + crane, "STUB_DIGEST=" + digest,
+		"CRANE=" + crane, "STUB_DIGEST=" + digest, "STUB_ABSENT=1",
 		"MAGNETICO_PROMOTE_REHEARSAL=1", "MAGNETICO_PROMOTE_REPOS=r1.invalid/mag r2.invalid/mag",
 	}, extra...)
 }
@@ -182,7 +185,7 @@ func TestPromoteRealRepositoriesNeedAllCredentialsAndNeverPrintThem(t *testing.T
 	dir := t.TempDir()
 	crane, log := stubCrane(t, dir)
 	l := layout(t, dir, digestA)
-	base := []string{"CRANE=" + crane, "STUB_DIGEST=" + digestA}
+	base := []string{"CRANE=" + crane, "STUB_DIGEST=" + digestA, "STUB_ABSENT=1"}
 	if out, code := script(t, "promote-image.sh", base, l, "0.8.0"); code == 0 {
 		t.Fatalf("no credentials: must fail:\n%s", out)
 	}
@@ -260,5 +263,47 @@ func TestVerifyPublishedFailsWithoutBothPlatformsOrAttestations(t *testing.T) {
  {"digest":"sha256:d"`, 1)
 	if out, code := verify(t, oneAtt); code == 0 {
 		t.Fatalf("a missing attestation manifest must fail:\n%s", out)
+	}
+}
+
+func pushCount(t *testing.T, log string) int {
+	t.Helper()
+	n := 0
+	for _, l := range strings.Split(readLog(t, log), "\n") {
+		if strings.HasPrefix(l, "push ") {
+			n++
+		}
+	}
+	return n
+}
+
+// A release tag that already resolves to different bytes is never overwritten:
+// a re-run after a partial publication rebuilds the image (its digest differs
+// per build), and silently replacing a published tag would be worse than failing.
+func TestPromoteNeverOverwritesATagThatResolvesToAnotherDigest(t *testing.T) {
+	dir := t.TempDir()
+	crane, log := stubCrane(t, dir)
+	l := layout(t, dir, digestA)
+	env := rehearsal(crane, digestA, "STUB_EXISTING_r2_invalid_mag="+digestB)
+	out, code := script(t, "promote-image.sh", env, l, "0.8.0-rc.0")
+	if code == 0 || !strings.Contains(out, "refusing to overwrite") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if n := pushCount(t, log); n != 0 {
+		t.Fatalf("the conflict is known before any push: nothing may be pushed to the other repository either (%d pushes)", n)
+	}
+}
+
+func TestPromoteIsIdempotentForTheSameDigest(t *testing.T) {
+	dir := t.TempDir()
+	crane, log := stubCrane(t, dir)
+	l := layout(t, dir, digestA)
+	env := rehearsal(crane, digestA, "STUB_EXISTING_r1_invalid_mag="+digestA)
+	out, code := script(t, "promote-image.sh", env, l, "0.8.0-rc.0")
+	if code != 0 || !strings.Contains(out, "already published") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if n := pushCount(t, log); n != 1 {
+		t.Fatalf("only the repository that lacks the tag is pushed to, got %d pushes:\n%s", n, readLog(t, log))
 	}
 }

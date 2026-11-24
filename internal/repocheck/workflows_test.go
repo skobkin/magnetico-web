@@ -392,8 +392,11 @@ func TestImageIsBuiltOnceByTheBuildxPluginWithoutPushingOrCaching(t *testing.T) 
 		t.Errorf("image-build's repo %q must be on a non-routable .invalid host: the build is staged, never published", set["repo"])
 	}
 	out, _ := set["output"].(string)
-	if !strings.HasPrefix(out, "type=oci,tar=false,dest=${CI_WORKSPACE}/.ci/image") {
-		t.Errorf("image-build must write the OCI layout directory .ci/image, output = %q", out)
+	// Relative to the workspace (the step's working directory). CI_WORKSPACE is a
+	// runtime-only variable: Woodpecker cannot substitute it into a setting, so an
+	// absolute ${CI_WORKSPACE}/... path would silently become /.ci/image.
+	if !strings.HasPrefix(out, "type=oci,tar=false,dest=.ci/image,") {
+		t.Errorf("image-build must write the OCI layout directory .ci/image (relative), output = %q", out)
 	}
 	if set["pull_image"] != true {
 		t.Error("image-build must resolve fresh base images (pull_image: true)")
@@ -589,5 +592,42 @@ func TestReleaseWorkflowPinsCraneAndLimitsItsToolchain(t *testing.T) {
 	img, _ := p["image"].(string)
 	if !goImage.MatchString(img) {
 		t.Errorf("promote-image runs crane through go run and needs a Go image, got %q", img)
+	}
+}
+
+// Woodpecker substitutes variables into settings and filters only at compile
+// time; runtime-only variables (CI_WORKSPACE, CI_PIPELINE_STATUS, ...) become
+// empty strings there. Commands run in a shell and may use them as $VAR.
+func TestNoRuntimeOnlyVariableIsSubstitutedIntoAWorkflow(t *testing.T) {
+	for _, name := range []string{"ci.yaml", "release.yaml"} {
+		raw := commentFree(load(t, name).raw)
+		for _, v := range []string{"CI_WORKSPACE", "CI_PIPELINE_STATUS"} {
+			if strings.Contains(raw, "${"+v) {
+				t.Errorf("%s uses ${%s}: it is runtime-only and would be substituted as an empty string", name, v)
+			}
+		}
+	}
+}
+
+// -p 3 is the verified configuration because the suite has timing-sensitive
+// tests (issues #52, #53) and failures are never rerun: the suites run with
+// nothing heavy beside them on the agent.
+func TestTimingSensitiveSuitesRunAlone(t *testing.T) {
+	ci := load(t, "ci.yaml")
+	for _, light := range []string{"fmt", "lint", "vet", "build", "dockerfile-lint"} {
+		if !transitivelyDependsOn(ci, "test", light) {
+			t.Errorf("ci.yaml: the test step must wait for %s (it must not share the agent with it)", light)
+		}
+	}
+	for _, after := range []string{"openapi", "release-dry-run", "workflow-invariants"} {
+		if !transitivelyDependsOn(ci, after, "test") {
+			t.Errorf("ci.yaml: %s must run after the test step, not beside it", after)
+		}
+	}
+	rel := load(t, "release.yaml")
+	for _, after := range []string{"image-build", "native-build", "govulncheck"} {
+		if !transitivelyDependsOn(rel, after, "race") {
+			t.Errorf("release.yaml: %s must run after the race suite, not beside it", after)
+		}
 	}
 }

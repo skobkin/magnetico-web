@@ -13,6 +13,48 @@
 # passed.
 set -u
 
+# The one place the `--version` line is judged, usable on its own (and unit-tested):
+#   image-smoke.sh --check-version-line LINE [EXPECTED_VERSION [EXPECTED_COMMIT]]
+# The line must be exactly `magnetico <version> (commit <12 hex>[+dirty]|unknown, go<ver>, linux/<arch>)`,
+# built with Go >= 1.27.4; when given, the version must equal EXPECTED_VERSION and the
+# commit must be a prefix of EXPECTED_COMMIT (an unknown commit never satisfies it).
+check_version_line() {
+	line="$1"
+	want_version="${2:-}"
+	want_commit="${3:-}"
+	if ! printf '%s\n' "$line" | grep -Eq '^magnetico [^ ]+ \(commit ([0-9a-f]{12}(\+dirty)?|unknown), go[0-9]+\.[0-9]+(\.[0-9]+)?, linux/[a-z0-9]+\)$'; then
+		echo "malformed version line: $line" >&2
+		return 1
+	fi
+	gov="$(printf '%s' "$line" | sed -E 's/^.*, go([0-9]+\.[0-9]+(\.[0-9]+)?), linux\/.*$/\1/')"
+	if [ "$(printf '1.27.4\n%s\n' "$gov" | sort -V | head -n 1)" != "1.27.4" ]; then
+		echo "built with Go $gov, below the 1.27.4 security floor" >&2
+		return 1
+	fi
+	if [ -n "$want_version" ]; then
+		got="$(printf '%s' "$line" | sed -E 's/^magnetico ([^ ]+) .*$/\1/')"
+		[ "$got" = "$want_version" ] || {
+			echo "the image reports version $got, expected $want_version" >&2
+			return 1
+		}
+	fi
+	if [ -n "$want_commit" ]; then
+		got="$(printf '%s' "$line" | sed -E 's/^.*\(commit ([0-9a-f]{12}|unknown)(\+dirty)?, .*$/\1/')"
+		case "$want_commit" in
+		"$got"*) ;;
+		*)
+			echo "the image reports commit $got, expected $want_commit" >&2
+			return 1
+			;;
+		esac
+	fi
+	return 0
+}
+if [ "${1:-}" = "--check-version-line" ]; then
+	check_version_line "${2:-}" "${3:-}" "${4:-}"
+	exit $?
+fi
+
 PLATFORM=""
 if [ "${1:-}" = "--platform" ]; then
 	PLATFORM="$2"
@@ -85,13 +127,12 @@ check "executable is not writable by the runtime user" sh_in '! test -w /usr/loc
 echo "== executable behaviour (no network, read-only root, all capabilities dropped)"
 VOUT="$(mag --version 2>&1)"
 VRC=$?
-if [ $VRC -eq 0 ] && printf '%s\n' "$VOUT" | grep -qE '^magnetico [^ ]+ \(commit [0-9a-f]{12}(\+dirty)?|unknown, go[0-9.]+, linux/[a-z0-9]+\)$' && [ "$(printf '%s\n' "$VOUT" | wc -l)" -eq 1 ]; then
+# EXPECT_VERSION / EXPECT_COMMIT (the release workflow sets them to the tag and the
+# commit it builds) make the smoke test judge the identity, not just the format.
+if [ $VRC -eq 0 ] && [ "$(printf '%s\n' "$VOUT" | wc -l)" -eq 1 ] && VERR="$(check_version_line "$VOUT" "${EXPECT_VERSION:-}" "${EXPECT_COMMIT:-}" 2>&1)"; then
 	pass "--version: $VOUT"
-	GOV="$(printf '%s' "$VOUT" | sed -E 's/.*, go([0-9]+\.[0-9]+(\.[0-9]+)?),.*/\1/')"
-	# security floor: Go 1.27.4 or newer
-	if [ "$(printf '1.27.4\n%s\n' "$GOV" | sort -V | head -n 1)" = "1.27.4" ]; then pass "built with Go $GOV (>= 1.27.4)"; else fail "built with Go $GOV, below the 1.27.4 floor"; fi
 else
-	fail "--version failed (exit $VRC): $VOUT"
+	fail "--version (exit $VRC): ${VERR:-$VOUT}"
 fi
 docker volume create "$RUN_ID-data" >/dev/null
 # shellcheck disable=SC2086
@@ -108,6 +149,9 @@ done
 echo "== writable /data for the runtime user"
 # shellcheck disable=SC2086
 if docker run --rm $PLAT_FLAG --network none -v "$RUN_ID-data:/data" --entrypoint /bin/sh "$IMAGE" -c 'touch /data/probe && rm /data/probe'; then pass "fresh named volume at /data is writable"; else fail "named volume at /data is not writable"; fi
+# Note: with DOCKER_HOST pointing at a remote daemon (the workflow's dind service) the
+# bind-mount source is resolved by the daemon, which creates it itself; the probes
+# below still exercise ownership and permissions there.
 BINDDIR="$(mktemp -d)"
 # shellcheck disable=SC2086
 docker run --rm -v "$BINDDIR:/w" --user 0:0 --entrypoint /bin/sh "$IMAGE" -c 'chown 10001:10001 /w' >/dev/null 2>&1

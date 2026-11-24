@@ -13,16 +13,23 @@ ARG GO_VERSION=1.27.4
 ARG ALPINE_VERSION=3.24
 
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS build
+# A failure anywhere in a pipeline fails the step (busybox ash supports pipefail).
+SHELL ["/bin/ash", "-o", "pipefail", "-c"]
 ARG TARGETOS
 ARG TARGETARCH
 # The same linker values as .goreleaser.yaml: internal/buildinfo.
 ARG VERSION=dev
 ARG COMMIT=
-# GOTOOLCHAIN=local: never download a toolchain; go.mod's `toolchain` line makes
-# the build fail on an image older than the security floor instead.
+# GOTOOLCHAIN=local: never download a toolchain. Under `local` go.mod's `toolchain`
+# line is only a hint (the hard minimum is its `go` line), so the security floor is
+# enforced explicitly below.
 ENV CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=readonly
 WORKDIR /src
 COPY go.mod go.sum ./
+RUN want="$(sed -n 's/^toolchain go//p' go.mod)" \
+ && have="$(go env GOVERSION | sed 's/^go//')" \
+ && [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n 1)" = "$want" ] \
+ || { echo "the build image has Go $have, go.mod requires at least $want (the security floor)"; exit 1; }
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \

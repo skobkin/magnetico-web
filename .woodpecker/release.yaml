@@ -94,6 +94,9 @@ steps:
 
   - name: govulncheck
     image: golang:1.27.4-alpine
+    # The timing-sensitive race suite runs alone on the agent (-p 3 is verified for
+    # that condition); the heavy builds and checks wait for it.
+    depends_on: [race]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -115,6 +118,7 @@ steps:
   - name: image-build
     image: woodpeckerci/plugin-docker-buildx:6
     privileged: true
+    depends_on: [race]
     settings:
       dry_run: true
       repo: staged.invalid/magnetico-web
@@ -131,7 +135,9 @@ steps:
       build_args:
         - VERSION=${CI_COMMIT_TAG=0.0.0-manual}
         - COMMIT=${CI_COMMIT_SHA}
-      output: type=oci,tar=false,dest=${CI_WORKSPACE}/.ci/image,name=staged.invalid/magnetico-web:staged
+      # Relative to the workspace (the step's working directory): CI_WORKSPACE is runtime-only and
+      # cannot be substituted into a setting.
+      output: type=oci,tar=false,dest=.ci/image,name=staged.invalid/magnetico-web:staged
 
   - name: image-smoke
     image: docker:29-cli
@@ -139,6 +145,9 @@ steps:
     environment:
       DOCKER_HOST: tcp://dind:2375
       PG_IMAGE: postgres:17-alpine
+      # the smoke test judges the identity, not only the format, of `--version`
+      EXPECT_VERSION: ${CI_COMMIT_TAG=0.0.0-manual}
+      EXPECT_COMMIT: ${CI_COMMIT_SHA}
     commands:
       - |
         n=0
@@ -156,6 +165,9 @@ steps:
     image: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
     depends_on: [image-build]
     commands:
+      # An SBOM and provenance for every platform must really be in the layout: counting
+      # attestation manifests cannot tell (provenance alone also yields two).
+      - sh ci/check-attestations.sh .ci/image
       - |
         for platform in linux/amd64 linux/arm64; do
           trivy image --input .ci/image --platform "$platform" --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --scanners vuln --skip-version-check
@@ -164,6 +176,7 @@ steps:
   # The native archives. A tag builds the release; a manual run builds a snapshot.
   - name: native-build
     image: goreleaser/goreleaser:v2.20.1
+    depends_on: [race]
     environment:
       # The image ships Go 1.27.3 with GOTOOLCHAIN=local, which silently ignores
       # go.mod's toolchain line: the security floor is enforced explicitly.
@@ -247,6 +260,8 @@ steps:
     environment:
       DOCKER_HOST: tcp://dind:2375
       PG_IMAGE: postgres:17-alpine
+      EXPECT_VERSION: ${CI_COMMIT_TAG}
+      EXPECT_COMMIT: ${CI_COMMIT_SHA}
     commands:
       - |
         n=0

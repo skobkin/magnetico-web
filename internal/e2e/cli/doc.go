@@ -10,8 +10,10 @@
 //     disposable server (MAGNETICO_TEST_POSTGRES_DSN, see internal/pgtest).
 //   - `-tags loadtest` (manual only): dataset generation (TestSeedLargeDataset),
 //     the load, capacity, memory-floor and soak harness (TestLoad), the web load
-//     campaign (TestWebLoad) and the harness's own drain self-test. Besides the
-//     tag, each of them needs explicit environment authorization
+//     campaign (TestWebLoad) and the orchestrator's drain self-test
+//     (TestDrainReportsQueryErrorsAndEnforcesItsDeadline, which was an untagged
+//     test before Task 08 and is not run by CI). Besides the tag, the three
+//     harnesses need explicit environment authorization
 //     (MAGNETICO_BENCH_LARGE=1 plus MAGNETICO_BENCH_DSN and
 //     MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB naming the database), because they
 //     mutate a disposable database. The guards live in benchguard_test.go and

@@ -116,7 +116,9 @@ steps:
   # ci/skip-allowlist.txt: a green run cannot be a run of silently skipped tests.
   - name: test
     image: golang:1.27.4-alpine
-    depends_on: [wait-postgres]
+    # Runs alone on the agent: -p 3 is verified for that condition, and failures are
+    # never rerun, so lint, vet, build and the Dockerfile check finish first.
+    depends_on: [wait-postgres, fmt, lint, vet, build, dockerfile-lint]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -135,7 +137,7 @@ steps:
   # and the real binary's responses against it); named separately for visibility.
   - name: openapi
     image: golang:1.27.4-alpine
-    depends_on: [wait-postgres]
+    depends_on: [test]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -150,7 +152,7 @@ steps:
   # ignore go.mod's toolchain line: the floor is enforced explicitly.
   - name: release-dry-run
     image: goreleaser/goreleaser:v2.20.1
-    depends_on: [merge-target]
+    depends_on: [test]
     environment:
       GOTOOLCHAIN: go1.27.4+auto
     commands:
@@ -167,7 +169,7 @@ steps:
   # The workflow files' own security invariants and the CI tools' tests.
   - name: workflow-invariants
     image: golang:1.27.4-alpine
-    depends_on: [merge-target]
+    depends_on: [test]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false

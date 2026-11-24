@@ -3,9 +3,11 @@ version: 2
 
 project_name: magnetico-web
 
-# The executable is built once (`goreleaser release --clean --skip=publish`),
-# qualified from dist/, and uploaded unchanged by `goreleaser publish`; see
-# .woodpecker/release.yaml. Native artifacts go to Forgejo releases only.
+# Native artifacts go to Forgejo releases only. The release gate builds them with
+# `goreleaser release --clean --skip=publish` and qualifies them; `release-forgejo`
+# rebuilds and uploads (GoReleaser OSS has no `publish` command). The build is
+# reproducible, and verify-native requires the published checksums.txt to equal the
+# qualified one; see .woodpecker/release.yaml.
 builds:
   - id: magnetico
     main: ./cmd/magnetico
