@@ -1,4 +1,4 @@
-package main
+package app
 
 // W9 security regression: credential separation, account-state lifecycle and
 // session expiry, against the in-process production wiring (see

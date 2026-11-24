@@ -1,4 +1,4 @@
-package main
+package app
 
 // 04D fault-injection fixture suite: deterministic, observation-gated
 // interruption and recovery scenarios driven against the real binary

@@ -1,4 +1,4 @@
-package main
+package app
 
 // W9 security regression: SMTP failures. Mail is delivered over strictly
 // verified TLS or not at all; a failing mail server never changes what a client

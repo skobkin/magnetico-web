@@ -1,4 +1,4 @@
-package main
+package app
 
 // Regression tests for the W9 load client itself (not gated: they need no
 // database and no binary). The load numbers are only as honest as the client's

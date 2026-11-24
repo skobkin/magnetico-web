@@ -6,7 +6,7 @@ This guide is the operator's step-by-step procedure. It describes what the **imp
 
 **Honest limits of this guide.** The commands below were developed and tested on disposable PostgreSQL databases with synthetic data, and the torrent migrator was additionally exercised on a 3.46-million-torrent real sample in a lab. **Nothing has been run against your production databases**, no 0.8.0 release or release image exists yet, and the user migration has never seen real legacy accounts. Rehearse first. Where this guide cannot know something about your installation it says so.
 
-Conventions: `UPPER_CASE` words are placeholders you replace. Examples never contain real credentials; connection strings are passed through **environment variables**, not command-line arguments, so they never appear in process listings. The binary is written `magnetico` (use the 0.8.0 release binary, or build the release tag with `go build -o magnetico .`).
+Conventions: `UPPER_CASE` words are placeholders you replace. Examples never contain real credentials; connection strings are passed through **environment variables**, not command-line arguments, so they never appear in process listings. The binary is written `magnetico` (use the 0.8.0 release binary, or build the release tag with `go build -o magnetico ./cmd/magnetico`).
 
 Marks: **[R]** reversible (you can undo it and the legacy system is untouched) · **[I]** irreversible or hard to undo · **[X]** point of no return for the *new* system's data (§2).
 

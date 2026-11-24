@@ -1,4 +1,4 @@
-package main
+package app
 
 // W9 load steps and soak (task 07J, stage S6). Gated like the other heavy
 // harnesses: nothing here runs in the ordinary suite.
@@ -1162,7 +1162,7 @@ func newW9Env(t *testing.T) *w9Env {
 		args = append(args, "-tags", tags)
 	}
 	bin := filepath.Join(t.TempDir(), "magnetico")
-	if b, err := exec.Command("go", append(args, "-o", bin, ".")...).CombinedOutput(); err != nil {
+	if b, err := exec.Command("go", append(args, "-o", bin, "../../cmd/magnetico")...).CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, b)
 	}
 	e := &w9Env{t: t, bin: bin, dsn: dsn, outDir: out, label: envOr("MAGNETICO_W9_LABEL", "w9"),

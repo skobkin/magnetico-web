@@ -1,6 +1,6 @@
 //go:build w9diag
 
-package main
+package app
 
 // Test-only diagnostic build (task 07J): `go build -tags w9diag`. It serves
 // non-destructive runtime statistics (goroutine counts grouped by creation

@@ -20,7 +20,7 @@ The dataset is pinned by tests (a SHA-256 over every field of every torrent and 
 
 ## Quick start (disposable PostgreSQL in Docker)
 
-Requirements: the `magnetico` binary (`go build -o magnetico .`) and a disposable PostgreSQL 17 server. The password and port below are examples for a throwaway container bound to loopback only.
+Requirements: the `magnetico` binary (`go build -o magnetico ./cmd/magnetico`) and a disposable PostgreSQL 17 server. The password and port below are examples for a throwaway container bound to loopback only.
 
 ```bash
 # 1. A disposable PostgreSQL (removed when stopped)

@@ -11,11 +11,13 @@ cover.out
 coverage.out
 go.work
 go.work.sum
-magnetico
+/magnetico
+/magnetico-diag
 vendor/
 
-# Root-level `go build` output of the single binary (`go build` in the repository
-# root writes ./magnetico-web; the ELF was once committed by mistake).
+# Root-level `go build -o magnetico ./cmd/magnetico` output of the single binary
+# (anchored: cmd/magnetico is the source directory; an ELF named magnetico-web was
+# once committed by mistake).
 /magnetico-web
 
 

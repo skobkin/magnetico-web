@@ -1,6 +1,6 @@
 //go:build w9diag
 
-package main
+package app
 
 import (
 	"fmt"

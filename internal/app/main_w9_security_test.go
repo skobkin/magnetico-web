@@ -1,4 +1,4 @@
-package main
+package app
 
 // W9 security regression (task 07J, stage S4). The web service runs in-process
 // with the exact production wiring (assembleWeb), so every sweep walks the

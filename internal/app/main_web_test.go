@@ -1,4 +1,4 @@
-package main
+package app
 
 // Real-binary tests of `magnetico web` and `magnetico migrate web-schema-init`. They use only
 // disposable PostgreSQL databases from the shared harness and bind loopback
@@ -358,7 +358,7 @@ func TestMigrateWebSchemaInitBinary(t *testing.T) {
 // exactly what operators are told to run.
 func docsGrants(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile("docs/web-deployment.md")
+	raw, err := os.ReadFile("../../docs/web-deployment.md")
 	if err != nil {
 		t.Fatal(err)
 	}

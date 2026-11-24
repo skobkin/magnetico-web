@@ -1,4 +1,4 @@
-package main
+package app
 
 // Real-binary tests of the W3 authentication layer: login, logout, sessions,
 // CSRF, rehash, rate limiting and cookie attributes against `magnetico web`.
@@ -228,7 +228,7 @@ func sqlExec(t *testing.T, dsn, q string, args ...any) {
 
 func phpFixture(t *testing.T, id string) (hash, pw string) {
 	t.Helper()
-	raw, err := os.ReadFile("internal/web/password/testdata/php/fixtures.json")
+	raw, err := os.ReadFile("../../internal/web/password/testdata/php/fixtures.json")
 	if err != nil {
 		t.Fatal(err)
 	}

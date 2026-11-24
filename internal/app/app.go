@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -54,7 +54,7 @@ import (
 	"github.com/skobkin/magnetico-web/stats"
 )
 
-func main() {
+func Main() {
 	// opFlags is the "operational flags"
 	opFlags := opflags.OpFlags{}
 	command, err := opFlags.Parse()

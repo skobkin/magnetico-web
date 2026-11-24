@@ -1,4 +1,4 @@
-package main
+package app
 
 // Suite ⑧ end-to-end binary smoke: a disposable v0.12.0 source and a fresh
 // 0.8.0 target, `magnetico migrate torrents` interrupted with SIGTERM
@@ -77,7 +77,7 @@ func execSmokeSQL(t *testing.T, dsn, sql string) {
 func buildBinary(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "magnetico")
-	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd := exec.Command("go", "build", "-o", bin, "../../cmd/magnetico")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)

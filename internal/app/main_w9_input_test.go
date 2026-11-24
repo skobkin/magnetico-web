@@ -1,4 +1,4 @@
-package main
+package app
 
 // W9 security regression: malformed, oversized and unsupported input. Whatever
 // a client sends, the service answers with a controlled 4xx (never a 5xx, never
