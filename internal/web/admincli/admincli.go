@@ -86,7 +86,7 @@ func (s StdinPasswords) ReadNewPassword() (string, error) {
 func ReadPasswordLine(r io.Reader) (string, error) {
 	br := bufio.NewReaderSize(io.LimitReader(r, password.MaxLoginLength+3), 8192)
 	line, err := br.ReadString('\n')
-	if err != nil && !(errors.Is(err, io.EOF) && line != "") {
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return "", cmdErr("no password on standard input")
 	}
 	line = strings.TrimSuffix(line, "\n")

@@ -146,7 +146,7 @@ func bcryptCost(s string) (cost int, ok bool) {
 	}
 	for i := 7; i < 60; i++ {
 		c := s[i]
-		if !(c == '.' || c == '/' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9') {
+		if c != '.' && c != '/' && (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') {
 			return 0, false
 		}
 	}

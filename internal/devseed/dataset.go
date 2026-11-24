@@ -192,10 +192,10 @@ func singleFixture(r *rng, i int, ts int64) Fixture {
 	// Sizes are spread over twelve orders of magnitude; the first and last
 	// fixtures pin the extremes (1 byte, ~3 TiB).
 	var size int64
-	switch {
-	case i == 0:
+	switch i {
+	case 0:
 		size = 1
-	case i == SingleFileTorrents-1:
+	case SingleFileTorrents - 1:
 		size = 3 << 40
 	default:
 		exp := r.between(1, 12)
@@ -203,13 +203,13 @@ func singleFixture(r *rng, i int, ts int64) Fixture {
 	}
 
 	path := name + extensions[r.intn(len(extensions))]
-	switch {
-	case i%10 == 3:
+	switch i % 10 {
+	case 3:
 		// Atypical single file: its path is not the torrent name, so the
 		// store keeps a file-list blob for it (no-blob eligibility needs
 		// path == name).
 		path = "Samples/readme-" + fmt.Sprintf("%03d", i) + ".txt"
-	case i%10 == 7:
+	case 7:
 		path = name // the intentional no-blob shape
 	}
 	return finish(key, KindSingle, name, ts, []persistence.File{{Path: path, Size: size}})
