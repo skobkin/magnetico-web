@@ -156,12 +156,17 @@ type EmailVerifyResult struct {
 	// PreviousEmail is the verified address that was replaced, or "" if there
 	// was none (or it is the same address).
 	PreviousEmail string
+	// RecoveryLinksCancelled counts the outstanding setup/reset links removed
+	// because a verified address was replaced (see CompleteEmailVerify).
+	RecoveryLinksCancelled int64
 }
 
 // CompleteEmailVerify confirms the address held by the link: in one
 // transaction it locks the user, consumes the link by deleting it (expiry on
-// the current database clock) and sets email and email_verified_at. It never
-// touches the password or active. Unknown, replaced, used, expired and
+// the current database clock) and sets email and email_verified_at. When it
+// replaces a different verified address it also deletes the user's outstanding
+// setup/reset links (the former address must not stay a recovery channel). It
+// never touches the password or active. Unknown, replaced, used, expired and
 // inactive-owner links are all ErrLinkInvalid, and an inactive owner's link is
 // NOT consumed. If another account already holds the address verified, the
 // unique index aborts the transaction: everything rolls back, so the link is
@@ -211,6 +216,15 @@ func (s *Store) CompleteEmailVerify(ctx context.Context, token string) (EmailVer
 		res.UserID, res.Email = userID, target
 		if verified && !strings.EqualFold(current, target) {
 			res.PreviousEmail = current
+			// Replacing a verified address ends the former address as a
+			// recovery channel: a reset link mailed to it must not outlive it.
+			// Password links carry no origin, so an administrator-issued link
+			// is cancelled too (the operator re-issues it).
+			tag, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose IN ('setup','reset')`, userID)
+			if err != nil {
+				return err
+			}
+			res.RecoveryLinksCancelled = tag.RowsAffected()
 		}
 		return nil
 	})
@@ -263,4 +277,77 @@ func (s *Store) IssueRecoveryLink(ctx context.Context, email string) (RecoveryLi
 		return nil
 	})
 	return out, err
+}
+
+// EmailRemoveResult says what RemoveEmail changed.
+type EmailRemoveResult struct {
+	// Email is the address that was removed ("" if the account held none).
+	Email string
+	// WasVerified reports that the removed address was a verified one, so
+	// password recovery through it is gone.
+	WasVerified bool
+	// PendingCancelled reports that an outstanding email_verify link was
+	// deleted.
+	PendingCancelled bool
+	// RecoveryLinksCancelled counts the setup/reset links deleted because the
+	// removed address was verified.
+	RecoveryLinksCancelled int64
+}
+
+// RemoveEmail removes the account's address, verified or not, and cancels the
+// pending verification link, in one transaction that locks the user row first
+// (the lock every email and recovery writer takes, so it is ordered against
+// IssueRecoveryLink, CompleteEmailVerify and IssueEmailVerifyLink).
+//
+// If the removed address was verified, every outstanding setup/reset link of
+// the account is deleted as well: password links carry neither an origin nor
+// an address, so an email-issued link cannot be told from an administrator-
+// issued one, and the former address must not remain an indirect recovery
+// channel. The operator re-issues an administrator link with reset-password.
+// An unverified address was never a recovery channel, so its removal leaves
+// password links alone. Sessions, the password, tokens and invitations are
+// untouched. Nothing to remove is Removed == false (no error); an unknown or
+// inactive account is ErrNotFound.
+func (s *Store) RemoveEmail(ctx context.Context, userID int64) (EmailRemoveResult, error) {
+	var res EmailRemoveResult
+	err := s.inTx(ctx, "remove-email", func(tx pgx.Tx) error {
+		res = EmailRemoveResult{}
+		var active, verified bool
+		var email *string
+		err := tx.QueryRow(ctx, `SELECT active, email, email_verified_at IS NOT NULL
+            FROM magnetico_web.users WHERE id = $1 FOR UPDATE`, userID).Scan(&active, &email, &verified)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !active {
+			return ErrNotFound
+		}
+		tag, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose = 'email_verify'`, userID)
+		if err != nil {
+			return err
+		}
+		res.PendingCancelled = tag.RowsAffected() > 0
+		if email == nil {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `UPDATE magnetico_web.users SET email = NULL, email_verified_at = NULL WHERE id = $1`, userID); err != nil {
+			return err
+		}
+		res.Email, res.WasVerified = *email, verified
+		if verified {
+			tag, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose IN ('setup','reset')`, userID)
+			if err != nil {
+				return err
+			}
+			res.RecoveryLinksCancelled = tag.RowsAffected()
+		}
+		return nil
+	})
+	if err != nil {
+		return EmailRemoveResult{}, err
+	}
+	return res, nil
 }
