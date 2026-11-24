@@ -1,6 +1,125 @@
 # Testing
 
-(The test classification and the exact commands per category are added by the Task 08 documentation commit; this file already carries the mapping needed to reproduce historical reports.)
+How the repository's tests are classified, which command runs each class, and how historical reports map to the
+current names. Commands marked **(run in Task 08)** were executed for `docs/wip/08-ci-oci-report.md`; the others are
+documented, not re-run there (the heavy ones are manual by design).
+
+## Classification
+
+| Class | What | Runs | Gate |
+|---|---|---|---|
+| **Regular CI** | unit tests; PostgreSQL integration tests; real-binary end-to-end tests; short regression, security-regression and fault-injection tests; fuzz **seed corpora** | every pull request, push to `master` / the 0.8.0 branch, tag and manual run (`.woodpecker/ci.yaml`) | blocks merge and release |
+| **Release CI** | everything above, plus the race-enabled suite, the container smoke test, dependency and image vulnerability checks, the native archive smoke test | tags and manual pre-flight runs (`.woodpecker/release.yaml`) | blocks publication |
+| **Explicit manual only** | large synthetic dataset generation; load, capacity and memory-floor benchmarks; long soak and stress tests; extended fuzzing; the diagnostic build; live-DHT acceptance | by an operator, on a disposable database or host | never in CI |
+
+Security regression tests and ordinary PostgreSQL integration tests are **not** opt-in: they are in the regular class. A
+test is opt-in only when it needs something a CI run must not have (a large dataset, hours of runtime, a real DHT) or
+when it mutates a database it did not create.
+
+Heavy code is gated twice: by the build tag `loadtest` (dataset, load, soak, web load; it is not even compiled by a
+plain `go build`/`go test`) **and** by explicit environment authorization for anything that mutates a database
+(`MAGNETICO_BENCH_LARGE=1`, a DSN, and `MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB` holding the database's *name*; the guards
+live untagged in `internal/e2e/cli/benchguard_test.go` and run in regular CI). The diagnostic listener is compiled only
+with the tag `diag`; no release build contains it (`TestDefaultBinaryCarriesNoBuildTagsAndNoDiagnosticSymbols`).
+
+## Regular CI: exact commands
+
+A disposable PostgreSQL 17 server with **trust authentication** is required: the harness derives role DSNs without a
+password, so a password-protected server fails the tests. It creates and drops only `magnetico_test_<random>` databases.
+
+```sh
+# a throwaway server on loopback (docker; the harness can also start one itself when no DSN is set)
+docker run -d --rm --name m-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:55432:5432 postgres:17
+export MAGNETICO_TEST_POSTGRES_DSN='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable'
+export MAGNETICO_TEST_REQUIRE_POSTGRES=1      # an unreachable database fails instead of skipping
+
+# the whole suite, verified configuration -p 3 (see below)            (run in Task 08)
+go test -p 3 -count=1 -json ./... > test.json || go run ./ci/skipcensus --failures < test.json
+go run ./ci/skipcensus --allow ci/skip-allowlist.txt < test.json
+
+golangci-lint fmt --diff ./... && golangci-lint run ./...              (run in Task 08: 0 issues)
+go vet ./... && go vet -tags loadtest,diag ./...                       (run in Task 08)
+```
+
+`ci/skipcensus` fails the run when a test was skipped for a reason that is not on `ci/skip-allowlist.txt` (a missing
+database above all) or when no test ran. The allow-list holds the opt-in harnesses, the bodies of subprocess helper
+tests, fuzz-seed entries a target rejects as invalid input, and two **known coverage gaps of the external-server mode**
+(`TestOpenRefusesFsyncOff`, `TestIdentitySameDatabaseViaSocketAndTCP` need a locally controlled cluster; they run when the
+harness starts docker or `initdb` itself). One more entry, `TestSSLCertFileIsHonoured`, skips when the process had already
+initialised the system roots; it is only effective in isolation.
+
+Narrower runs while developing: `go test ./internal/web/...`, `go test -run TestWebBinary ./internal/e2e/cli`, the
+OpenAPI tests `go test ./internal/web/apidocs/... && go test -run OpenAPI ./internal/e2e/cli`.
+
+**Why `-p 3`.** The suite starts real PostgreSQL clusters and real binaries, and several tests assert on short timing
+windows. At the default package parallelism on a busy host a *different* timing-dependent test failed in each of four
+runs (and passed 20 of 20 in isolation); at `-p 3` the plain and the race suites were green. This is a workaround that
+hides timing sensitivity, **not** a fix: deterministic synchronization is tracked as issue #53 and the `migrate
+verify-decode` cancellation race as issue #52. Do not "fix" such a failure by lengthening a timeout; a failure that
+reproduces in isolation is a real defect.
+
+## Release CI: exact commands
+
+```sh
+go test -race -p 3 -count=1 -json ./... > race.json                    (run in Task 08: 66 packages ok)
+go run ./ci/skipcensus --allow ci/skip-allowlist.txt < race.json
+GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...                          (run in Task 08: none found)
+GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags loadtest,diag ./...      (run in Task 08: none found)
+```
+
+The container smoke test, the image scan, the native archive smoke test and the publication steps are described in
+[`release-engineering.md`](release-engineering.md); their scripts are `ci/image-smoke.sh`, `ci/native-smoke.sh`,
+`ci/promote-image.sh`, `ci/verify-published.sh` and `ci/verify-native.sh`, each tested in `internal/repocheck`.
+
+## Explicit manual execution only
+
+None of these is run by CI. Each needs a disposable target; the load and dataset harnesses additionally refuse any
+database that is not the confirmed, local, benchmark-shaped one.
+
+```sh
+# Large synthetic dataset ("w9-large-v1": the identifier is frozen, see the mapping below)
+MAGNETICO_BENCH_LARGE=1 MAGNETICO_BENCH_DSN=postgres://…/bench MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB=bench \
+  MAGNETICO_BENCH_DATADIR=<data dir> \
+  go test -tags loadtest -run TestSeedLargeDataset -count=1 -v -timeout 0 ./internal/e2e/cli
+# (MAGNETICO_BENCH_SCALE=0.01 for a pilot; a database seeded before the marker existed is marked once with
+#  MAGNETICO_BENCH_MARK=1 … -run TestMarkBenchmarkDatabase)
+
+# Load, capacity, memory-floor, knee and regression profiles, and the soak
+MAGNETICO_BENCH_LARGE=1 MAGNETICO_BENCH_DSN=… MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB=bench \
+  MAGNETICO_BENCH_OUT=<dir> MAGNETICO_BENCH_LABEL=<name> MAGNETICO_BENCH_PROFILE=steps \
+  go test -tags loadtest -run 'TestLoad$' -count=1 -v -timeout 4h ./internal/e2e/cli
+# profiles: steps, soak, memfloor, knee, regress, diag (see docs/wip/07J-measurements/README.md; translate with the
+# mapping below)
+
+# The earlier web load campaign
+MAGNETICO_BENCH_LARGE=1 MAGNETICO_LOAD_DSN=… go test -tags loadtest -run 'TestWebLoad$' -count=1 -v -timeout 4h ./internal/e2e/cli
+
+# Other opt-in measurements: each skips with a message naming the variable it needs
+#   TestMeasure (MAGNETICO_CRAWLQUEUE_MEASURE_DIR), TestE2E* (MAGNETICO_E2E_*_DIR), TestMeasureSearchPlans (MAGNETICO_MEASURE=1),
+#   TestColdBuildReport/TestMeasureTreeSize/… (MAGNETICO_BENCH_LARGE=1), TestWebDemoServer (MAGNETICO_DEMO_DIR)
+
+# Extended fuzzing (seed corpora already run in regular CI); one target per invocation:
+go test -fuzz=FuzzDecode      -fuzztime=10m ./codec
+go test -fuzz=FuzzDecode      -fuzztime=10m ./internal/ingest/record
+go test -fuzz=FuzzDecodeCursor -fuzztime=10m ./internal/web/search
+go test -fuzz='FuzzStr$'      -fuzztime=10m ./internal/web/fileview
+go test -fuzz=FuzzParsePath   -fuzztime=10m ./internal/web/fileview
+go test -fuzz=FuzzDisplayLossless -fuzztime=10m ./internal/web/pathfmt
+go test -fuzz='^Fuzz$'        -fuzztime=10m ./bencode
+go test -fuzz=FuzzInterfaceRoundTrip -fuzztime=10m ./bencode
+go test -fuzz=FuzzCheckDepth  -fuzztime=10m ./bencode
+go test -fuzz='^Fuzz$'        -fuzztime=10m ./metainfo
+
+# Diagnostic build (never shipped): serves goroutine/heap/pool statistics as JSON on a loopback address
+go build -tags diag -o magnetico-diag ./cmd/magnetico
+MAGNETICO_DIAG_ADDR=127.0.0.1:6060 ./magnetico-diag web …
+```
+
+**Live-DHT acceptance** (crawler → ingest → PostgreSQL → web with CI-built images on a separate DHT-capable host, never
+from a development VM) is a manual checklist item of `docs/wip/rc0-acceptance-checklist.md`, not a command.
+
+The behaviour "heavy tests skip with a message naming the missing authorization when run without it" was checked in
+Task 08 (`go test -tags loadtest -run 'TestLoad$|TestSeedLargeDataset|TestWebLoad$'`).
 
 ## Reproducing historical reports
 
