@@ -985,3 +985,85 @@ func TestCleanupRefusesDropAfterSilentBackendKill(t *testing.T) {
 		t.Fatalf("registry tables damaged after the silent-kill refusal: %v", err)
 	}
 }
+
+// TestCleanupRefusedAfterANewTorrentIsStored pins the policy that cleanup is
+// an offline migration-completion step: once ingestion has stored a torrent
+// next to the migrated ones, the target no longer reconciles with the recorded
+// import counters (G5), and neither a plain run nor --force-unverified can
+// drop magnetico_migration. The migration schema and the new torrent survive.
+func TestCleanupRefusedAfterANewTorrentIsStored(t *testing.T) {
+	t.Parallel()
+	pool, dsn, runID := seedCleanupTarget(t)
+	defer pool.Close()
+	seedGreenVerification(t, pool, runID)
+	manifest := exportEvidence(t, dsn)
+
+	// Control: with the same inputs the cleanup would be accepted (dry run).
+	dry := cleanupInput(dsn, manifest, func(o *CleanupOptions) { o.Execute = false })
+	if res, err := Cleanup(context.Background(), dry); err != nil || res.Dropped || len(res.Blockers) != 0 {
+		t.Fatalf("control dry run: res=%+v err=%v", res, err)
+	}
+
+	// The fixtures were inserted with explicit ids; a real migration leaves
+	// the identity past them (the test inserts bypass that).
+	if _, err := pool.Exec(context.Background(),
+		`SELECT setval(pg_get_serial_sequence('magneticod.torrents','id'), 5)`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ingestion stores a new torrent through the production store.
+	store, err := persistence.MakeDatabase(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	created, _, err := store.AddTorrent(context.Background(), persistence.Torrent{
+		InfoHash: []byte("post-migration-ingest"[:20]), Name: "ingested after migration",
+		TotalSize: 7, DiscoveredOn: 1700000001, FileCount: 1,
+	}, []persistence.File{{Path: "ingested after migration", Size: 7}})
+	if err != nil || !created {
+		t.Fatalf("AddTorrent: created=%v err=%v", created, err)
+	}
+
+	for name, mutate := range map[string]func(*CleanupOptions){
+		"plain": nil,
+		"force-unverified": func(o *CleanupOptions) {
+			o.ForceUnverified = true
+			o.Reason = "operator insists; torrents were ingested after the migration"
+		},
+	} {
+		for _, execute := range []bool{false, true} {
+			if mutate != nil && !execute {
+				continue // --force-unverified is only valid with --execute
+			}
+			res, err := Cleanup(context.Background(), cleanupInput(dsn, manifest, func(o *CleanupOptions) {
+				if mutate != nil {
+					mutate(o)
+				}
+				o.Execute = execute
+			}))
+			if res != nil && res.Dropped {
+				t.Fatalf("%s execute=%v: cleanup dropped the schema", name, execute)
+			}
+			if !execute {
+				if res == nil {
+					t.Fatalf("%s preview: no result (err %v)", name, err)
+				}
+				// The preview does not fail; it reports the blocker.
+				if err != nil || len(res.Blockers) != 1 || !strings.HasPrefix(res.Blockers[0], "G5 reconcile") {
+					t.Fatalf("%s preview: err=%v blockers=%v, want exactly G5", name, err, res.Blockers)
+				}
+				continue
+			}
+			if !errors.Is(err, ErrCleanupRefused) || !strings.Contains(err.Error(), "G5") {
+				t.Fatalf("%s execute: err=%v, want a G5 refusal", name, err)
+			}
+		}
+	}
+
+	assertSchemaIntact(t, pool)
+	var n int
+	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM magneticod.torrents`).Scan(&n); err != nil || n != 3 {
+		t.Fatalf("torrents = %d (err %v), want the 2 migrated + 1 ingested", n, err)
+	}
+}

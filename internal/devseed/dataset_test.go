@@ -333,3 +333,22 @@ func TestInfoHashDependsOnVersionedKey(t *testing.T) {
 		t.Fatal("infohash is not 20 bytes")
 	}
 }
+
+func TestSameFilesPreservesMultiplicity(t *testing.T) {
+	a := []persistence.File{{Path: "a", Size: 1}, {Path: "a", Size: 1}, {Path: "b", Size: 2}}
+	cases := []struct {
+		name string
+		b    []persistence.File
+		want bool
+	}{
+		{"reordered", []persistence.File{{Path: "b", Size: 2}, {Path: "a", Size: 1}, {Path: "a", Size: 1}}, true},
+		{"multiplicity moved", []persistence.File{{Path: "a", Size: 1}, {Path: "b", Size: 2}, {Path: "b", Size: 2}}, false},
+		{"size differs", []persistence.File{{Path: "a", Size: 1}, {Path: "a", Size: 2}, {Path: "b", Size: 2}}, false},
+		{"shorter", a[:2], false},
+	}
+	for _, c := range cases {
+		if got := sameFiles(a, c.b); got != c.want {
+			t.Errorf("%s: sameFiles = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

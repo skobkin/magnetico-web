@@ -391,3 +391,111 @@ func TestSeedErrorsCarryNoDatabaseURL(t *testing.T) {
 		}
 	}
 }
+
+// swapBlob replaces the stored file-list blob of fixture f in dsn with one
+// encoded (by the production store) from files, leaving the summary row
+// untouched. files must keep the same count and total size so the row still
+// decodes cleanly: the only difference left is the content.
+func swapBlob(t *testing.T, dsn string, f Fixture, files []persistence.File) {
+	t.Helper()
+	other := initialized(t)
+	store, err := persistence.MakeDatabase(tctx(t), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, _, err := store.AddTorrent(tctx(t), f.Torrent, files); err != nil {
+		t.Fatalf("encoding the altered file list: %v", err)
+	}
+	var blob []byte
+	if err := conn(t, other).QueryRow(tctx(t), `SELECT b.data FROM magneticod.torrent_file_blobs b
+		JOIN magneticod.torrents t ON t.id = b.torrent_id WHERE t.info_hash = $1`, f.Torrent.InfoHash).Scan(&blob); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, dsn, `UPDATE magneticod.torrent_file_blobs SET data = $2
+		WHERE torrent_id = (SELECT id FROM magneticod.torrents WHERE info_hash = $1)`, f.Torrent.InfoHash, blob)
+}
+
+// swapFixture returns a multi-file fixture with at least two files whose
+// sizes allow moving one byte between them.
+func swapFixture(t *testing.T) Fixture {
+	t.Helper()
+	for _, f := range Dataset() {
+		if f.Kind == KindMulti && len(f.Files) >= 3 && f.Files[1].Size > 0 {
+			return f
+		}
+	}
+	t.Fatal("no suitable multi-file fixture")
+	return Fixture{}
+}
+
+func TestSeedRefusesStoredFileListsThatDifferFromTheFixture(t *testing.T) {
+	f := swapFixture(t)
+	variants := map[string]func([]persistence.File){
+		"different path":                  func(fs []persistence.File) { fs[0].Path += "-changed" },
+		"different sizes, same total":     func(fs []persistence.File) { fs[0].Size++; fs[1].Size-- },
+		"a duplicate replaced by another": func(fs []persistence.File) { fs[2] = fs[1] },
+	}
+	for name, mutate := range variants {
+		for _, dry := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry=%v", name, dry), func(t *testing.T) {
+				dsn := initialized(t)
+				if _, err := Seed(tctx(t), dsn, false); err != nil {
+					t.Fatal(err)
+				}
+				files := append([]persistence.File(nil), f.Files...)
+				mutate(files)
+				if name == "a duplicate replaced by another" {
+					// keep the total size: give file 2's size to file 1's twin
+					var total int64
+					for _, x := range files {
+						total += x.Size
+					}
+					if total != f.Torrent.TotalSize {
+						files[0].Size += f.Torrent.TotalSize - total
+						if files[0].Size < 0 {
+							t.Skip("cannot keep the total size")
+						}
+					}
+				}
+				swapBlob(t, dsn, f, files)
+				before := snapshot(t, dsn)
+				if _, err := Seed(tctx(t), dsn, dry); !errors.Is(err, ErrFixtureConflict) {
+					t.Fatalf("err = %v, want ErrFixtureConflict", err)
+				}
+				if snapshot(t, dsn) != before {
+					t.Fatal("a refused run changed the database")
+				}
+			})
+		}
+	}
+}
+
+func TestSeedFailsOnCorruptOrMissingFileListPayloads(t *testing.T) {
+	f := swapFixture(t)
+	cases := map[string]string{
+		"corrupt": `UPDATE magneticod.torrent_file_blobs SET data = '\x0102030405'
+			WHERE torrent_id = (SELECT id FROM magneticod.torrents WHERE info_hash = $1)`,
+		"missing": `DELETE FROM magneticod.torrent_file_blobs
+			WHERE torrent_id = (SELECT id FROM magneticod.torrents WHERE info_hash = $1)`,
+	}
+	for name, stmt := range cases {
+		for _, dry := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/dry=%v", name, dry), func(t *testing.T) {
+				dsn := initialized(t)
+				if _, err := Seed(tctx(t), dsn, false); err != nil {
+					t.Fatal(err)
+				}
+				exec(t, dsn, stmt, f.Torrent.InfoHash)
+				before := snapshot(t, dsn)
+				res, err := Seed(tctx(t), dsn, dry)
+				if err == nil {
+					t.Fatalf("seeding succeeded over a %s payload: %+v", name, res)
+				}
+				if snapshot(t, dsn) != before {
+					t.Fatal("a refused run changed the database")
+				}
+			})
+		}
+	}
+}

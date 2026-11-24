@@ -67,7 +67,7 @@ data only and is not claimed to suffice for every workload. The crawler needs no
 **Deployment order** (new databases or after the migration):
 
 1. `magnetico migrate schema-init`
-2. `magnetico migrate torrents` (legacy import), verification, optional `cleanup`
+2. `magnetico migrate torrents` (legacy import), verification, optional `cleanup` (offline only, before any ingest; by default the migration schema is kept)
 3. `magnetico migrate ingest-schema-init` (creates the `magnetico_ingest` schema; idempotent)
 4. start `magnetico ingest`, then the crawlers
 

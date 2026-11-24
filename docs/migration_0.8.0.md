@@ -49,7 +49,7 @@ Marks: **[R]** reversible (you can undo it and the legacy system is untouched) �
 | **C. Torrent migration** (§6) | `migrate torrents`, verification, repair | **[R]** The legacy source is read-only; the target can be dropped and recreated. Only `migrate cleanup --execute` (§8.3) is **[I]**, and it is optional |
 | **D. User migration** (§7) | `migrate users` in one transaction, `verify`, promote the first admin | **[R]** the legacy database is read-only; the target can be reset with the guarded `--replace-users`, or the database dropped. Administrator-issued password resets are **[I]** (they permanently revoke that user's tokens) |
 | **E. Start the new system** (§8.1–8.2) | ingest schema, start `web`, smoke test | **[R]** while nobody but you uses it |
-| **F. Cutover** (§8.3–8.4) | Optional cleanup, start ingest, switch routing, start the new crawler, tell users | **[X]** Once users sign in and the new crawler stores torrents, those changes exist **only** in the new databases. Going back is possible (§11) but loses them |
+| **F. Cutover** (§8.3–8.4) | Optional cleanup (default: keep the migration schema), start ingest, switch routing, start the new crawler, tell users | **[X]** Once users sign in and the new crawler stores torrents, those changes exist **only** in the new databases. Going back is possible (§11) but loses them |
 
 There is **no incremental or reverse migration**: torrent import needs an empty target, and nothing copies new data back to the legacy databases.
 
@@ -84,7 +84,7 @@ There is **no incremental or reverse migration**: torrent import needs an empty 
 | 5 | **Who becomes administrator** | Everyone is imported as `user`; promote yours with `web user set-role` after the import |
 | 6 | **SMTP** | Optional. Without it, email recovery is off and an administrator issues reset links. Migrated emails are unverified until their owners verify them |
 | 7 | **Public URL and reverse proxy** | `MAGNETICO_WEB_PUBLIC_URL`, trusted proxies, timeouts, query-string masking for RSS URLs ([`docs/web-deployment.md`](web-deployment.md) §§1–3, 9) |
-| 8 | **Whether and when to run `migrate cleanup`** | §8.3: it is only possible **before** the new system stores its first torrent, so decide before starting ingest |
+| 8 | **Whether to run `migrate cleanup`** | §8.3: the default is to **keep** `magnetico_migration` in production. Cleanup is optional, belongs to the offline migration-completion phase and is only possible before the new system stores its first torrent |
 | 9 | **User communication** | §8.5 |
 
 ---
@@ -202,7 +202,7 @@ magnetico migrate torrents retry-errors        # re-process only the unresolved 
 
 `retry-errors` exits `0` when none remain unresolved, `3` when some remain, `2` interrupted. It refuses a source that differs from the one imported unless you pass `--accept-source-repairs` (an assertion by you that the source is the same database after a deliberate repair of the legacy data; it is recorded as provenance and forces a fresh `verify-content`). A record that stays invalid stays an error: decide, with the exported evidence, whether the loss is acceptable. Re-run `verify-content` after any retry.
 
-Keep the migration state for now: whether to run `migrate cleanup` is decided in §8.3, before ingest starts.
+Keep the migration state for now: §8.3 explains why keeping it is the default and when the optional `migrate cleanup` is possible.
 
 ## 7. Phase D — Migrate the users [R]
 
@@ -264,9 +264,11 @@ Start `magnetico web` ([`docs/web-deployment.md`](web-deployment.md) §1: at lea
 4. `/magnet/{infohash}` redirects.
 5. The account page lists the migrated invitations and shows the legacy tokens masked.
 
-### 8.3 Optional: clean up the migration state, then start ingest [I]
+### 8.3 Migration state: keep it by default; cleanup is optional and offline [I]
 
-`migrate torrents` leaves a temporary operational schema `magnetico_migration` (progress counters, the error registry, verification verdicts). It is harmless, it is forensic evidence, and **it is optional to remove**: ingest only reads its phase, and leaving it in place is supported. `migrate cleanup` is the tool to drop it, and it has one hard precondition you must plan for: **the target must still contain exactly the migrated data.** Its reconcile gate (G5) compares the target's torrent and blob counts with the recorded import counters, and it is never waivable (not even by `--force-unverified`). The moment ingest stores a single new torrent next to the migrated ones, cleanup refuses for good. If you want the schema removed with the tool, do it **now**, after §6 verification and §8.2 smoke tests, and before ingest starts:
+`migrate torrents` leaves an operational schema `magnetico_migration` (progress counters, the error registry, verification verdicts). **The default, and the recommended production policy, is to keep it**, including after ingest starts: it is harmless to the services (ingest only reads its phase), it is forensic evidence, and keeping it costs nothing. Whatever you decide, **preserve the exported migration evidence and the verification reports** next to the backups (§12).
+
+`migrate cleanup` is **optional** and is meant for the **offline migration-completion phase**: after the §6 verification and the §8.2 smoke tests, **before** the new system ingests its first torrent. It has one hard precondition: **the target must still contain exactly the migrated data.** Its reconcile gate (G5) compares the target's torrent and blob counts with the recorded import counters, and it is never waivable, not even by `--force-unverified`. The moment ingest stores a single new torrent next to the migrated ones, cleanup refuses for good (a regression test pins this). There is no post-cutover cleanup. If you do want the schema removed with the tool, do it now:
 
 ```bash
 magnetico migrate errors export --output /secure/dir/final-export.jsonl --manifest   # complete export + SHA-256 manifest = the evidence cleanup validates
@@ -274,9 +276,9 @@ magnetico migrate cleanup                    # default: a non-destructive gate-b
 magnetico migrate cleanup --execute --confirm-backup --confirm-export --evidence-manifest /secure/dir/final-export.jsonl.manifest.json
 ```
 
-`--execute` drops `magnetico_migration` in one transaction after every gate passes and **destroys the migration history irrecoverably** (the permanent `schema_version` and all torrent and user data stay). It requires an independent backup of the new database (`--confirm-backup`, your attestation) and the complete export with its manifest. Stale or failed verification verdicts and unresolved findings are ordinary gate failures that `--force-unverified --reason "TEXT"` can waive (the reason is recorded); corrupt state, reconciliation failures and missing attestations are never waivable. Otherwise skip cleanup: keep the exported evidence next to the backups (§12) and leave the schema in place.
+`--execute` drops `magnetico_migration` in one transaction after every gate passes and **destroys the migration history irrecoverably** (the permanent `schema_version` and all torrent and user data stay). It requires an independent backup of the new database (`--confirm-backup`, your attestation) and the complete export with its manifest. Stale or failed verification verdicts and unresolved findings are ordinary gate failures that `--force-unverified --reason "TEXT"` can waive (the reason is recorded); corrupt state, reconciliation failures and missing attestations are never waivable. Otherwise skip cleanup, which is the default: keep the exported evidence next to the backups (§12) and leave the schema in place.
 
-**Then, and only then, start `magnetico ingest`** next to PostgreSQL behind Traefik with its shared secret as described in [`docs/crawler.md`](crawler.md) §§2–4 (ingest refuses to start while an import is running or incomplete). Still, nothing has been stored yet: ingest has no records until a crawler delivers some.
+**Then start `magnetico ingest`** (after cleanup if you ran it, otherwise right away) next to PostgreSQL behind Traefik with its shared secret as described in [`docs/crawler.md`](crawler.md) §§2–4 (ingest refuses to start while an import is running or incomplete). Still, nothing has been stored yet: ingest has no records until a crawler delivers some.
 
 ### 8.4 Cutover [X]
 
@@ -311,7 +313,7 @@ In this order, with a person ready to roll back (§11) until each step is checke
 
 ## 10. The migration state after cutover
 
-If you did not run `migrate cleanup` before ingest started (§8.3), `magnetico_migration` stays in the database. That is supported and harmless to the services. Because the target now holds torrents the migration did not write, `migrate cleanup` will refuse (its reconcile gate cannot pass and cannot be waived), and re-running `migrate torrents` or the verifications against that database is no longer meaningful: `verify-content` reports torrents that are not in the legacy source as extra target rows. Keep the exported evidence and the verification output from before cutover as the record. If you later want the schema gone anyway, that is a manual `DROP SCHEMA magnetico_migration CASCADE` by the database owner after a verified backup; the tool does not cover that case and this guide has not tested it.
+By default `magnetico_migration` stays in the database (§8.3), also while ingest runs. That is supported and harmless to the services. Once ingest has stored a torrent the migration did not write, `migrate cleanup` refuses (its reconcile gate cannot pass and cannot be waived), and re-running `migrate torrents` or the verifications against that database is no longer meaningful: `verify-content` reports torrents that are not in the legacy source as extra target rows. Keep the schema, the exported evidence and the verification output from before cutover as the record. There is no supported way to remove the schema after ingest has started; do not drop it by hand.
 
 ## 11. Rollback options and limitations
 

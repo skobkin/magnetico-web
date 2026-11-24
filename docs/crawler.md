@@ -38,7 +38,7 @@ All of this happens on the main server, with a database you have already initial
    magnetico migrate ingest-schema-init
    ```
 
-   If the database is the result of a legacy migration, finish the torrent verification and decide about `magnetico migrate cleanup` **before** ingest stores its first torrent: afterwards the tool can no longer remove the migration state (see [`docs/migration_0.8.0.md`](migration_0.8.0.md) §8.3).
+   If the database is the result of a legacy migration, `magnetico_migration` stays in place by default and ingest works with it. The optional `magnetico migrate cleanup` is an offline migration-completion step that is only possible **before** ingest stores its first torrent (see [`docs/migration_0.8.0.md`](migration_0.8.0.md) §8.3); afterwards keep the schema.
 
 2. **PostgreSQL must run with `fsync = on`**; ingest refuses to start otherwise (`MAGNETICO_INGEST_ALLOW_NON_DURABLE_DB=true` exists for development only).
 3. **Run ingest** (`magnetico ingest`). Its settings are environment variables (no config-file layer; flags `--listen`, `--database`, … also exist, see `magnetico ingest --help`):
@@ -195,7 +195,9 @@ Keep `crawler.env` out of version control (it contains only `MAGNETICO_CRAWL_ING
 
 **Order:** (1) PostgreSQL and the schemas (§2), (2) ingest and Traefik, (3) check the path from the crawler machine, (4) start the crawler.
 
-**Check the path before starting the crawler.** From the crawler machine, with the real token in `$TOKEN` (an empty hash list is a valid request):
+**Check the path before starting the crawler.** Run both requests from the crawler machine, with the real token in `$TOKEN`. There is no health endpoint on ingest, and this guide does not add one.
+
+*1. Connectivity and authentication.* An empty hash list is a valid request. It never reaches PostgreSQL, so it proves only DNS, TLS, Traefik, the token and that the ingest process answers:
 
 ```bash
 curl -sS -i -X POST https://ingest.example.org/api/ingest/v1/torrents/exists \
@@ -203,7 +205,26 @@ curl -sS -i -X POST https://ingest.example.org/api/ingest/v1/torrents/exists \
   -d '{"info_hashes":[]}'
 ```
 
-`200` with `{"exists":[],"missing":[],"unknown":[]}` means DNS, TLS, Traefik, the token and ingest's database all work. `401` is a token mismatch, `405` means the request was not a `POST`, a TLS error means certificate or name trouble, `502/503/504` come from Traefik (ingest is down or unreachable) or are ingest's own `503` (`queue_full`, `storage_unavailable`, `busy`).
+`200` with `{"exists":[],"missing":[],"unknown":[]}` is the expected answer. `401` is a token mismatch, `405` means the request was not a `POST`, a TLS error means certificate or name trouble, `502/503/504` come from Traefik (ingest is down or unreachable) or are ingest's own `503` (`queue_full`, `storage_unavailable`, `busy`).
+
+*2. A real lookup, which exercises PostgreSQL.* Ask about at least one infohash (40 hex characters). Use a **random** one that nothing has stored, so the answer cannot come from the cache:
+
+```bash
+HASH=$(openssl rand -hex 20)
+curl -sS -i -X POST https://ingest.example.org/api/ingest/v1/torrents/exists \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "{\"info_hashes\":[\"$HASH\"]}"
+```
+
+Expected: `200` with `{"exists":[],"missing":["<that hash>"],"unknown":[]}`. `missing` is a confirmed answer from a successful database lookup: the hash is not in `magneticod.torrents`. Records that are only waiting in the ingest queue are deliberately not consulted, so `missing` does not mean "not received yet".
+
+How to read the three lists:
+
+- `exists`: confirmed stored in PostgreSQL.
+- `missing`: confirmed absent.
+- `unknown`: the lookup failed or was abandoned (database error, timeout, shutdown). An error is never reported as `missing`. The crawler treats `unknown` as "not known to be stored" and sends the record anyway, which is safe because delivery is idempotent. If **every** hash of a request is `unknown`, ingest answers `503 storage_unavailable` instead of `200`, so a `200` with some `unknown` entries means only part of the batch could be answered.
+
+**Cached answers are a limit of this check.** Ingest keeps a process-local existence cache. A positive entry (`exists`) never expires until it is evicted or ingest restarts, and a negative entry (`missing`) lasts about 20 seconds. A hash answered from the cache did not touch PostgreSQL, so asking twice about the same hash, or about a torrent that is already stored, says nothing about the database being reachable right now. Use a fresh random hash for each check (as above) and read the first answer; a repeated `missing` within 20 seconds is not new evidence. A `200` here also does not prove that the consumer writes to PostgreSQL or that the queue drains: for that, watch the ingest summary lines and the counters below after the crawler has started.
 
 **Start:** `docker compose -f docker-compose.crawler.yml up -d`. There is no health endpoint on the crawler either; use the logs.
 

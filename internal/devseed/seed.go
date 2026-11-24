@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 
@@ -62,7 +63,9 @@ type Result struct {
 //     torrent (anything beyond the fixture infohashes) refuses the run with
 //     ErrForeignTorrents before a single row is written.
 //   - Fixture torrents that already exist must match the dataset exactly
-//     (name, size, discovery time, file count), otherwise ErrFixtureConflict.
+//     (name, size, discovery time, file count and the complete (path, size)
+//     multiset of the file list), otherwise ErrFixtureConflict; an unreadable
+//     or corrupt file list fails the run.
 //   - Re-running is therefore safe and defined: on a completed dataset it is
 //     a no-op reporting StateSeeded; after an interruption it adds only the
 //     missing torrents (AddTorrent is idempotent per infohash).
@@ -123,6 +126,16 @@ func seed(ctx context.Context, rawURL string, data []Fixture, dryRun bool) (Resu
 			got.DiscoveredOn != f.Torrent.DiscoveredOn || got.FileCount != int32(len(f.Files)) {
 			return Result{}, ErrFixtureConflict
 		}
+		// The summary matches; the stored file list must match too: the
+		// complete (path, size) multiset, duplicates included. A corrupt or
+		// missing payload is an error, never a successful seed.
+		files, err := store.GetFiles(ctx, f.Torrent.InfoHash)
+		if err != nil {
+			return Result{}, fmt.Errorf("reading the stored file list of a fixture torrent (%s): %w", f.Key, err)
+		}
+		if !sameFiles(files, f.Files) {
+			return Result{}, ErrFixtureConflict
+		}
 	}
 
 	res.Existing = len(present)
@@ -148,6 +161,38 @@ func seed(ctx context.Context, rawURL string, data []Fixture, dryRun bool) (Resu
 		}
 	}
 	return res, nil
+}
+
+// sameFiles reports whether a and b hold the same (path, size) multiset.
+// Order is irrelevant (the codec may reorder), multiplicity is not.
+func sameFiles(a, b []persistence.File) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	type pair struct {
+		path string
+		size int64
+	}
+	key := func(fs []persistence.File) []pair {
+		out := make([]pair, len(fs))
+		for i, f := range fs {
+			out[i] = pair{f.Path, f.Size}
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].path != out[j].path {
+				return out[i].path < out[j].path
+			}
+			return out[i].size < out[j].size
+		})
+		return out
+	}
+	ka, kb := key(a), key(b)
+	for i := range ka {
+		if ka[i] != kb[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // lock takes a session-level advisory lock on a dedicated connection and
