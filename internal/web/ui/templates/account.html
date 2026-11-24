@@ -22,9 +22,9 @@
 <div class="kv"><span class="kv-label">Email</span><span>{{if .Email}}{{.Email}} {{if .EmailVerified}}<span class="status">{{template "icon" "check"}} Verified</span>{{else}}<span class="status unverified">Unverified</span>{{end}}{{else}}<span class="subtext">None. Email is optional.</span>{{end}}</span></div>
 {{if .PendingEmail}}<div class="kv"><span class="kv-label">Pending</span><span>{{.PendingEmail}} <span class="status pending">awaiting confirmation</span></span></div>{{end}}
 {{if .RecoveryAvailable}}
-<div class="notice ok recovery" role="status">{{template "icon" "check"}}<span><strong>Password recovery is available</strong> through {{.Email}}.{{if .PendingEmail}} The pending address does not replace it until it is confirmed.{{end}}</span></div>
+<div class="notice ok recovery">{{template "icon" "check"}}<span><strong>Password recovery is available</strong> through {{.Email}}.{{if .PendingEmail}} The pending address does not replace it until it is confirmed.{{end}}</span></div>
 {{else}}
-<div class="notice warning recovery-unavailable" role="status">{{template "icon" "alert"}}<span><strong>Password recovery is unavailable.</strong>
+<div class="notice warning recovery-unavailable">{{template "icon" "alert"}}<span><strong>Password recovery is unavailable.</strong>
 {{if eq .EmailState "verified"}} This address is verified, but this server cannot currently send email, so a reset link cannot be sent. An administrator can issue one.
 {{else if eq .EmailState "unverified"}}{{if .MailEnabled}} Verify your email address to enable password recovery. If you do not intend to verify it, you can remove it from your account.{{else}} This server cannot currently send email, so this address cannot be verified. A reset link can only be issued by an administrator. If you do not need the address, you can remove it from your account.{{end}}
 {{else if eq .EmailState "pending"}}{{if .MailEnabled}} Confirm the pending address with the link that was emailed to it, or request the email again.{{else}} This server cannot currently send email, so the pending address cannot be confirmed. You can cancel it.{{end}}

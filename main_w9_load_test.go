@@ -734,6 +734,9 @@ func (e *w9Env) startWeb() {
 	e.webAddr = freeLoopbackAddr(e.t)
 	env := w9LoadEnv("MAGNETICO_WEB_DATABASE="+e.dsn, "MAGNETICO_WEB_LISTEN="+e.webAddr, "MAGNETICO_WEB_PUBLIC_URL=http://"+e.webAddr,
 		"MAGNETICO_WEB_TRUSTED_PROXIES=127.0.0.1/32", "MAGNETICO_WEB_POOL_MAX_CONNS=20", "GOMAXPROCS=2", "GODEBUG=gctrace=1", "GOMEMLIMIT="+e.goMem)
+	if v := os.Getenv("MAGNETICO_W9_SEARCH_CONCURRENCY"); v != "" {
+		env = append(env, "MAGNETICO_WEB_SEARCH_CONCURRENCY="+v)
+	}
 	if strings.Contains(os.Getenv("MAGNETICO_W9_TAGS"), "w9diag") {
 		e.diagAddr = freeLoopbackAddr(e.t)
 		env = append(env, "MAGNETICO_W9_DIAG_ADDR="+e.diagAddr)
@@ -1126,6 +1129,14 @@ func TestW9Load(t *testing.T) {
 		e.drain()
 		e.segment("idle", 0, dur(20), false, segGates{})
 		e.finish("soak")
+	case "knee":
+		// How the interactive capacity depends on the number of search slots
+		// (MAGNETICO_W9_SEARCH_CONCURRENCY): the same interactive tiers once.
+		e.begin()
+		for _, users := range []int{150, 400, 800} {
+			e.segment(fmt.Sprintf("knee-u%d", users), users, step, false, segGates{noTimeouts: true, overload: true, think: time.Second})
+		}
+		e.finish("knee")
 	case "diag":
 		// The diagnostic run (build tag w9diag): the soak timeline, shorter, with
 		// non-destructive readings of one process before, during and after the
