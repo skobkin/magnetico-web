@@ -141,6 +141,9 @@ type webBrowser struct {
 	base string
 	c    *http.Client
 	body string
+	// host, when set, is sent as the Host header of every request (the
+	// connection still goes to base): a client or proxy that forges it.
+	host string
 }
 
 func newBrowser(t *testing.T, addr string) *webBrowser {
@@ -153,6 +156,9 @@ func newBrowser(t *testing.T, addr string) *webBrowser {
 
 func (b *webBrowser) do(req *http.Request) *http.Response {
 	b.t.Helper()
+	if b.host != "" {
+		req.Host = b.host
+	}
 	resp, err := b.c.Do(req)
 	if err != nil {
 		b.t.Fatal(err)
