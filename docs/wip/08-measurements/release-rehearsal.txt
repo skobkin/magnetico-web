@@ -1,19 +1,19 @@
-# Local rehearsal of the build-once / qualify / promote flow (Task 08)
-# two throwaway registry:2 containers stand in for docker.io and ghcr.io; real crane v0.21.0; the layout is the multi-platform OCI build (amd64+arm64, SBOM+provenance) produced by one docker buildx invocation
-# qualified digest (index.json of the build): sha256:0db622202d0bb715dbf0a844a7228e9f8903b2502f705d3c1779ceae2c079f3d
+# Local rehearsal of the build-once / qualify / promote flow with the FINAL image (Task 08)
+# two throwaway registry:2 containers stand in for docker.io and ghcr.io; real crane v0.21.0 (go run, GOTOOLCHAIN=go1.27.4); layout = the multi-platform OCI build above
+# qualified digest (index.json of the build): sha256:b3c710f7a6f50ad7ed8d2dee96fea882db24cd101d33ac57ace1f9016134cc98
 
 $ ci/promote-image.sh <layout> 0.8.0-rc.0
-promoted 127.0.0.1:55001/magnetico-web:0.8.0-rc.0 -> sha256:0db622202d0bb715dbf0a844a7228e9f8903b2502f705d3c1779ceae2c079f3d
-promoted 127.0.0.1:55002/magnetico-web:0.8.0-rc.0 -> sha256:0db622202d0bb715dbf0a844a7228e9f8903b2502f705d3c1779ceae2c079f3d
+promoted 127.0.0.1:55001/magnetico-web:0.8.0-rc.0 -> sha256:b3c710f7a6f50ad7ed8d2dee96fea882db24cd101d33ac57ace1f9016134cc98
+promoted 127.0.0.1:55002/magnetico-web:0.8.0-rc.0 -> sha256:b3c710f7a6f50ad7ed8d2dee96fea882db24cd101d33ac57ace1f9016134cc98
 
 $ ci/verify-published.sh <digest> 0.8.0-rc.0
-verified 127.0.0.1:55001/magnetico-web:0.8.0-rc.0 -> sha256:0db622202d0bb715dbf0a844a7228e9f8903b2502f705d3c1779ceae2c079f3d (linux/amd64, linux/arm64, 2 attestation manifests)
-verified 127.0.0.1:55002/magnetico-web:0.8.0-rc.0 -> sha256:0db622202d0bb715dbf0a844a7228e9f8903b2502f705d3c1779ceae2c079f3d (linux/amd64, linux/arm64, 2 attestation manifests)
+verified 127.0.0.1:55001/magnetico-web:0.8.0-rc.0 -> sha256:b3c710f7a6f50ad7ed8d2dee96fea882db24cd101d33ac57ace1f9016134cc98 (linux/amd64, linux/arm64, 2 attestation manifests)
+verified 127.0.0.1:55002/magnetico-web:0.8.0-rc.0 -> sha256:b3c710f7a6f50ad7ed8d2dee96fea882db24cd101d33ac57ace1f9016134cc98 (linux/amd64, linux/arm64, 2 attestation manifests)
+
+$ ci/image-smoke.sh --platform linux/amd64 127.0.0.1:55002/magnetico-web@<digest>   (the published-digest smoke test)
+ok    --version: magnetico 0.0.0-final (commit ef65e8e391c9, go1.27.4, linux/amd64)
+image smoke test: all checks passed (127.0.0.1:55002/magnetico-web@sha256:b3c710f7a6f50ad7ed8d2dee96fea882db24cd101d33ac57ace1f9016134cc98)
 
 $ ci/promote-image.sh <layout> latest   (must refuse)
 promote-image: refusing tag 'latest': only MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N is ever applied (never latest, 0.8, stable or edge)
-exit=1
-
-$ ci/promote-image.sh <layout> 0.8   (must refuse)
-promote-image: refusing tag '0.8': only MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-rc.N is ever applied (never latest, 0.8, stable or edge)
 exit=1
