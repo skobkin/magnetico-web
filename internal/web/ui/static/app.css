@@ -1462,6 +1462,10 @@ a.table-sort:hover{text-decoration:none}
 .pagination .btn[aria-disabled="true"]{opacity:.45;pointer-events:none}
 .notice.error{border-color:var(--danger);background:var(--danger-bg);color:var(--text)}
 .notice.error .icon{color:var(--danger)}
+.notice.recovery-unavailable{border-color:var(--danger);background:var(--danger-bg);color:var(--text)}
+.notice.recovery-unavailable .icon{color:var(--danger)}
+.notice.recovery strong,.notice.recovery-unavailable strong{color:var(--text)}
+.status.unverified{color:var(--danger)}
 .view-options{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .view-options .btn{min-height:30px}
 .file-nojs{padding:16px 14px}

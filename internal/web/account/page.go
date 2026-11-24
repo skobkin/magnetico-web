@@ -24,6 +24,7 @@ var notices = map[string]string{
 	"password":       "Password changed. Your other sessions were signed out and this session was renewed.",
 	"email-sent":     "A confirmation link was sent to the new address. Your current address stays in force until it is confirmed.",
 	"email-resent":   "The confirmation email was sent again.",
+	"email-removed":  "Email address removed. Password recovery by email is unavailable until you add and verify an address.",
 	"api-revoked":    "API token revoked.",
 	"rss-revoked":    "RSS token revoked.",
 	"invite-revoked": "Invitation revoked.",
@@ -63,6 +64,19 @@ func (h *Handlers) pageData(ctx context.Context, p webauth.Principal, tab string
 		} else if ok {
 			pg.PendingEmail = pending
 		}
+		switch {
+		case u.Email == "" && pg.PendingEmail == "":
+			pg.EmailState = "none"
+		case u.Email == "":
+			pg.EmailState = "pending"
+		case u.EmailVerified:
+			pg.EmailState = "verified"
+		default:
+			pg.EmailState = "unverified"
+		}
+		// Matches the forgot-password worker: a verified address of an active
+		// account, and a server that can send the message.
+		pg.RecoveryAvailable = pg.EmailState == "verified" && pg.MailEnabled
 	case "invitations":
 		invs, err := h.cfg.Store.ListInvitesByOwner(ctx, p.UserID)
 		if err != nil {
@@ -296,6 +310,48 @@ func (h *Handlers) postEmail(w http.ResponseWriter, r *http.Request) {
 	}
 	h.log.Info("email confirmation requested", "request_id", server.RequestID(r.Context()), "user_id", p.UserID)
 	redirect(w, "/account?tab=profile&done=email-sent")
+}
+
+// postEmailRemove removes the account's address (verified or not) and cancels
+// a pending verification. It does not need SMTP: removing an address is exactly
+// what a user of a server that cannot send email must be able to do. It needs
+// the current password like every email change.
+func (h *Handlers) postEmailRemove(w http.ResponseWriter, r *http.Request) {
+	p, ok := h.principal(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		h.srv.ErrorPage(w, r, http.StatusBadRequest)
+		return
+	}
+	if h.limited(w, h.userLim, h.accountKey(p.UserID)) {
+		return
+	}
+	if _, ok := h.verifyCurrent(w, r, p, "profile", r.PostForm.Get("current_password")); !ok {
+		return
+	}
+	res, err := h.cfg.Store.RemoveEmail(r.Context(), p.UserID)
+	if err != nil {
+		h.unavailable(w, r, err, "remove-email")
+		return
+	}
+	if res.Email == "" && !res.PendingCancelled {
+		h.renderAccount(w, r, http.StatusBadRequest, "profile", "", "There is no email address to remove.", nil)
+		return
+	}
+	h.log.Info("email removed", "request_id", server.RequestID(r.Context()), "user_id", p.UserID,
+		"verified", res.WasVerified, "links_cancelled", res.RecoveryLinksCancelled)
+	if res.WasVerified && h.cfg.Mail != nil {
+		// Best effort notice to the removed address; a full queue drops it.
+		if slot, err := h.cfg.Mail.Reserve(); err == nil {
+			removed := res.Email
+			slot.Submit(func(ctx context.Context, send func(mailer.Message) error) {
+				_ = send(mailer.EmailRemovedNotice(removed))
+			})
+		}
+	}
+	redirect(w, "/account?tab=profile&done=email-removed")
 }
 
 func (h *Handlers) postEmailResend(w http.ResponseWriter, r *http.Request) {

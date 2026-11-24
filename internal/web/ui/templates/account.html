@@ -19,12 +19,21 @@
 <section class="section-card"><div class="section-card-head"><div><h2>Profile</h2></div></div><div class="section-card-body">
 <div class="kv"><span class="kv-label">Username</span><span>{{.Username}}</span></div>
 <div class="kv"><span class="kv-label">Role</span><span>{{.Role}}</span></div>
-<div class="kv"><span class="kv-label">Email</span><span>{{if .Email}}{{.Email}} {{if .EmailVerified}}<span class="status">{{template "icon" "check"}} Verified</span>{{else}}<span class="status pending">Not verified</span>{{end}}{{else}}<span class="subtext">None. Email is optional.</span>{{end}}</span></div>
+<div class="kv"><span class="kv-label">Email</span><span>{{if .Email}}{{.Email}} {{if .EmailVerified}}<span class="status">{{template "icon" "check"}} Verified</span>{{else}}<span class="status unverified">Unverified</span>{{end}}{{else}}<span class="subtext">None. Email is optional.</span>{{end}}</span></div>
 {{if .PendingEmail}}<div class="kv"><span class="kv-label">Pending</span><span>{{.PendingEmail}} <span class="status pending">awaiting confirmation</span></span></div>{{end}}
+{{if .RecoveryAvailable}}
+<div class="notice ok recovery" role="status">{{template "icon" "check"}}<span><strong>Password recovery is available</strong> through {{.Email}}.{{if .PendingEmail}} The pending address does not replace it until it is confirmed.{{end}}</span></div>
+{{else}}
+<div class="notice warning recovery-unavailable" role="status">{{template "icon" "alert"}}<span><strong>Password recovery is unavailable.</strong>
+{{if eq .EmailState "verified"}} This address is verified, but this server cannot currently send email, so a reset link cannot be sent. An administrator can issue one.
+{{else if eq .EmailState "unverified"}}{{if .MailEnabled}} Verify your email address to enable password recovery. If you do not intend to verify it, you can remove it from your account.{{else}} This server cannot currently send email, so this address cannot be verified. A reset link can only be issued by an administrator. If you do not need the address, you can remove it from your account.{{end}}
+{{else if eq .EmailState "pending"}}{{if .MailEnabled}} Confirm the pending address with the link that was emailed to it, or request the email again.{{else}} This server cannot currently send email, so the pending address cannot be confirmed. You can cancel it.{{end}}
+{{else}}{{if .MailEnabled}} Add an email address and verify it to enable password recovery.{{else}} This server cannot send email, so a reset link can only be issued by an administrator.{{end}}
+{{end}}</span></div>
+{{end}}
 {{if .MailEnabled}}
-{{if .EmailVerified}}<p class="small subtext">Your verified address can be used to recover your password.</p>{{end}}
 {{if or .PendingEmail (and .Email (not .EmailVerified))}}
-<form method="post" action="/account/email/resend" class="profile-actions">{{template "csrf" .CSRFToken}}<button type="submit" class="btn small">Send the verification email again</button></form>
+<form method="post" action="/account/email/resend" class="profile-actions">{{template "csrf" .CSRFToken}}<button type="submit" class="btn small">{{if .PendingEmail}}Send the confirmation email again{{else}}Send verification email{{end}}</button></form>
 {{end}}
 <details class="inline-panel"><summary>{{if .Email}}Change email address{{else}}Add an email address{{end}}</summary>
 <form method="post" action="/account/email">
@@ -34,8 +43,16 @@
 <p class="small subtext">A confirmation link is sent to the new address. Your current verified address stays active until the new one is confirmed.</p>
 <div class="form-actions"><button type="submit" class="btn primary small">Send confirmation</button></div>
 </form></details>
-{{else}}
-<div class="notice">{{template "icon" "info"}}<span>This server cannot send email, so addresses cannot be confirmed here and password recovery works only through an administrator-issued link.</span></div>
+{{end}}
+{{if or .Email .PendingEmail}}
+<details class="inline-panel"><summary>{{if .Email}}Remove email address{{else}}Cancel the pending address{{end}}</summary>
+<form method="post" action="/account/email/remove">
+{{template "csrf" .CSRFToken}}
+{{if .EmailVerified}}<p class="small subtext">Password recovery by email will be unavailable until you add and verify an address again. Any password reset link already issued is cancelled.</p>
+{{else}}<p class="small subtext">The address is removed from your account and any pending confirmation link stops working.</p>{{end}}
+<label class="field">Current password<input type="password" name="current_password" autocomplete="current-password" required></label>
+<div class="form-actions"><button type="submit" class="btn danger small">Remove email</button></div>
+</form></details>
 {{end}}
 </div></section>
 

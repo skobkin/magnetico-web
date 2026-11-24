@@ -82,6 +82,15 @@ type AccountPage struct {
 	EmailVerified bool
 	PendingEmail  string
 	MailEnabled   bool
+	// EmailState is the state of the stored address: "none" (no address, no
+	// pending one), "pending" (no address yet, one awaiting confirmation),
+	// "unverified" or "verified". It is independent of MailEnabled (the
+	// service state: whether this server can send email at all).
+	EmailState string
+	// RecoveryAvailable is true only when email recovery can work right now:
+	// the stored address is verified and the server can send email. A pending
+	// replacement does not change it.
+	RecoveryAvailable bool
 
 	Invites          []InviteRow
 	InvitesAvailable int

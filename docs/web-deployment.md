@@ -144,11 +144,13 @@ Routes: `GET /torrents` (search, a *search* route with the search deadline), `GE
 
 ## 8. Accounts, email and credentials (W6)
 
-**Routes.** `GET /account?tab=profile|invitations|rss|api` and the `POST` actions below it (password, email, email/resend, API and RSS tokens, token and invitation revocation); public `/register/{code}`, `/password/forgot`, `/password/setup/{token}`, `/password/reset/{token}`, `/email/verify/{token}`. Every `POST` carries the CSRF token (session-bound on the account page, pre-session-bound on public forms). Pages that show or are reached through a credential send `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`.
+**Routes.** `GET /account?tab=profile|invitations|rss|api` and the `POST` actions below it (password, email, email/resend, email/remove, API and RSS tokens, token and invitation revocation); public `/register/{code}`, `/password/forgot`, `/password/setup/{token}`, `/password/reset/{token}`, `/email/verify/{token}`. Every `POST` carries the CSRF token (session-bound on the account page, pre-session-bound on public forms). Pages that show or are reached through a credential send `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`.
 
 **Invitations.** A user sees and revokes only their own pre-minted invitations (`INVITE_QUOTA` at account creation or registration); there is no self-service creation. Further invitations: `web user invite add`.
 
 **Tokens.** At most 50 unrevoked API tokens and 50 unrevoked RSS tokens per user; creation is limited to a burst of 10 and one more every 6 minutes per account and type. Plaintext is shown once; only SHA-256 is stored. **Revoked rows are kept** (no database role may delete token rows) and there is no lifetime cap on them: with the creation limit this grows slowly, but operators who care should watch `magnetico_web.api_tokens` and `rss_tokens`, and a future operator command may prune old revoked rows.
+
+**Removing an address.** The account page can remove an account's email address (verified or not) with the current password, also without SMTP. Removing a verified address, or replacing it with a different verified one, **deletes every outstanding password setup/reset link of that account**, including one an administrator issued with `web user reset-password` (links carry no origin); re-issue it afterwards.
 
 **Email is optional.** Without `MAGNETICO_WEB_SMTP_HOST` the profile page says email is unavailable, `/password/forgot` says recovery is not available, and sign-in, tokens, password change and administrator-issued links work as before. With SMTP configured:
 

@@ -53,6 +53,13 @@ func VerifyMessage(to, link string, ttl time.Duration) Message {
 	return Message{To: to, Subject: "Confirm your Magnetico email address", Body: b.String()}
 }
 
+// EmailRemovedNotice tells a removed verified address that it was removed.
+func EmailRemovedNotice(to string) Message {
+	return Message{To: to, Subject: "Your Magnetico email address was removed", Body: "This email address was removed from a Magnetico account.\n" +
+		"It no longer receives password recovery messages, and any password reset link already sent to it was cancelled.\n\n" +
+		"If this was not you, contact the operator of the service.\n"}
+}
+
 // EmailChangedNotice tells the previous verified address that it was replaced.
 func EmailChangedNotice(to string) Message {
 	return Message{To: to, Subject: "Your Magnetico email address was changed", Body: "The email address of your Magnetico account was changed to a new, confirmed address.\n" +
