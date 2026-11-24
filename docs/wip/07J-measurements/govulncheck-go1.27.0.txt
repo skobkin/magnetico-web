@@ -1,0 +1,369 @@
+=== Symbol Results ===
+
+Vulnerability #1: GO-2026-6888
+    Excessive memory allocation when decompressing crafted streams in
+    github.com/andybalholm/brotli
+  More info: https://pkg.go.dev/vuln/GO-2026-6888
+  Module: github.com/andybalholm/brotli
+    Found in: github.com/andybalholm/brotli@v1.2.6
+    Fixed in: github.com/andybalholm/brotli@v1.2.7
+    Example traces found:
+      #1: metadata/btconn/mse.go:210:34: btconn.Stream.HandshakeIncoming calls io.ReadAtLeast, which calls brotli.Reader.Read
+      #2: metadata/leech.go:353:50: metadata.Leech.DoContext calls brotli.decodeError.Error
+
+Vulnerability #2: GO-2026-6859
+    HTTP/1 server crash due to MaxBytesReader header race in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6859
+  Standard library
+    Found in: net/http@go1.27
+    Fixed in: net/http@go1.27.4
+    Example traces found:
+      #1: internal/pgtest/pgtest.go:95:15: pgtest.RunTests calls testing.M.Run, which eventually calls http.CanonicalHeaderKey
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do
+      #3: internal/web/server/middleware.go:206:30: server.crossOrigin calls http.CrossOriginProtection.AddTrustedOrigin
+      #4: internal/web/server/server.go:329:13: server.Server.errorPage calls http.Error
+      #5: internal/e2e/ingestd/main.go:97:18: ingestd.main calls http.HandleFunc
+      #6: internal/crawler/client.go:232:35: crawler.Client.Submit calls http.Header.Get
+      #7: internal/web/ui/ui.go:162:16: ui.Renderer.Render calls http.Header.Set
+      #8: internal/crawler/client.go:219:40: crawler.Client.Submit calls http.NewRequestWithContext
+      #9: internal/web/ui/ui.go:97:16: ui.Assets.ServeFile calls http.NotFound
+      #10: internal/web/auth/cookies.go:121:29: auth.Auth.readPre calls http.Request.Cookies
+      #11: stats/pyroscope.go:19:24: stats.InitPyroscope calls pyroscope.Start, which eventually calls http.Request.SetBasicAuth
+      #12: internal/e2e/ingestd/main.go:101:29: ingestd.main calls http.Serve
+      #13: internal/web/ui/ui.go:104:19: ui.Assets.ServeFile calls http.ServeContent
+      #14: internal/web/server/server.go:212:14: server.Router.Handle calls http.ServeMux.Handle
+      #15: internal/ingest/server/server.go:141:16: server.Server.Handler calls http.ServeMux.HandleFunc
+      #16: internal/web/server/server.go:496:16: server.Server.shutdown calls http.Server.Close
+      #17: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve
+      #18: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown
+      #19: internal/web/auth/cookies.go:136:16: auth.Auth.ensurePre calls http.SetCookie
+      #20: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.body.Close
+      #21: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.body.Read
+      #22: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.bodyEOFSignal.Close
+      #23: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.bodyEOFSignal.Read
+      #24: internal/crawler/client.go:125:17: crawler.Client.Exists calls io.Copy, which eventually calls http.bodyLocked.Read
+      #25: metadata/btconn/mse.go:225:27: btconn.Stream.HandshakeIncoming calls bytes.Buffer.WriteTo, which calls http.bufioFlushWriter.Write
+      #26: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.cancelTimerBody.Close
+      #27: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.cancelTimerBody.Read
+      #28: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http.checkConnErrorWriter.Write
+      #29: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http.chunkWriter.Write
+      #30: bencode/scanner.go:26:22: bencode.scanner.ReadByte calls bufio.Reader.Read, which calls http.connReader.Read
+      #31: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close, which eventually calls http.expectContinueReader.Close
+      #32: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.expectContinueReader.Read
+      #33: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.gzipReader.Close
+      #34: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.gzipReader.Read
+      #35: metadata/btconn/mse.go:210:34: btconn.Stream.HandshakeIncoming calls io.ReadAtLeast, which calls http.loggingConn.Read
+      #36: internal/web/admincli/users.go:173:14: admincli.InviteList calls fmt.Fprintf, which calls http.loggingConn.Write
+      #37: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close, which eventually calls http.maxBytesReader.Close
+      #38: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.maxBytesReader.Read
+      #39: internal/crawlqueue/queue.go:760:15: crawlqueue.Queue.Close calls sync.Once.Do, which eventually calls http.onceCloseListener.Close
+      #40: bencode/scanner.go:26:22: bencode.scanner.ReadByte calls bufio.Reader.Read, which calls http.persistConn.Read
+      #41: internal/crawler/client.go:125:17: crawler.Client.Exists calls io.Copy, which eventually calls http.persistConnWriter.ReadFrom
+      #42: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http.persistConnWriter.Write
+      #43: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close, which eventually calls http.readTrackingBody.Close
+      #44: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.readTrackingBody.Read
+      #45: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.readWriteCloserBody.Read
+      #46: internal/crawler/client.go:125:17: crawler.Client.Exists calls io.Copy, which eventually calls http.response.ReadFrom
+      #47: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write
+      #48: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http.response.WriteHeader
+      #49: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write, which eventually calls http.response.WriteString
+      #50: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.timeoutWriter.Write
+      #51: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http.timeoutWriter.WriteHeader
+      #52: metadata/leech.go:353:50: metadata.Leech.DoContext calls http.transportReadFromServerError.Error
+
+Vulnerability #3: GO-2026-6809
+    Distrust compromised intermediate certificates in crypto/x509
+  More info: https://pkg.go.dev/vuln/GO-2026-6809
+  Standard library
+    Found in: crypto/x509@go1.27
+    Fixed in: crypto/x509@go1.27.3
+    Example traces found:
+      #1: internal/web/mail/sender.go:157:32: mail.Sender.Send calls tls.Conn.HandshakeContext, which eventually calls x509.Certificate.Verify
+
+Vulnerability #4: GO-2026-6617
+    HTTP/2 server crash due to HPACK encoder race in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6617
+  Standard library
+    Found in: net/http/internal/http2@go1.27
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.Close
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.Close
+      #3: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #4: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #5: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #6: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #7: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #8: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #9: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #10: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #11: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #12: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #13: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #14: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #15: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.bufferedWriterTimeoutWriter.Write
+      #16: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.bufferedWriterTimeoutWriter.Write
+      #17: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.chunkWriter.Write
+      #18: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.chunkWriter.Write
+      #19: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.gzipReader.Close
+      #20: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.gzipReader.Close
+      #21: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.gzipReader.Read
+      #22: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.gzipReader.Read
+      #23: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #24: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #25: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write
+      #26: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write
+      #27: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http2.responseWriter.WriteHeader
+      #28: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http2.responseWriter.WriteHeader
+      #29: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write, which eventually calls http2.responseWriter.WriteString
+      #30: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write, which eventually calls http2.responseWriter.WriteString
+      #31: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.stickyErrWriter.Write
+      #32: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.stickyErrWriter.Write
+      #33: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close
+      #34: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close
+      #35: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.transportResponseBody.Read
+      #36: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.transportResponseBody.Read
+
+Vulnerability #5: GO-2026-6613
+    HTTP/1 server connection desynchronization after 2xx CONNECT response in
+    net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6613
+  Standard library
+    Found in: net/http@go1.27
+    Fixed in: net/http@go1.27.2
+    Example traces found:
+      #1: internal/pgtest/pgtest.go:95:15: pgtest.RunTests calls testing.M.Run, which eventually calls http.CanonicalHeaderKey
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do
+      #3: internal/web/server/middleware.go:206:30: server.crossOrigin calls http.CrossOriginProtection.AddTrustedOrigin
+      #4: internal/web/server/server.go:329:13: server.Server.errorPage calls http.Error
+      #5: internal/e2e/ingestd/main.go:97:18: ingestd.main calls http.HandleFunc
+      #6: internal/crawler/client.go:232:35: crawler.Client.Submit calls http.Header.Get
+      #7: internal/web/ui/ui.go:162:16: ui.Renderer.Render calls http.Header.Set
+      #8: internal/crawler/client.go:219:40: crawler.Client.Submit calls http.NewRequestWithContext
+      #9: internal/web/ui/ui.go:97:16: ui.Assets.ServeFile calls http.NotFound
+      #10: internal/web/auth/cookies.go:121:29: auth.Auth.readPre calls http.Request.Cookies
+      #11: stats/pyroscope.go:19:24: stats.InitPyroscope calls pyroscope.Start, which eventually calls http.Request.SetBasicAuth
+      #12: internal/e2e/ingestd/main.go:101:29: ingestd.main calls http.Serve
+      #13: internal/web/ui/ui.go:104:19: ui.Assets.ServeFile calls http.ServeContent
+      #14: internal/web/server/server.go:212:14: server.Router.Handle calls http.ServeMux.Handle
+      #15: internal/ingest/server/server.go:141:16: server.Server.Handler calls http.ServeMux.HandleFunc
+      #16: internal/web/server/server.go:496:16: server.Server.shutdown calls http.Server.Close
+      #17: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve
+      #18: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown
+      #19: internal/web/auth/cookies.go:136:16: auth.Auth.ensurePre calls http.SetCookie
+      #20: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.body.Close
+      #21: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.body.Read
+      #22: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.bodyEOFSignal.Close
+      #23: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.bodyEOFSignal.Read
+      #24: internal/crawler/client.go:125:17: crawler.Client.Exists calls io.Copy, which eventually calls http.bodyLocked.Read
+      #25: metadata/btconn/mse.go:225:27: btconn.Stream.HandshakeIncoming calls bytes.Buffer.WriteTo, which calls http.bufioFlushWriter.Write
+      #26: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.cancelTimerBody.Close
+      #27: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.cancelTimerBody.Read
+      #28: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http.checkConnErrorWriter.Write
+      #29: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http.chunkWriter.Write
+      #30: bencode/scanner.go:26:22: bencode.scanner.ReadByte calls bufio.Reader.Read, which calls http.connReader.Read
+      #31: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close, which eventually calls http.expectContinueReader.Close
+      #32: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.expectContinueReader.Read
+      #33: internal/crawler/client.go:230:2: crawler.Client.Submit calls http.gzipReader.Close
+      #34: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.gzipReader.Read
+      #35: metadata/btconn/mse.go:210:34: btconn.Stream.HandshakeIncoming calls io.ReadAtLeast, which calls http.loggingConn.Read
+      #36: internal/web/admincli/users.go:173:14: admincli.InviteList calls fmt.Fprintf, which calls http.loggingConn.Write
+      #37: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close, which eventually calls http.maxBytesReader.Close
+      #38: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.maxBytesReader.Read
+      #39: internal/crawlqueue/queue.go:760:15: crawlqueue.Queue.Close calls sync.Once.Do, which eventually calls http.onceCloseListener.Close
+      #40: bencode/scanner.go:26:22: bencode.scanner.ReadByte calls bufio.Reader.Read, which calls http.persistConn.Read
+      #41: internal/crawler/client.go:125:17: crawler.Client.Exists calls io.Copy, which eventually calls http.persistConnWriter.ReadFrom
+      #42: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http.persistConnWriter.Write
+      #43: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close, which eventually calls http.readTrackingBody.Close
+      #44: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.readTrackingBody.Read
+      #45: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http.readWriteCloserBody.Read
+      #46: internal/crawler/client.go:125:17: crawler.Client.Exists calls io.Copy, which eventually calls http.response.ReadFrom
+      #47: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write
+      #48: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http.response.WriteHeader
+      #49: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write, which eventually calls http.response.WriteString
+      #50: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.timeoutWriter.Write
+      #51: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http.timeoutWriter.WriteHeader
+      #52: metadata/leech.go:353:50: metadata.Leech.DoContext calls http.transportReadFromServerError.Error
+
+Vulnerability #6: GO-2026-6612
+    Double flow control refund on HTTP/2 server streams in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6612
+  Standard library
+    Found in: net/http/internal/http2@go1.27
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #2: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #3: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #4: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #5: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.requestBody.Read
+      #6: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.requestBody.Read
+
+Vulnerability #7: GO-2026-6611
+    Excessive CPU consumption from repeated initial window changes in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6611
+  Standard library
+    Found in: net/http/internal/http2@go1.27
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.Close
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.Close
+      #3: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #4: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #5: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #6: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #7: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #8: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #9: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #10: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #11: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #12: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #13: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #14: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #15: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.bufferedWriterTimeoutWriter.Write
+      #16: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.bufferedWriterTimeoutWriter.Write
+      #17: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.chunkWriter.Write
+      #18: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.chunkWriter.Write
+      #19: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.gzipReader.Close
+      #20: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.gzipReader.Close
+      #21: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.gzipReader.Read
+      #22: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.gzipReader.Read
+      #23: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #24: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #25: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write
+      #26: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write
+      #27: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http2.responseWriter.WriteHeader
+      #28: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http2.responseWriter.WriteHeader
+      #29: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write, which eventually calls http2.responseWriter.WriteString
+      #30: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write, which eventually calls http2.responseWriter.WriteString
+      #31: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.stickyErrWriter.Write
+      #32: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.stickyErrWriter.Write
+      #33: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close
+      #34: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close
+      #35: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.transportResponseBody.Read
+      #36: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.transportResponseBody.Read
+
+Vulnerability #8: GO-2026-6610
+    HTTP/2 transport accepts malformed framing-related headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6610
+  Standard library
+    Found in: net/http/internal/http2@go1.27
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #3: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #4: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #5: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #6: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+
+Vulnerability #9: GO-2026-6609
+    Lack of limit on size of parsed Range headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6609
+  Standard library
+    Found in: net/http@go1.27
+    Fixed in: net/http@go1.27.2
+    Example traces found:
+      #1: internal/web/ui/ui.go:104:19: ui.Assets.ServeFile calls http.ServeContent
+
+Vulnerability #10: GO-2026-6608
+    Memory limit bypass when parsing MIME headers in net/textproto,
+    mime/multipart
+  More info: https://pkg.go.dev/vuln/GO-2026-6608
+  Standard library
+    Found in: net/textproto@go1.27
+    Fixed in: net/textproto@go1.27.2
+    Example traces found:
+      #1: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls multipart.Reader.ReadForm
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls textproto.Reader.ReadMIMEHeader
+
+Vulnerability #11: GO-2026-6607
+    Reject malformed ECH outer extension references in crypto/tls
+  More info: https://pkg.go.dev/vuln/GO-2026-6607
+  Standard library
+    Found in: crypto/tls@go1.27
+    Fixed in: crypto/tls@go1.27.2
+    Example traces found:
+      #1: internal/web/mail/sender.go:157:32: mail.Sender.Send calls tls.Conn.HandshakeContext
+      #2: metadata/btconn/mse.go:210:34: btconn.Stream.HandshakeIncoming calls io.ReadAtLeast, which calls tls.Conn.Read
+      #3: metadata/btconn/mse.go:307:18: btconn.Stream.HandshakeIncoming calls binary.Write, which calls tls.Conn.Write
+      #4: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls tls.Dialer.DialContext
+
+Vulnerability #12: GO-2026-6605
+    HTTP/1 client connection desynchronization after CONNECT rejection in
+    net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6605
+  Standard library
+    Found in: net/http@go1.27
+    Fixed in: net/http@go1.27.2
+    Example traces found:
+      #1: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do
+
+Vulnerability #13: GO-2026-6603
+    HTTP/2 server memory exhaustion due to Trailer headers in net/http
+  More info: https://pkg.go.dev/vuln/GO-2026-6603
+  Standard library
+    Found in: net/http/internal/http2@go1.27
+    Fixed in: net/http/internal/http2@go1.27.2
+    Example traces found:
+      #1: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.Close
+      #2: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.Close
+      #3: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #4: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.NetHTTPClientConn.RoundTrip
+      #5: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #6: internal/web/server/server.go:490:24: server.Server.shutdown calls http.Server.Shutdown, which calls http2.Server.GracefulShutdown
+      #7: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #8: internal/web/server/server.go:415:35: server.Run calls http.Server.Serve, which eventually calls http2.Server.ServeConn
+      #9: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #10: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.AddConn
+      #11: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #12: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.NewClientConn
+      #13: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #14: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.Transport.RoundTrip
+      #15: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.bufferedWriterTimeoutWriter.Write
+      #16: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.bufferedWriterTimeoutWriter.Write
+      #17: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.chunkWriter.Write
+      #18: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.chunkWriter.Write
+      #19: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.gzipReader.Close
+      #20: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.gzipReader.Close
+      #21: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.gzipReader.Read
+      #22: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.gzipReader.Read
+      #23: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #24: internal/crawler/client.go:225:24: crawler.Client.Submit calls http.Client.Do, which eventually calls http2.requestBody.Close
+      #25: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write
+      #26: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http2.responseWriter.Write
+      #27: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http2.responseWriter.WriteHeader
+      #28: internal/web/ui/ui.go:163:15: ui.Renderer.Render calls http2.responseWriter.WriteHeader
+      #29: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write, which eventually calls http2.responseWriter.WriteString
+      #30: internal/web/ui/ui.go:164:19: ui.Renderer.Render calls http.response.Write, which eventually calls http2.responseWriter.WriteString
+      #31: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.stickyErrWriter.Write
+      #32: internal/migration/forensics/manifest.go:100:19: forensics.writeManifest calls bufio.Writer.Flush, which calls http2.stickyErrWriter.Write
+      #33: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close
+      #34: internal/crawler/client.go:230:2: crawler.Client.Submit calls http2.transportResponseBody.Close
+      #35: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.transportResponseBody.Read
+      #36: internal/crawler/client.go:233:22: crawler.Client.Submit calls io.ReadAll, which calls http2.transportResponseBody.Read
+
+Vulnerability #14: GO-2026-6600
+    Recognize yield as regexp preceder keyword in html/template
+  More info: https://pkg.go.dev/vuln/GO-2026-6600
+  Standard library
+    Found in: html/template@go1.27
+    Fixed in: html/template@go1.27.2
+    Example traces found:
+      #1: internal/web/ui/ui.go:159:29: ui.Renderer.Render calls template.Template.ExecuteTemplate
+
+Vulnerability #15: GO-2026-6599
+    Reset context tracking on consecutive template expressions in html/template
+  More info: https://pkg.go.dev/vuln/GO-2026-6599
+  Standard library
+    Found in: html/template@go1.27
+    Fixed in: html/template@go1.27.2
+    Example traces found:
+      #1: internal/web/ui/ui.go:159:29: ui.Renderer.Render calls template.Template.ExecuteTemplate
+
+Your code is affected by 15 vulnerabilities from 1 module and the Go standard library.
+This scan also found 1 vulnerability in packages you import and 0
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.
+exit status 3

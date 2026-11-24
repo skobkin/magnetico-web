@@ -347,12 +347,12 @@ func startServer(t *testing.T, bin, rtDSN, adminDSN string, extra []string) *ser
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Env = env
-	var out bytes.Buffer
-	cmd.Stderr, cmd.Stdout = &out, &out
+	out := &syncBuf{}
+	cmd.Stderr, cmd.Stdout = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	w := &runningWeb{addr: addr, cmd: cmd, exited: make(chan error, 1), out: &out}
+	w := &runningWeb{addr: addr, cmd: cmd, exited: make(chan error, 1), out: out}
 	go func() { w.exited <- cmd.Wait() }()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	sr.w, sr.pid, sr.start = w, cmd.Process.Pid, time.Now()

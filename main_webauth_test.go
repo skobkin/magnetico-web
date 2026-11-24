@@ -5,7 +5,6 @@ package main
 // Disposable PostgreSQL only; loopback only; synthetic users.
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -79,7 +78,7 @@ type runningWeb struct {
 	addr   string
 	cmd    *exec.Cmd
 	exited chan error
-	out    *bytes.Buffer
+	out    *syncBuf // read while the process may still run: goroutine-safe
 }
 
 // startWeb launches `magnetico web` and waits for /readyz.
@@ -92,12 +91,12 @@ func startWeb(t *testing.T, bin, dsn, publicURLScheme string, extraEnv ...string
 		pub = "https://magnet.example.org"
 	}
 	cmd.Env = webEnv(append([]string{"MAGNETICO_WEB_DATABASE=" + dsn, "MAGNETICO_WEB_LISTEN=" + addr, "MAGNETICO_WEB_PUBLIC_URL=" + pub}, extraEnv...)...)
-	var out bytes.Buffer
-	cmd.Stderr, cmd.Stdout = &out, &out
+	out := &syncBuf{}
+	cmd.Stderr, cmd.Stdout = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	w := &runningWeb{addr: addr, cmd: cmd, exited: make(chan error, 1), out: &out}
+	w := &runningWeb{addr: addr, cmd: cmd, exited: make(chan error, 1), out: out}
 	go func() { w.exited <- cmd.Wait() }()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	deadline := time.Now().Add(30 * time.Second)

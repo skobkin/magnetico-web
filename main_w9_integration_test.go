@@ -93,7 +93,7 @@ func w9AppAccount(t *testing.T) string {
 // w9Proc is a running binary with captured output.
 type w9Proc struct {
 	cmd    *exec.Cmd
-	out    *bytes.Buffer
+	out    *syncBuf
 	exited chan error
 }
 
@@ -101,12 +101,12 @@ func w9Start(t *testing.T, bin string, env []string, args ...string) *w9Proc {
 	t.Helper()
 	cmd := exec.Command(bin, args...)
 	cmd.Env = webEnv(env...)
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	out := &syncBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	p := &w9Proc{cmd: cmd, out: &out, exited: make(chan error, 1)}
+	p := &w9Proc{cmd: cmd, out: out, exited: make(chan error, 1)}
 	go func() { p.exited <- cmd.Wait() }()
 	t.Cleanup(func() { _ = cmd.Process.Kill() })
 	return p

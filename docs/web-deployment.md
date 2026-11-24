@@ -146,6 +146,14 @@ Routes: `GET /torrents` (search, a *search* route with the search deadline), `GE
 - On shutdown the file-index cache stops after in-flight requests drain and before the database pool closes; the stop is logged with the cache counters (`file index cache stopped`).
 - **Directory addressing (W5).** Directories are addressed by short positional paths (at most 256 numeric components, under 2 KB), so the W4 limitation for very long directory URLs no longer exists and the 16 KiB request-header limit is no longer a concern for the file browser. A hierarchy beyond the index limits is the only case in which a valid torrent cannot be browsed.
 
+### Capacity and memory (measured, W9)
+
+Measured on one host with synthetic data (3.5 million torrents, about 20,000 with file blobs); see `docs/wip/07J-web-integration-security-report.md` for the method and its limits. These are observations, not guarantees for another deployment.
+
+* **Search slots.** Searches share `MAGNETICO_WEB_SEARCH_CONCURRENCY` slots (default 4); a request that cannot get a slot within a few seconds is answered `503` with `Retry-After`. That is the capacity limit: with the default, interactive users (about one request per second each) were served within a 5 % busy share up to about 150 simultaneous users and exceeded it at 400; with 8 slots the bound held at 400. Raise it only together with `MAGNETICO_WEB_POOL_MAX_CONNS` (slots must stay at most the pool size minus 2); the right value depends on the database and CPUs.
+* **Overload is safe.** Far above capacity the service sheds with bounded `503`s, every other outcome stayed clean, and it was back to normal latency immediately after the load stopped.
+* **Memory.** Recommended for the web container: a **1 GiB** limit with **`GOMEMLIMIT=768MiB`** (a soft limit on the Go heap, a different number from the container limit). Observed peaks on typical file lists were about 630 MiB resident and 660–730 MiB of container memory including page cache; the bounded structures that set it are the 128 MiB file-index cache, the 192 MiB decode budget and about 25 MiB of cached feed pages. 512–640 MiB containers also survived the typical-shape test but leave no margin for adversarial file lists and are not recommended. Ingest: 1 GiB with `GOMEMLIMIT=256MiB` (observed 139 MiB at 20 records per second).
+
 ## 8. Accounts, email and credentials (W6)
 
 **Routes.** `GET /account?tab=profile|invitations|rss|api` and the `POST` actions below it (password, email, email/resend, email/remove, API and RSS tokens, token and invitation revocation); public `/register/{code}`, `/password/forgot`, `/password/setup/{token}`, `/password/reset/{token}`, `/email/verify/{token}`. Every `POST` carries the CSRF token (session-bound on the account page, pre-session-bound on public forms). Pages that show or are reached through a credential send `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`.
