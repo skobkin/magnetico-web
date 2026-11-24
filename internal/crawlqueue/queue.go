@@ -580,69 +580,114 @@ func (q *Queue) submit(ctx context.Context, o *op) (result, error) {
 	}
 }
 
-// Peek returns the oldest records (FIFO by id): at most maxRecords and at
+// StopReason says why a batch selection ended.
+type StopReason int
+
+const (
+	// StopNone: the queue has no further record; the batch is whatever was queued.
+	StopNone StopReason = iota
+	// StopCount: the record cap was reached.
+	StopCount
+	// StopBytes: the next queued record would not fit in the remaining byte
+	// budget (however full the batch already is).
+	StopBytes
+	// StopOversizeHead: the first record alone is at least the whole byte
+	// budget; it is a batch of one and is never split.
+	StopOversizeHead
+)
+
+func (r StopReason) String() string {
+	switch r {
+	case StopNone:
+		return "none"
+	case StopCount:
+		return "count"
+	case StopBytes:
+		return "bytes"
+	case StopOversizeHead:
+		return "oversize-head"
+	}
+	return "unknown"
+}
+
+// Plan describes the oldest records a batch would contain, without their
+// payloads: a cheap metadata read that a sender can repeat on every wake-up.
+type Plan struct {
+	Count          int
+	Bytes          int64
+	HeadID, LastID int64
+	HeadEnqueuedAt time.Time
+	Stop           StopReason
+}
+
+// Batch is a Plan together with its records.
+type Batch struct {
+	Items []Item
+	Bytes int64
+	Stop  StopReason
+}
+
+// planTx selects the oldest records (FIFO by id): at most maxRecords and at
 // most maxBytes of payload, but always at least one record when the queue is
-// not empty (so an oversized record cannot wedge the head). It uses one short
-// read transaction and never holds it across other work.
-func (q *Queue) Peek(ctx context.Context, maxRecords int, maxBytes int64) ([]Item, error) {
-	if err := q.usable(); err != nil {
-		return nil, err
-	}
-	if maxRecords <= 0 {
-		return nil, nil
-	}
+// not empty (so an oversized record cannot wedge the head).
+func (q *Queue) planTx(ctx context.Context, tx *sql.Tx, maxRecords int, maxBytes int64) (Plan, error) {
 	if maxRecords > maxPeekRecordsCap {
 		maxRecords = maxPeekRecordsCap
 	}
-	tx, err := q.rdb.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
-	}
-	defer tx.Rollback() //nolint:errcheck // read-only
-
 	rows, err := tx.QueryContext(ctx,
-		"SELECT id, payload_bytes FROM queue ORDER BY id LIMIT ?", maxRecords)
+		"SELECT id, payload_bytes, enqueued_at FROM queue ORDER BY id LIMIT ?", maxRecords)
 	if err != nil {
-		return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
+		return Plan{}, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
 	}
-	var firstID, lastID int64
-	var total int64
-	n := 0
+	defer rows.Close()
+	var p Plan
+	var headSize int64
+	stop := StopNone
 	for rows.Next() {
-		var id, sz int64
-		if err := rows.Scan(&id, &sz); err != nil {
-			rows.Close()
-			return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
+		var id, sz, at int64
+		if err := rows.Scan(&id, &sz, &at); err != nil {
+			return Plan{}, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
 		}
-		if n > 0 && total+sz > maxBytes {
+		if p.Count > 0 && p.Bytes+sz > maxBytes {
+			stop = StopBytes
 			break
 		}
-		if n == 0 {
-			firstID = id
+		if p.Count == 0 {
+			p.HeadID, headSize, p.HeadEnqueuedAt = id, sz, time.Unix(0, at)
 		}
-		lastID = id
-		total += sz
-		n++
+		p.LastID = id
+		p.Bytes += sz
+		p.Count++
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
+		return Plan{}, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
 	}
-	rows.Close()
-	if n == 0 {
+	switch {
+	case p.Count == 0:
+		return Plan{}, nil
+	case headSize >= maxBytes:
+		stop = StopOversizeHead
+	case stop == StopNone && p.Count == maxRecords:
+		stop = StopCount
+	}
+	p.Stop = stop
+	return p, nil
+}
+
+// fetchTx loads the payloads of a plan. The chosen ids are a contiguous prefix
+// of the id order, so the id range selects exactly them (same snapshot).
+func (q *Queue) fetchTx(ctx context.Context, tx *sql.Tx, p Plan) ([]Item, error) {
+	if p.Count == 0 {
 		return nil, nil
 	}
-
-	// The chosen ids are a contiguous prefix of the id order, so the id range
-	// selects exactly them (same snapshot).
 	prows, err := tx.QueryContext(ctx,
 		"SELECT id, info_hash, format, enqueued_at, payload FROM queue WHERE id BETWEEN ? AND ? ORDER BY id",
-		firstID, lastID)
+		p.HeadID, p.LastID)
 	if err != nil {
 		return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
 	}
 	defer prows.Close()
-	items := make([]Item, 0, n)
+	items := make([]Item, 0, p.Count)
 	for prows.Next() {
 		var it Item
 		var hash []byte
@@ -661,6 +706,80 @@ func (q *Queue) Peek(ctx context.Context, maxRecords int, maxBytes int64) ([]Ite
 		return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
 	}
 	return items, nil
+}
+
+func (q *Queue) readTx(ctx context.Context) (*sql.Tx, error) {
+	if err := q.usable(); err != nil {
+		return nil, err
+	}
+	tx, err := q.rdb.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, q.fail(fmt.Errorf("crawlqueue: peek: %w", err))
+	}
+	return tx, nil
+}
+
+// PlanBatch describes the batch PeekBatch would return, without reading any
+// payload. It uses one short read transaction.
+func (q *Queue) PlanBatch(ctx context.Context, maxRecords int, maxBytes int64) (Plan, error) {
+	if maxRecords <= 0 {
+		return Plan{}, q.usable()
+	}
+	tx, err := q.readTx(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	return q.planTx(ctx, tx, maxRecords, maxBytes)
+}
+
+// Fetch loads the records of a plan returned by PlanBatch. Only the sender
+// removes records and appends only add newer ones, so a plan stays valid until
+// the sender acts on it.
+func (q *Queue) Fetch(ctx context.Context, p Plan) ([]Item, error) {
+	tx, err := q.readTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	items, err := q.fetchTx(ctx, tx, p)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) != p.Count {
+		return nil, fmt.Errorf("crawlqueue: the planned batch changed (%d of %d records found)", len(items), p.Count)
+	}
+	return items, nil
+}
+
+// PeekBatch is PlanBatch and Fetch in one read transaction (one snapshot).
+func (q *Queue) PeekBatch(ctx context.Context, maxRecords int, maxBytes int64) (Batch, error) {
+	if maxRecords <= 0 {
+		return Batch{}, q.usable()
+	}
+	tx, err := q.readTx(ctx)
+	if err != nil {
+		return Batch{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	p, err := q.planTx(ctx, tx, maxRecords, maxBytes)
+	if err != nil || p.Count == 0 {
+		return Batch{}, err
+	}
+	items, err := q.fetchTx(ctx, tx, p)
+	if err != nil {
+		return Batch{}, err
+	}
+	return Batch{Items: items, Bytes: p.Bytes, Stop: p.Stop}, nil
+}
+
+// Peek returns the oldest records (FIFO by id): at most maxRecords and at
+// most maxBytes of payload, but always at least one record when the queue is
+// not empty (so an oversized record cannot wedge the head). It uses one short
+// read transaction and never holds it across other work.
+func (q *Queue) Peek(ctx context.Context, maxRecords int, maxBytes int64) ([]Item, error) {
+	b, err := q.PeekBatch(ctx, maxRecords, maxBytes)
+	return b.Items, err
 }
 
 // Stats returns a snapshot of the counters.

@@ -59,6 +59,23 @@ func ValidateIngestURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// IdleConnTimeout is how long the default transport keeps an idle connection.
+// It must stay below the ingest server's idle timeout (120 s) so that the
+// client, not the server, closes an idle connection: no reconnect storms.
+const IdleConnTimeout = 90 * time.Second
+
+// defaultTransport is the transport of a client built without one. It sets no
+// TLSClientConfig and no custom dialer, so Go negotiates HTTP/2 over TLS
+// (ALPN) by itself; a plain http:// URL (loopback only) uses HTTP/1.1 keep-alive.
+func defaultTransport() *http.Transport {
+	return &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     IdleConnTimeout,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+}
+
 // Client talks to the ingest HTTP API.
 type Client struct {
 	base  *url.URL
@@ -73,12 +90,7 @@ func NewClient(rawURL, token string, httpClient *http.Client) (*Client, error) {
 		return nil, err
 	}
 	if httpClient == nil {
-		httpClient = &http.Client{Transport: &http.Transport{
-			Proxy:               http.ProxyFromEnvironment,
-			MaxIdleConnsPerHost: 2,
-			IdleConnTimeout:     90 * time.Second,
-			TLSHandshakeTimeout: 10 * time.Second,
-		},
+		httpClient = &http.Client{Transport: defaultTransport(),
 			// A redirect is never followed: the bearer token must only go to
 			// the configured URL. A 3xx surfaces as an ambiguous status.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

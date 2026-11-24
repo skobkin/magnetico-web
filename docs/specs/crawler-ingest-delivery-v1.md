@@ -285,6 +285,29 @@ post-release).
 Timeouts: exists 10 s, submit 60 s. Backoff 1 s → 60 s with full jitter. A lost 202 after a durable
 commit is resolved by resending (`ON CONFLICT DO NOTHING`).
 
+**Batching and transport (client).** The crawler is a background bulk deliverer, tuned for fewer requests
+rather than per-record latency; the durable-delivery guarantees above are unchanged.
+
+- *Existence precheck:* a batch is sent when it holds **1,024** results (the server maximum; 1,024 hashes
+  are ≈ 44 KiB of JSON, below the 64 KiB body limit, and the response stays below the 64 KiB the client
+  reads) or **1 s** after its first result, whichever is first; an empty batch is never sent. The linger is
+  a monotonic in-process timer.
+- *Metadata submission:* time-based batching with early dispatch. The oldest queued record waits at most
+  **1 s** (`SendLinger`) for company; a batch is sent **at once** when it cannot grow: it holds 256
+  records (a hard protocol limit, not a batching target), or the *next* queued record would not fit in the
+  8 MiB budget (however small the batch still is), or the first record alone is at least 8 MiB (a
+  singleton, never split). During backlog recovery full batches follow each other back to back with one
+  request in flight. In steady state this is about one request per second per endpoint. An append no
+  longer sends immediately. The linger is armed once per oldest record on the monotonic clock; because
+  `EnqueuedAt` is persisted wall-clock time, its age is clamped to `[0, SendLinger]`, so no clock step
+  can make a record wait longer than `SendLinger`.
+- *Shutdown:* a pending linger is cut short and one last dispatch is attempted within the existing grace
+  period; the rows stay queued if it fails.
+- *Connections:* bodies are drained and closed, so consecutive requests reuse one connection; the client
+  closes an idle connection after 90 s, before the server's 120 s idle timeout. Over TLS the default
+  transport negotiates HTTP/2 automatically (ALPN); plain `http://` (loopback only) uses HTTP/1.1
+  keep-alive. Cleartext HTTP/2 is not used (see the Task 09 report for the measurement).
+
 ### 5.5 Server limits
 
 `ReadHeaderTimeout` 10 s, `ReadTimeout`/`WriteTimeout` 60 s, `IdleTimeout` 120 s,

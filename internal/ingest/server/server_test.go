@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/internal/crawler"
 	"github.com/skobkin/magnetico-web/internal/ingest/cache"
 	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
@@ -689,5 +690,14 @@ func TestAuthStorageFailureIs503RetryableNeverUnauthorized(t *testing.T) {
 				t.Fatalf("counters = %+v", c)
 			}
 		})
+	}
+}
+
+// TestIdleTimeoutsDoNotCauseReconnectStorms: the crawler's default transport
+// closes an idle connection before the ingest server does, so a connection that
+// is reused at about one request per second never meets a server-side close.
+func TestIdleTimeoutsDoNotCauseReconnectStorms(t *testing.T) {
+	if crawler.IdleConnTimeout >= idleTimeout {
+		t.Fatalf("client idle timeout %v must be below the server's %v", crawler.IdleConnTimeout, idleTimeout)
 	}
 }

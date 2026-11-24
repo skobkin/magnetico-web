@@ -24,6 +24,7 @@ Normative design: [`docs/specs/crawler-ingest-delivery-v1.md`](specs/crawler-ing
 - The crawler **initiates every connection to the main server**; the main server never connects to the crawler, and PostgreSQL is **never** exposed to the crawler machine.
 - Delivery is at-least-once and idempotent by infohash. A `202` means the batch is durably committed in the PostgreSQL *queue*; a single consumer inside `ingest` then stores it with the production persistence code.
 - If ingest, Traefik or the network is down, records stay in the crawler's SQLite queue (up to `--queue-max-bytes`) and are sent when delivery works again.
+- Delivery is batched for throughput, not latency: existence checks go out when 1,024 hashes are waiting or 1 s after the first one, and metadata goes out in time-based batches (the oldest record waits at most 1 s; a batch is sent at once when it holds 256 records or the next record would not fit in 8 MiB). Expect about one request per second per endpoint, over one reused connection (HTTP/2 over TLS).
 - The ingest API has exactly two routes, both `POST`, both requiring `Authorization: Bearer <token>`: `/api/ingest/v1/torrents/exists` (existence pre-check, at most 1,024 hashes, 64 KiB body) and `/api/ingest/v1/torrents` (at most 256 records, **17 MiB** body). There is no health endpoint (§7 shows how to check the service).
 
 ## 2. Prepare the main server
@@ -246,7 +247,7 @@ How to read the three lists:
 
 ## 8. Upgrades and token rotation
 
-Upgrade by pinning the next release in the image reference, `docker compose pull`, `docker compose up -d`. Deploy ingest first when a release changes the ingest API (check `UPGRADE.md`), then the crawlers; a newer crawler that the server rejects stops quarantining after a run of consecutive rejections and keeps the records (`guard_trips` in the summary). For token rotation see §3.
+Upgrade by pinning the next release in the image reference, `docker compose pull`, `docker compose up -d`. Deploy ingest first when a release changes the ingest API (check `UPGRADE.md`), then the crawlers; a newer crawler that the server rejects stops quarantining after a run of consecutive rejections and keeps the records (`guard_trips` in the summary). For token rotation (`magnetico ingest crawler rotate-token`, effective on a running ingest within 60 seconds) see §3.
 
 ## 9. Troubleshooting
 

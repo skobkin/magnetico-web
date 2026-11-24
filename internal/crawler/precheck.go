@@ -11,9 +11,9 @@ import (
 
 // Precheck parameters.
 const (
-	PrecheckBuffer   = 4096 // fixed capacity of the DHT hand-off channel
-	PrecheckBatch    = 256  // hashes per exists request (server maximum is 1024)
-	PrecheckLinger   = 100 * time.Millisecond
+	PrecheckBuffer   = 4096        // fixed capacity of the DHT hand-off channel
+	PrecheckBatch    = 1024        // results per exists request: the server maximum (1,024 hashes, ≈ 45 KiB of JSON)
+	PrecheckLinger   = time.Second // how long the first result of a batch waits for company
 	precheckPauseMin = time.Second
 	precheckPauseMax = time.Minute
 )
@@ -44,6 +44,9 @@ type Prechecker struct {
 	Logf     func(format string, args ...any)
 
 	in chan dht.Result
+
+	// Linger overrides PrecheckLinger (tests).
+	Linger time.Duration
 
 	// Test seams.
 	Now    func() time.Time
@@ -95,7 +98,9 @@ func (p *Prechecker) Run(ctx context.Context) {
 		case first = <-p.in:
 		}
 		batch := []dht.Result{first}
-		linger := time.NewTimer(PrecheckLinger)
+		// The linger is a monotonic in-process timer started at the first result:
+		// no wall clock is involved, so a clock step cannot lengthen it.
+		linger := time.NewTimer(p.lingerFor())
 	gather:
 		for len(batch) < PrecheckBatch {
 			select {
@@ -111,6 +116,13 @@ func (p *Prechecker) Run(ctx context.Context) {
 		linger.Stop()
 		p.process(ctx, batch)
 	}
+}
+
+func (p *Prechecker) lingerFor() time.Duration {
+	if p.Linger > 0 {
+		return p.Linger
+	}
+	return PrecheckLinger
 }
 
 // process classifies one batch and admits what is not already stored.

@@ -11,8 +11,12 @@ import (
 
 // Sender limits and timings (spec §5.4).
 const (
-	SendMaxRecords    = 256
-	SendMaxBytes      = 8 << 20
+	SendMaxRecords = 256 // hard protocol limit, not a batching target
+	SendMaxBytes   = 8 << 20
+	// SendLinger is how long the oldest queued record waits for company before
+	// a partial batch is sent. A batch that cannot grow (the record cap, the next
+	// record would not fit, an oversized head) is sent at once.
+	SendLinger        = time.Second
 	UnrecognisedPause = 60 * time.Second
 	UnauthorizedPause = 60 * time.Second
 	BackoffMin        = time.Second
@@ -26,7 +30,8 @@ const (
 
 // SendQueue is the part of crawlqueue.Queue the sender uses.
 type SendQueue interface {
-	Peek(ctx context.Context, maxRecords int, maxBytes int64) ([]crawlqueue.Item, error)
+	PlanBatch(ctx context.Context, maxRecords int, maxBytes int64) (crawlqueue.Plan, error)
+	Fetch(ctx context.Context, p crawlqueue.Plan) ([]crawlqueue.Item, error)
 	Ack(ctx context.Context, ids []int64) error
 	Quarantine(ctx context.Context, ids []int64, reason string, httpStatus int) error
 }
@@ -46,9 +51,13 @@ type Sender struct {
 	Counters *Counters
 	Logf     func(format string, args ...any)
 
+	// Linger overrides SendLinger (tests).
+	Linger time.Duration
+
 	// Test seams.
 	Sleep  func(ctx context.Context, d time.Duration) bool
 	Jitter func(max time.Duration) time.Duration
+	Now    func() time.Time // wall clock, for the age of the oldest record
 
 	wake chan struct{}
 
@@ -142,8 +151,15 @@ func (s *Sender) Run(ctx context.Context, grace time.Duration) {
 	}()
 
 	failures := 0
-	for ctx.Err() == nil {
-		items, err := s.Queue.Peek(reqCtx, SendMaxRecords, SendMaxBytes)
+	var linger lingerState
+	for {
+		if ctx.Err() != nil {
+			// Shutdown cuts a pending linger short: one last dispatch within the
+			// existing grace period; the rows stay queued if it fails.
+			s.finalDispatch(reqCtx)
+			return
+		}
+		plan, err := s.Queue.PlanBatch(reqCtx, SendMaxRecords, SendMaxBytes)
 		if err != nil {
 			if ctx.Err() == nil {
 				s.throttledLog("peek", "send: cannot read the local queue: %v", err)
@@ -153,12 +169,37 @@ func (s *Sender) Run(ctx context.Context, grace time.Duration) {
 			}
 			continue
 		}
-		if len(items) == 0 {
+		if plan.Count == 0 {
+			linger.reset()
 			select {
 			case <-ctx.Done():
 				return
 			case <-s.wake:
 			case <-time.After(idlePollEvery):
+			}
+			continue
+		}
+		// A batch that can still grow waits for its linger, counted from the
+		// oldest record; a wake-up (more records) re-evaluates it, so a batch
+		// that just filled up goes at once.
+		dispatch, wait := linger.decide(plan, s.lingerFor(), s.wallNow(), time.Now())
+		if !dispatch {
+			t := time.NewTimer(wait)
+			select {
+			case <-t.C:
+			case <-s.wake:
+			case <-ctx.Done():
+			}
+			t.Stop()
+			continue
+		}
+		items, err := s.Queue.Fetch(reqCtx, plan)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.throttledLog("peek", "send: cannot read the local queue: %v", err)
+				if !s.sleep(ctx, time.Second) {
+					return
+				}
 			}
 			continue
 		}
@@ -187,6 +228,65 @@ func (s *Sender) Run(ctx context.Context, grace time.Duration) {
 			return
 		}
 	}
+}
+
+// finalDispatch sends at most one batch of what is still queued, ignoring the
+// outcome: a failure leaves the rows queued for the next start.
+func (s *Sender) finalDispatch(reqCtx context.Context) {
+	plan, err := s.Queue.PlanBatch(reqCtx, SendMaxRecords, SendMaxBytes)
+	if err != nil || plan.Count == 0 {
+		return
+	}
+	if items, err := s.Queue.Fetch(reqCtx, plan); err == nil {
+		s.deliver(reqCtx, items)
+	}
+}
+
+func (s *Sender) lingerFor() time.Duration {
+	if s.Linger > 0 {
+		return s.Linger
+	}
+	return SendLinger
+}
+
+func (s *Sender) wallNow() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// lingerState decides when a batch that can still grow is sent. The linger of
+// the oldest queued record is armed once per head record on the monotonic
+// clock, so no wall-clock adjustment (EnqueuedAt is persisted wall time) can
+// make it wait longer than the linger.
+type lingerState struct {
+	set      bool
+	headID   int64
+	deadline time.Time // monotonic
+}
+
+func (l *lingerState) reset() { l.set = false }
+
+// decide reports whether to dispatch the planned batch now; otherwise how long
+// to wait before looking again. wall is the wall clock (for the age of the
+// head), mono a time with a monotonic reading (for the deadline).
+func (l *lingerState) decide(p crawlqueue.Plan, linger time.Duration, wall, mono time.Time) (dispatch bool, wait time.Duration) {
+	if p.Count == 0 {
+		l.reset()
+		return false, 0
+	}
+	if p.Stop != crawlqueue.StopNone {
+		return true, 0 // full, or the next record cannot join, or an oversized singleton
+	}
+	if !l.set || l.headID != p.HeadID {
+		age := min(max(wall.Sub(p.HeadEnqueuedAt), 0), linger) // a clock step cannot make it longer than the linger
+		l.headID, l.set, l.deadline = p.HeadID, true, mono.Add(linger-age)
+	}
+	if rem := l.deadline.Sub(mono); rem > 0 {
+		return false, rem
+	}
+	return true, 0
 }
 
 func payloads(items []crawlqueue.Item) [][]byte {
