@@ -15,6 +15,12 @@
 //  3. initdb/postgres binaries on PATH into a temporary directory.
 //  4. Otherwise every integration test skips with an actionable message.
 //
+// An external server must use trust authentication: tests derive role DSNs
+// without a password, so a password-protected server fails them.
+//
+// Set MAGNETICO_TEST_REQUIRE_POSTGRES=1 (CI does) to fail instead of skip when
+// no server can be obtained.
+//
 // The harness never probes well-known ports or auto-discovers real servers.
 // Each package's test binary bootstraps its own cluster; the per-test
 // database names are globally unique, so concurrent package runs are safe.
@@ -69,7 +75,13 @@ var (
 	clusterErr  error
 )
 
-// IntegrationCluster returns the shared disposable cluster or skips the test.
+// RequireEnv, when set to 1, turns "no disposable PostgreSQL available" from a
+// skip into a failure. CI sets it so that a pipeline cannot go green because
+// every integration test silently skipped.
+const RequireEnv = "MAGNETICO_TEST_REQUIRE_POSTGRES"
+
+// IntegrationCluster returns the shared disposable cluster. When none can be
+// obtained the test skips, or fails when RequireEnv is 1.
 func IntegrationCluster(t *testing.T) *Cluster {
 	t.Helper()
 	clusterOnce.Do(func() {
@@ -79,6 +91,9 @@ func IntegrationCluster(t *testing.T) *Cluster {
 		}
 	})
 	if clusterErr != nil {
+		if os.Getenv(RequireEnv) == "1" {
+			t.Fatalf("PostgreSQL integration harness unavailable although %s=1: %v", RequireEnv, clusterErr)
+		}
 		t.Skipf("PostgreSQL integration harness unavailable: %v", clusterErr)
 	}
 	return cluster
