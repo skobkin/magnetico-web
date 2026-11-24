@@ -165,7 +165,7 @@ func sha256sum(s string) []byte { h := sha256.Sum256([]byte(s)); return h[:] }
 
 func TestConcurrentDisableVersusRequests(t *testing.T) {
 	e := newEnv(t)
-	var disabled, enabled atomic.Bool
+	var disabled, enabling, enabled atomic.Bool
 	var wg sync.WaitGroup
 	var bad atomic.Int64
 	stop := make(chan struct{})
@@ -179,11 +179,11 @@ func TestConcurrentDisableVersusRequests(t *testing.T) {
 					return
 				default:
 				}
-				wasDisabled, wasEnabled := disabled.Load(), enabled.Load()
+				wasDisabled, wasEnabling, wasEnabled := disabled.Load(), enabling.Load(), enabled.Load()
 				r := e.api("/api/v2/torrents?limit=1")
 				// A request that STARTED after Disable returned (and before Enable
 				// began) must fail; one that started after Enable returned must work.
-				if wasDisabled && !wasEnabled && r.Status == 200 && !enabled.Load() {
+				if wasDisabled && !wasEnabling && r.Status == 200 && !enabling.Load() {
 					bad.Add(1)
 				}
 				if wasEnabled && r.Status != 200 {
@@ -198,7 +198,7 @@ func TestConcurrentDisableVersusRequests(t *testing.T) {
 	}
 	disabled.Store(true)
 	time.Sleep(150 * time.Millisecond)
-	enabled.Store(false)
+	enabling.Store(true) // from here a request may legitimately succeed, before Enable returns
 	if err := e.store.Enable(tctx(t), "alice"); err != nil {
 		t.Fatal(err)
 	}

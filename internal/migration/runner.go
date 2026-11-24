@@ -373,6 +373,19 @@ func ImportTorrents(ctx context.Context, in TorrentsInput) error {
 				rc.expected, rc.expected, fmt.Errorf("%w (settled through checkpoint %d)", perr, rc.expected))
 		}
 
+		// A cancelled run can reach this point looking "complete": the source feed
+		// ends on the cancellation and the pipeline may see the closed feed before
+		// it sees the cancelled context. A shortfall together with a cancelled
+		// context is an interruption (the settled prefix is committed and the run
+		// resumes), never a source fault: exit 2, not 1.
+		if runCtx.Err() != nil && rc.scanned != prog.ExpectedTotal {
+			if cause := fatalCause(runCtx); cause != nil {
+				return fatalWithIncident(runCtx, pool, pf.Progress.RunID, "lock",
+					rc.expected, 0, cause)
+			}
+			return ErrInterrupted
+		}
+
 		// Observed orphans may be fewer than the fingerprint's global anti-join
 		// count (windows only see orphans whose torrent_id falls inside the
 		// scanned ID ranges) — but never more: an excess means the source grew
