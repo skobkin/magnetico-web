@@ -93,7 +93,9 @@ There is **no incremental or reverse migration**: torrent import needs an empty 
 
 ### 4.1 Obtain and pin the release
 
-Use the 0.8.0 release binary or image, pinned to the exact version (and digest for images). *No release has been published yet; build the tag yourself until it is.* Run `magnetico --help` and `magnetico migrate --help` once to confirm the subcommands below exist in your build.
+Use the 0.8.0 release binary or image, pinned to the exact version (and digest for images): the native Linux binaries are attached to the Forgejo release, the image is `docker.io/skobkin/magnetico-web` (also `ghcr.io/skobkin/magnetico-web`). *No release has been published yet; build the tag yourself until it is* (`go build -o magnetico ./cmd/magnetico`, or `docker buildx build .`). Run `magnetico --version`, `magnetico --help` and `magnetico migrate --help` once to confirm the version and that the subcommands below exist in your build.
+
+**With the container image**, every command below runs as `docker run --rm <env…> docker.io/skobkin/magnetico-web:0.8.0 <command>`: pass the connection strings as environment variables (`-e MAGNETICO_MIGRATE_DATABASE=…`, `-e MAGNETICO_MIGRATION_SOURCE_DSN=…`), mount a directory owned by `10001:10001` at `/reports` for anything that must outlive the container (`migrate errors export --output /reports/export.jsonl --manifest`, `--report-json /reports/…`), and use `-it` for the interactive password prompt of `web user set-password`. Examples and the shutdown/exit-code notes are in [`container.md`](container.md).
 
 ### 4.2 Create the new database and initialize the schemas
 

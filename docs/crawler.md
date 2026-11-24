@@ -80,14 +80,13 @@ Recommendations:
 - Restrict who can reach it if you can: the crawler's public IP(s) via Traefik's IP allow-list middleware (the name depends on the version: `ipAllowList` in v3, `ipWhiteList` in v2), or a private network or VPN between the machines. The token is the authentication; network restriction is defence in depth. Keep access logs free of the `Authorization` header (Traefik does not log it by default).
 
 <details>
-<summary>Example: ingest and Traefik labels on the main server (Docker Compose, placeholders)</summary>
+<summary>Example: ingest and Traefik labels on the main server (Docker Compose; a complete web + ingest example is in <code>docs/container.md</code>)</summary>
 
 ```yaml
-# docker-compose.ingest.yml — main server. PLACEHOLDER image: no release image has been published yet.
+# docker-compose.ingest.yml — main server (the image runs as 10001:10001 and its entrypoint is `magnetico`)
 services:
   ingest:
-    image: registry.example.org/magnetico:0.8.0     # PLACEHOLDER: pin the release version (or a digest)
-    entrypoint: ["magnetico"]                        # adjust to the published image's entrypoint
+    image: docker.io/skobkin/magnetico-web:0.8.0    # pin the release (and, better, its digest); ghcr.io/skobkin/magnetico-web carries the same digest
     command: ["ingest"]
     restart: unless-stopped
     environment:
@@ -138,14 +137,14 @@ The main server needs inbound TCP 443 (Traefik) only; PostgreSQL stays on the pr
 
 ## 6. The crawler container and its persistent queue
 
-Image: **no release image has been published yet** (the repository has no Dockerfile and the CI publish step is disabled), so every image reference in this guide is a **placeholder**. When the release exists, pin the exact release (`…/magnetico:0.8.0`, or better its digest `@sha256:…`) and pull it explicitly:
+Image: `docker.io/skobkin/magnetico-web` (also `ghcr.io/skobkin/magnetico-web`, the identical digest), one multi-platform image for every subcommand; see [`container.md`](container.md). **No image has been published yet** (the build and publication are configured and verified locally only; `release-engineering.md`), so `0.8.0` in this guide stands for the release you pin. Pin the exact release, or better its digest, and pull it explicitly:
 
 ```bash
-docker pull registry.example.org/magnetico:0.8.0          # PLACEHOLDER reference
-docker image inspect --format '{{index .RepoDigests 0}}' registry.example.org/magnetico:0.8.0   # record the digest
+docker pull docker.io/skobkin/magnetico-web:0.8.0
+docker image inspect --format '{{index .RepoDigests 0}}' docker.io/skobkin/magnetico-web:0.8.0   # record the digest
 ```
 
-Never use `latest`. Check the published image's entrypoint and user, and adapt the Compose example (`entrypoint`, the user the volume must be writable by) to it.
+There is no `latest` tag. The image's entrypoint is `magnetico` (pass the subcommand as the command) and it runs as **`10001:10001`**: a named volume at `/data` is writable out of the box, a **bind mount must be `chown 10001:10001`**. `MAGNETICO_CRAWL_QUEUE_DIR=/data` is the image default.
 
 Settings (environment, which is the recommended way in containers; every setting except the token also has a flag and a YAML key; see `UPGRADE.md`):
 
@@ -161,14 +160,13 @@ Settings (environment, which is the recommended way in containers; every setting
 **The queue volume.** Mount a persistent volume at the queue directory (`/data` below). It must be a **local filesystem that honours `fsync`** (ext4 or xfs; not NFS or SMB). The directory is created `0700`, holds `queue.db` (+ WAL) and a `LOCK` file, and must be writable by the container's user. Provision disk beyond the byte limit: the limit counts payload bytes only, not WAL or index overhead. The crawler's memory use is small (about 30 MiB RSS measured); it needs no `GOMEMLIMIT`.
 
 <details>
-<summary>Example: Docker Compose for the remote crawler (placeholders)</summary>
+<summary>Example: Docker Compose for the remote crawler</summary>
 
 ```yaml
-# docker-compose.crawler.yml — crawler machine. PLACEHOLDER image: no release image has been published yet.
+# docker-compose.crawler.yml — crawler machine
 services:
   crawler:
-    image: registry.example.org/magnetico:0.8.0     # PLACEHOLDER: pin the release version (or a digest)
-    entrypoint: ["magnetico"]                        # adjust to the published image's entrypoint
+    image: docker.io/skobkin/magnetico-web:0.8.0    # pin the release (and, better, its digest)
     command: ["crawl"]
     restart: unless-stopped
     environment:

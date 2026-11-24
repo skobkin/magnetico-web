@@ -1,6 +1,6 @@
 # `magnetico web` — configuration, database and reverse-proxy notes (W1–W9)
 
-Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. The service itself is covered by real-binary tests (see `docs/wip/07J-web-integration-security-report.md`), but **no real reverse proxy (Traefik, Nginx, Caddy) has been exercised yet**: proxy option names and defaults below must be checked against the version you run, and the proxy checks are listed in `docs/wip/rc0-acceptance-checklist.md`. The application is meant to run behind a TLS-terminating reverse proxy; it has no TLS of its own and none is planned.
+Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Running the service from the container image (`docker.io/skobkin/magnetico-web`, user `10001:10001`, the Compose example, the `/healthz` and `/readyz` healthchecks, shutdown and the resource limits) is covered in [`container.md`](container.md). The service itself is covered by real-binary tests (see `docs/wip/07J-web-integration-security-report.md`), but **no real reverse proxy (Traefik, Nginx, Caddy) has been exercised yet**: proxy option names and defaults below must be checked against the version you run, and the proxy checks are listed in `docs/wip/rc0-acceptance-checklist.md`. The application is meant to run behind a TLS-terminating reverse proxy; it has no TLS of its own and none is planned.
 
 ## 1. Configuration
 
