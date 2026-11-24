@@ -1,0 +1,30 @@
+# Skip census of a full 'go test -json -p 3 ./... -count=1' run (Task 08, local, PostgreSQL 17 trust-auth server, MAGNETICO_TEST_REQUIRE_POSTGRES=1)
+# produced by: go run ./ci/skipcensus --allow ci/skip-allowlist.txt
+skip allowed    bencode Fuzz/seed#17: unexpected EOF
+skip allowed    bencode Fuzz/seed#23: 6 unused trailing bytes
+skip allowed    bencode FuzzInterfaceRoundTrip/seed#17: (no reason line found)
+skip allowed    bencode FuzzInterfaceRoundTrip/seed#23: (no reason line found)
+skip allowed    codec TestDumpBenchBlobs: set MAGNETICO_BLOB_DIR to write the benchmark blobs
+skip allowed    internal/crawlqueue TestChildProcess: child process helper
+skip allowed    internal/crawlqueue TestMeasure: set MAGNETICO_CRAWLQUEUE_MEASURE_DIR to run the measurements
+skip allowed    internal/e2e TestE2EIngestMemoryProfile: set MAGNETICO_E2E_PROFILE_DIR to run the ingest memory investigation
+skip allowed    internal/e2e TestE2ELargeRecordQualification: set MAGNETICO_E2E_EDGE_DIR to run the large-record qualification
+skip allowed    internal/e2e TestE2EMultiCrawlerStress: set MAGNETICO_E2E_MULTI_DIR to run the multi-crawler stress qualification
+skip allowed    internal/e2e/cli TestMarkBenchmarkDatabase: set MAGNETICO_BENCH_MARK=1 (with MAGNETICO_BENCH_DSN and the confirmation) to mark a seeded benchmark database
+skip allowed    internal/e2e/cli TestWebDemoServer: explicit: set MAGNETICO_W5_DEMO=<directory>
+skip allowed    internal/ingest/pgqueue TestOpenRefusesFsyncOff: will not change fsync on an external server
+skip allowed    internal/migration/legacy/original TestIdentitySameDatabaseViaSocketAndTCP: cluster has no Unix socket directory (Docker/external server)
+skip allowed    internal/pgtest TestHelperNeedsDB: helper of TestRequirePostgresFailsInsteadOfSkipping
+skip allowed    internal/web/filetree TestColdBuildChild: child of TestColdBuildReport
+skip allowed    internal/web/filetree TestColdBuildReport: expensive: set MAGNETICO_BENCH_LARGE=1
+skip allowed    internal/web/filetree TestMeasureComplexityLimits: explicit measurement: set MAGNETICO_BENCH_LARGE=1
+skip allowed    internal/web/fileview TestMeasureTreeSize: explicit measurement: set MAGNETICO_BENCH_LARGE=1
+skip allowed    internal/web/mail TestSSLCertFileIsHonoured: system roots were already initialised in this process: mail: send failed: tls
+skip allowed    internal/web/torrents TestWarmNavigationAllocations: explicit measurement: set MAGNETICO_BENCH_LARGE=1
+skip allowed    internal/web/ui TestFrontendSelfTestsInBrowser: explicit: set MAGNETICO_TEST_BROWSER=<chromium binary>
+skip allowed    metadata TestHostileNestingChild: child of TestHostileNesting
+skip allowed    metadata TestHostilePeerChild: child of TestHostilePeerInput
+skip allowed    metainfo Fuzz/seed#9: 1 unused trailing bytes
+skip allowed    persistence TestMeasureSearchPlans: set MAGNETICO_MEASURE=1 to run the S1 measurements
+skip allowed    persistence TestMeasureTOASTIdentityAndHeader: set MAGNETICO_MEASURE=1 to run the S1 measurements
+skipcensus: 2946 passed, 0 failed, 27 skipped (0 unexpected)

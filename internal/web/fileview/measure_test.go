@@ -15,7 +15,7 @@ import (
 )
 
 // TestMeasureTreeSize is the 07F threshold measurement (explicit:
-// MAGNETICO_BENCH_LARGE=1; MAGNETICO_W5_OUT=<file> also writes the table). For
+// MAGNETICO_BENCH_LARGE=1; MAGNETICO_TREE_SIZE_OUT=<file> also writes the table). For
 // each shape it records the exact full-tree JSON size, the serialization
 // time and allocations, the declared payload length of the stored blob, the
 // cheap Estimate and the ratio actual/estimate, to calibrate the pre-check
@@ -89,7 +89,7 @@ func TestMeasureTreeSize(t *testing.T) {
 			best.Round(time.Microsecond), alloc.Mallocs)
 	}
 	t.Log("\n" + out.String())
-	if p := os.Getenv("MAGNETICO_W5_OUT"); p != "" {
+	if p := os.Getenv("MAGNETICO_TREE_SIZE_OUT"); p != "" {
 		if err := os.WriteFile(p, []byte(out.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}

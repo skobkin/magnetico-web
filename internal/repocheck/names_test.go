@@ -72,7 +72,7 @@ func loadMapping(t *testing.T) map[string]mappingRow {
 }
 
 var (
-	envToken   = regexp.MustCompile(`MAGNETICO_W9_[A-Z0-9_]+`)
+	envToken   = regexp.MustCompile(`MAGNETICO_W[0-9]_[A-Z0-9_]+`)
 	testToken  = regexp.MustCompile(`\bTestW9[A-Za-z0-9]*`)
 	tagToken   = regexp.MustCompile(`\bw9diag\b`)
 	rootRun    = regexp.MustCompile(`go test\b[^\n` + "`" + `]*\s\.(\s|$)[^\n` + "`" + `]*`)

@@ -13,7 +13,7 @@ import (
 )
 
 // TestMeasureComplexityLimits justifies DefaultLimits (explicit:
-// MAGNETICO_BENCH_LARGE=1; MAGNETICO_W5_OUT2=<file> also writes the table). It
+// MAGNETICO_BENCH_LARGE=1; MAGNETICO_INDEX_LIMITS_OUT=<file> also writes the table). It
 // builds the worst codec-valid hierarchies that stay inside the limits and
 // records the index size, build time and allocation, then the cost of
 // rejecting hierarchies just beyond them.
@@ -90,7 +90,7 @@ func TestMeasureComplexityLimits(t *testing.T) {
 		a = nil
 	}
 	t.Log("\n" + out.String())
-	if p := os.Getenv("MAGNETICO_W5_OUT2"); p != "" {
+	if p := os.Getenv("MAGNETICO_INDEX_LIMITS_OUT"); p != "" {
 		if err := os.WriteFile(p, []byte(out.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}

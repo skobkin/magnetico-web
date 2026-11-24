@@ -14,14 +14,14 @@ import (
 
 // TestWebDemoServer serves a real web binary over disposable PostgreSQL with
 // synthetic torrents for manual and headless-browser review of the UI. It is
-// explicit: MAGNETICO_W5_DEMO=<directory>. The test writes the base URL to
+// explicit: MAGNETICO_DEMO_DIR=<directory>. The test writes the base URL to
 // <directory>/addr, then runs until <directory>/stop exists (or three hours
 // pass). Sign in as alice / binary-browse-password-1. No network activity
 // beyond the loopback listener; nothing real is stored.
 func TestWebDemoServer(t *testing.T) {
-	dir := os.Getenv("MAGNETICO_W5_DEMO")
+	dir := os.Getenv("MAGNETICO_DEMO_DIR")
 	if dir == "" {
-		t.Skip("explicit: set MAGNETICO_W5_DEMO=<directory>")
+		t.Skip("explicit: set MAGNETICO_DEMO_DIR=<directory>")
 	}
 	w, _, dsn := webBinaryFixture(t)
 

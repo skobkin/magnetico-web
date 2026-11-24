@@ -40,7 +40,7 @@ mag() { docker run --rm $PLAT_FLAG --network none --read-only --cap-drop ALL --s
 sh_in() { docker run --rm $PLAT_FLAG --network none --entrypoint /bin/sh "$IMAGE" -c "$1"; }
 
 cleanup() {
-	docker rm -f "$RUN_ID-pg" "$RUN_ID-web" "$RUN_ID-ingest" >/dev/null 2>&1
+	docker rm -fv "$RUN_ID-pg" "$RUN_ID-web" "$RUN_ID-ingest" >/dev/null 2>&1
 	docker network rm "$NET" >/dev/null 2>&1
 	docker volume rm "$RUN_ID-data" "$RUN_ID-data2" >/dev/null 2>&1
 	if [ -n "${BINDDIR:-}" ]; then

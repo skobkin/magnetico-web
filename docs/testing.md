@@ -28,6 +28,9 @@ Persisted benchmark-dataset identifiers were deliberately **not** renamed, so da
 | env | `MAGNETICO_W9_TAGS` | `MAGNETICO_BENCH_TAGS` |  |
 | env | `MAGNETICO_W9_WEB_GOMEMLIMIT` | `MAGNETICO_BENCH_WEB_GOMEMLIMIT` |  |
 | env | `MAGNETICO_W9_WEB_MEM` | `MAGNETICO_BENCH_WEB_MEM` |  |
+| env | `MAGNETICO_W5_DEMO` | `MAGNETICO_DEMO_DIR` | `TestWebDemoServer` (`./internal/e2e/cli`) |
+| env | `MAGNETICO_W5_OUT` | `MAGNETICO_TREE_SIZE_OUT` | `TestMeasureTreeSize` (`./internal/web/fileview`) |
+| env | `MAGNETICO_W5_OUT2` | `MAGNETICO_INDEX_LIMITS_OUT` | `TestMeasureComplexityLimits` (`./internal/web/filetree`) |
 | env | `MAGNETICO_W9_DIAG_ADDR` | `MAGNETICO_DIAG_ADDR` | diagnostic build only (see `diag` below); not in the list scanned from reports, kept for completeness |
 | test | `TestW9AccountStateAndCredentialLifecycle` | `TestAccountStateAndCredentialLifecycle` | `./internal/e2e/cli` |
 | test | `TestW9AdministratorHasNoExtraWebCapability` | `TestAdministratorHasNoExtraWebCapability` | `./internal/e2e/cli` |
