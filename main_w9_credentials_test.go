@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -420,5 +421,89 @@ func TestW9SessionExpiryIdleAndRemember(t *testing.T) {
 	// Expired rows are not usable even before the purger runs, and never revive.
 	if valid(remember) || valid(ordinary) {
 		t.Fatal("an expired session came back")
+	}
+}
+
+// --- authentication failures are indistinguishable ---
+
+// An unknown name, a wrong password, an account that has no password yet, one
+// whose stored hash format is unsupported ("needs reset") and a disabled one
+// all fail with the same status and the same page, and none of them gets a
+// session; the failures also share one rate-limit bucket per address.
+func TestW9AuthenticationFailuresAreIndistinguishable(t *testing.T) {
+	s := newW9Sec(t, trustLoopbackProxy)
+	s.uniqueClients = true
+	for _, name := range []string{"nopass", "oldhash", "gone"} {
+		if out, errOut, code := runWebAdminBinary(t, s.bin, s.dsn, "", nil, "user", "add", name); code != 0 {
+			t.Fatalf("user add %s: %d %s%s", name, code, out, errOut)
+		}
+	}
+	// An unsupported legacy format: a hash family the verifier does not support
+	// (recognising a prefix is not support).
+	sqlExec(t, s.dsn, `UPDATE magnetico_web.users SET password_hash = '$1$w9salt$abcdefghijklmnopqrstuv' WHERE username = 'oldhash'`)
+	s.addUser("gone2", "w9-gone-password-123", "")
+	if out, errOut, code := runWebAdminBinary(t, s.bin, s.dsn, "", nil, "user", "disable", "gone2"); code != 0 {
+		t.Fatalf("disable: %d %s%s", code, out, errOut)
+	}
+	// `web user list` tells the operator which accounts need a reset.
+	if list, _, _ := runWebAdminBinary(t, s.bin, s.dsn, "", nil, "user", "list"); !strings.Contains(list, "oldhash") {
+		t.Fatalf("user list:\n%s", list)
+	}
+
+	type shot struct {
+		status int
+		body   string
+		hdr    string
+	}
+	csrfValue := regexp.MustCompile(`name="csrf_token" value="[^"]*"`)
+	try := func(user, pw string) shot {
+		b := newBrowser(t, s.web.addr)
+		b.get("/login", "X-Forwarded-For", fmt.Sprintf("10.9.%d.1", len(user)))
+		resp := b.post("/login", url.Values{"username": {user}, "password": {pw}, "csrf_token": {b.token()}}, "X-Forwarded-For", fmt.Sprintf("10.9.%d.1", len(user)))
+		if cookies := resp.Header["Set-Cookie"]; len(cookies) > 0 {
+			for _, c := range cookies {
+				if strings.Contains(c, "session") && !strings.Contains(c, "Max-Age=0") && !strings.Contains(c, "01 Jan 1970") {
+					t.Errorf("%s: a failed login set a session cookie: %s", user, c)
+				}
+			}
+		}
+		return shot{resp.StatusCode, csrfValue.ReplaceAllString(b.body, ""), resp.Header.Get("Cache-Control")}
+	}
+	base := try("no-such-user-xyz", "whatever-password-1")
+	if base.status == 303 || base.status >= 500 {
+		t.Fatalf("baseline failure: %d", base.status)
+	}
+	for name, got := range map[string]shot{
+		"wrong password":      try("alice", "not-the-password-xx"),
+		"no password yet":     try("nopass", "any-password-here-1"),
+		"unsupported hash":    try("oldhash", "any-password-here-2"),
+		"disabled (correct)":  try("gone2", "w9-gone-password-123"),
+		"empty password":      try("alice", ""),
+		"unknown, long name":  try(strings.Repeat("n", 24), "x"),
+		"case-different name": try("ALICE", secUserPW), // names are case sensitive
+	} {
+		// The page may echo the submitted username (a form re-render); compare the
+		// shape with that value removed.
+		want := base
+		if got.status != want.status || got.hdr != want.hdr {
+			t.Errorf("%s: status %d / Cache-Control %q, want %d / %q", name, got.status, got.hdr, want.status, want.hdr)
+		}
+		norm := func(s string) string {
+			return regexp.MustCompile(`value="[^"]*"`).ReplaceAllString(s, `value=""`)
+		}
+		if norm(got.body) != norm(want.body) {
+			t.Errorf("%s: the failure page differs from the unknown-user page", name)
+		}
+	}
+	// The correct password of a disabled account never signs in, even after the
+	// answer above; enabling it does.
+	if resp := newBrowser(t, s.web.addr).login("gone2", "w9-gone-password-123"); resp.StatusCode == 303 {
+		t.Fatal("a disabled account signed in")
+	}
+	if out, errOut, code := runWebAdminBinary(t, s.bin, s.dsn, "", nil, "user", "enable", "gone2"); code != 0 {
+		t.Fatalf("enable: %d %s%s", code, out, errOut)
+	}
+	if resp := newBrowser(t, s.web.addr).login("gone2", "w9-gone-password-123"); resp.StatusCode != 303 {
+		t.Fatalf("re-enabled account: %d", resp.StatusCode)
 	}
 }
