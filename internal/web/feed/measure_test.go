@@ -41,7 +41,7 @@ func TestMeasureFeedGeneration(t *testing.T) {
 	const n = 50
 	for i := 0; i < n; i++ {
 		s := time.Now()
-		if _, err := render(rows, urls, e.srvPublicBase(), V2Path, time.Now()); err != nil {
+		if _, err := render(rows, urls, e.srvPublicBase(), V2Path, false, time.Now()); err != nil {
 			t.Fatal(err)
 		}
 		sum += time.Since(s)
@@ -59,7 +59,7 @@ func BenchmarkRenderThousandItems(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := render(rows, urls, base, V2Path, time.Unix(1_800_000_000, 0)); err != nil {
+		if _, err := render(rows, urls, base, V2Path, false, time.Unix(1_800_000_000, 0)); err != nil {
 			b.Fatal(err)
 		}
 	}

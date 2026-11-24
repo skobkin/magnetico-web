@@ -23,7 +23,10 @@ package main
 // Disposable PostgreSQL only; synthetic accounts; loopback only.
 
 import (
+	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/netip"
@@ -33,6 +36,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 	"github.com/skobkin/magnetico-web/opflags"
 )
@@ -441,4 +445,176 @@ func TestW9AdministratorHasNoExtraWebCapability(t *testing.T) {
 			t.Errorf("admin GET %s: 200", p)
 		}
 	}
+}
+
+// --- untrusted torrent names in every output context ---
+
+// A torrent name is attacker-controlled. Whatever it holds, the HTML pages
+// (text, title and attribute contexts), the JSON API and the RSS XML carry it
+// without letting it become markup, and each representation keeps its own
+// contract: HTML shows control and bidi characters as visible markers, JSON is
+// lossless, XML keeps every character XML 1.0 allows.
+func TestW9HostileTorrentNamesRenderSafely(t *testing.T) {
+	s := newW9Sec(t, nil)
+	b := s.login("alice", secUserPW)
+	api := b.mint("api")
+	rssTok := b.mint("rss")
+
+	names := []string{
+		"</title><script>window.__pwn=1</script>",
+		"\"><img src=x onerror=window.__pwn=1>",
+		"' onmouseover='window.__pwn=1' x='",
+		"javascript:window.__pwn=1",
+		"<svg/onload=window.__pwn=1><iframe srcdoc='<script>1</script>'></iframe>",
+		"{{7*7}} ${7*7} <%= 7*7 %> {% raw %}",
+		"double &amp;lt; encoded &lt;b&gt; &#60;i&#62;",
+		"percent %00 %3Cscript%3E \\u003cscript\\u003e",
+		"ends with a backslash \\",
+		"line\u2028separator\u2029paragraph",
+		"bidi \u202eexe.txt and \u2066isolate\u2069",
+		"control \x01\x07\x1b[31m end",
+		strings.Repeat("long name ", 90),
+	}
+	benign := seedBrowse(t, s.dsn, "benign name", []codec.File{{Path: "a", Size: 1}})
+	ids := make([]int, len(names))
+	for i, n := range names {
+		ids[i] = seedBrowse(t, s.dsn, n, []codec.File{{Path: "a/b", Size: int64(i + 1)}})
+	}
+
+	// Escaped, a name shows up as harmless text ("onerror=" inside an escaped
+	// "&lt;img …&gt;" is just characters), so the signals of a breakout are
+	// unescaped tag openers (their count must equal a benign page's) and raw
+	// quote-plus-handler or javascript: URL sequences (which must not exist).
+	markers := []string{"<script", "<img", "<svg", "<iframe", "<a href=\"javascript"}
+	absent := []string{"href=\"javascript:", "src=\"javascript:", "action=\"javascript:", "formaction=\"javascript:", "href='javascript:", "' onmouseover", "\" onmouseover", "' onerror", "\" onerror", "' onload", "\" onload", "</title><script"}
+	count := func(page, m string) int { return strings.Count(strings.ToLower(page), m) }
+	b.get(fmt.Sprintf("/torrents/%d", benign))
+	benignDetails := b.body
+	b.get("/torrents?q=benign")
+	benignSearch := b.body
+
+	for i, name := range names {
+		label := fmt.Sprintf("name #%d", i)
+		resp := b.get(fmt.Sprintf("/torrents/%d", ids[i]))
+		if resp.StatusCode != 200 {
+			t.Fatalf("%s: details %d", label, resp.StatusCode)
+		}
+		page := b.body
+		for _, m := range markers {
+			if count(page, m) != count(benignDetails, m) {
+				t.Errorf("%s: the details page contains %q %d times, a benign page %d (the name became markup)", label, m, count(page, m), count(benignDetails, m))
+			}
+		}
+		for _, m := range absent {
+			if count(page, m) != 0 {
+				t.Errorf("%s: the details page contains the breakout sequence %q", label, m)
+			}
+		}
+		// The security policy forbids inline script and eval whatever the markup
+		// (default-src 'self' also governs scripts: there is no script-src override).
+		csp := resp.Header.Get("Content-Security-Policy")
+		if !strings.Contains(csp, "default-src 'self'") || strings.Contains(csp, "script-src") || strings.Contains(csp, "unsafe-inline") || strings.Contains(csp, "unsafe-eval") {
+			t.Errorf("%s: Content-Security-Policy = %q", label, csp)
+		}
+		if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: X-Content-Type-Options = %q", label, resp.Header.Get("X-Content-Type-Options"))
+		}
+		// No raw control, bidi or line-separator character reaches the HTML: the
+		// page shows them as visible markers.
+		for _, r := range page {
+			if r == 0x1b || r == 0x07 || r == 0x01 || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0x2028 || r == 0x2029 {
+				t.Errorf("%s: a raw %U reached the details page", label, r)
+				break
+			}
+		}
+		plain := true
+		for _, r := range name {
+			if r < 0x20 || (r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069) || r == 0x2028 || r == 0x2029 {
+				plain = false
+			}
+		}
+		if plain && !strings.Contains(html.UnescapeString(page), name) {
+			t.Errorf("%s: the name is not displayed as written after one level of HTML decoding", label)
+		}
+
+		// Search results: the same properties, in the list context.
+		b.get("/torrents?q=" + url.QueryEscape(firstWord(name)))
+		for _, m := range markers {
+			if count(b.body, m) != count(benignSearch, m) {
+				t.Errorf("%s: the search page contains %q %d times, a benign page %d", label, m, count(b.body, m), count(benignSearch, m))
+			}
+		}
+		for _, m := range absent {
+			if count(b.body, m) != 0 {
+				t.Errorf("%s: the search page contains the breakout sequence %q", label, m)
+			}
+		}
+	}
+
+	// JSON: valid, and every name comes back exactly.
+	st, hdr, body := s.rawStatus("GET", "/api/v2/torrents?limit=100&sort=name&order=asc", bearerHdr(api))
+	if st != 200 || !json.Valid([]byte(body)) || hdr.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("API list: %d valid=%v nosniff=%q", st, json.Valid([]byte(body)), hdr.Get("X-Content-Type-Options"))
+	}
+	var list struct {
+		Items []struct{ Name string } `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, it := range list.Items {
+		got[it.Name] = true
+	}
+	for i, name := range names {
+		if !got[name] {
+			t.Errorf("name #%d did not come back byte-exact through the JSON API", i)
+		}
+	}
+
+	// XML: well-formed; allowed characters are kept, prohibited ones become U+FFFD.
+	_, _, feed := s.rawStatus("GET", "/api/v2/feeds/latest.rss?feed_token="+rssTok, nil)
+	var doc struct {
+		Channel struct {
+			Items []struct {
+				Title string `xml:"title"`
+			} `xml:"item"`
+		} `xml:"channel"`
+	}
+	if err := xml.Unmarshal([]byte(feed), &doc); err != nil {
+		t.Fatalf("the feed is not well-formed XML: %v", err)
+	}
+	titles := map[string]bool{}
+	for _, it := range doc.Channel.Items {
+		titles[it.Title] = true
+	}
+	for i, name := range names {
+		var want strings.Builder
+		for _, r := range name {
+			if r == 0x9 || r == 0xA || r == 0xD || (r >= 0x20 && r <= 0xD7FF) || (r >= 0xE000 && r <= 0xFFFD) || r >= 0x10000 {
+				want.WriteRune(r)
+			} else {
+				want.WriteRune(0xFFFD)
+			}
+		}
+		if !titles[want.String()] {
+			t.Errorf("name #%d: the feed title is not the XML 1.0 form of the name", i)
+		}
+	}
+}
+
+// firstWord is the first search word of three or more characters of a name.
+func firstWord(name string) string {
+	for _, w := range strings.Fields(name) {
+		if len([]rune(w)) >= 3 {
+			return w
+		}
+	}
+	return "xyz"
+}
+
+// rawStatus is raw returning the pieces.
+func (s *w9Sec) rawStatus(method, path string, hdr map[string]string) (int, http.Header, string) {
+	r := s.raw(method, path, hdr, "")
+	return r.status, r.hdr, r.body
 }

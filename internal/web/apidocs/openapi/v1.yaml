@@ -36,6 +36,10 @@ paths:
         `url` is the magnet URI, `length` the total size in bytes and `type`
         `application/x-bittorrent`.
 
+        The channel carries the legacy `author` and `dc:creator` elements
+        exactly as the old application wrote them (the channel-level `author`
+        is kept only for this deprecated feed; the v2 feed omits it).
+
         **Change from the old application:** `page=1` (the default) now returns
         the newest 1,000 torrents. The old feed skipped them, so on its first
         poll after the upgrade a client may see up to 1,000 recent items it has

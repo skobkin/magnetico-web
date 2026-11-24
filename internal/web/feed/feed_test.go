@@ -40,9 +40,12 @@ func TestStructuralGoldenForBothFeeds(t *testing.T) {
 	e := newEnv(t)
 	id1, id2, id3 := seedGolden(e)
 	tok := e.rssToken()
-	for _, tc := range []struct{ path, self string }{
-		{V1Path + "?api-token=" + tok.Plaintext, V1Path},
-		{V2Path + "?feed_token=" + tok.Plaintext, V2Path},
+	for _, tc := range []struct {
+		path, self string
+		v1         bool
+	}{
+		{V1Path + "?api-token=" + tok.Plaintext, V1Path, true},
+		{V2Path + "?feed_token=" + tok.Plaintext, V2Path, false},
 	} {
 		r := e.do(tc.path, nil)
 		if r.Status != 200 {
@@ -54,12 +57,21 @@ func TestStructuralGoldenForBothFeeds(t *testing.T) {
 		if !strings.HasPrefix(string(r.Body), `<?xml version="1.0" encoding="UTF-8"?>`) {
 			t.Fatalf("no XML declaration:\n%.100s", r.Body)
 		}
-		for _, must := range []string{`<author>Magnetico Web</author>`, `xmlns:dc="http://purl.org/dc/elements/1.1/"`, `<dc:creator>Magnetico Web</dc:creator>`} {
+		for _, must := range []string{`xmlns:dc="http://purl.org/dc/elements/1.1/"`, `<dc:creator>Magnetico Web</dc:creator>`} {
 			if !strings.Contains(string(r.Body), must) {
-				t.Fatalf("%s: legacy author metadata lost, missing %s", tc.path, must)
+				t.Fatalf("%s: creator metadata lost, missing %s", tc.path, must)
 			}
 		}
-		got, want := canon(t, r.Body), canon(t, []byte(golden(t, tc.self, id1, id2, id3)))
+		// The channel-level <author> is not valid RSS 2.0: only the deprecated
+		// v1 feed keeps it, as the legacy generator wrote it.
+		if has := strings.Contains(string(r.Body), `<author>`); has != tc.v1 {
+			t.Fatalf("%s: channel <author> present = %v, want %v", tc.path, has, tc.v1)
+		}
+		wantDoc := golden(t, tc.self, id1, id2, id3)
+		if !tc.v1 {
+			wantDoc = strings.Replace(wantDoc, "<author>Magnetico Web</author>", "", 1)
+		}
+		got, want := canon(t, r.Body), canon(t, []byte(wantDoc))
 		if got != want {
 			t.Fatalf("%s: structure differs\n got: %s\nwant: %s", tc.path, got, want)
 		}
@@ -70,7 +82,9 @@ func TestStructuralGoldenForBothFeeds(t *testing.T) {
 	// Both feeds share the generator: apart from their self link the items are identical.
 	a := e.do(V1Path+"?api-token="+tok.Plaintext, nil)
 	b := e.do(V2Path+"?feed_token="+tok.Plaintext, nil)
-	strip := func(s string) string { return strings.NewReplacer(V1Path, "{SELF}", V2Path, "{SELF}").Replace(s) }
+	strip := func(s string) string {
+		return strings.NewReplacer(V1Path, "{SELF}", V2Path, "{SELF}", "<author>Magnetico Web</author>", "").Replace(s)
+	}
 	if canon(t, []byte(strip(string(a.Body)))) != canon(t, []byte(strip(string(b.Body)))) {
 		t.Fatal("v1 and v2 documents differ beyond the self link")
 	}

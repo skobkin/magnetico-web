@@ -207,7 +207,12 @@ paths:
         Up to 1,000 torrents per page, newest first, in the same item format as
         the deprecated v1 feed (the info hash is the `guid` and `description`,
         `link` and the `enclosure` url are the magnet URI with the configured
-        trackers, `comments` is the details page). Because the token is part of
+        trackers, `comments` is the details page). The channel names its creator
+        with `dc:creator` only; unlike the deprecated v1 feed it has no
+        channel-level `author` element (RSS 2.0 defines `author` for items).
+        Characters that XML 1.0 forbids in a torrent name are written as U+FFFD;
+        every other character, bidirectional formatting characters included, is
+        written unchanged. Because the token is part of
         the URL, the response carries `Referrer-Policy: no-referrer` and
         `Cache-Control: private, no-store`; the server never logs or echoes the
         token. Treat the URL like a password.

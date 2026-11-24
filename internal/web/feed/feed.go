@@ -311,7 +311,7 @@ func (h *Handlers) build(ctx context.Context, p policy, page int, urls []string)
 	if err != nil {
 		return nil, err
 	}
-	return render(rows, urls, h.cfg.PublicBase, p.path, h.now())
+	return render(rows, urls, h.cfg.PublicBase, p.path, p.name == "v1", h.now())
 }
 
 func (h *Handlers) touch(r *http.Request, tokenID int64) {
