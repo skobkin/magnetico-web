@@ -55,6 +55,21 @@ func (o *OpFlags) parseArgs(args []string) (string, error) {
 		if err := o.applyConfig(explicitOptions(parser.Command), command); err != nil {
 			return "", err
 		}
+		if active.Active != nil {
+			if len(rest) > 0 {
+				// Never echo the argument: it could be a secret typed in the wrong place.
+				return "", errors.New("ingest: unexpected extra argument (see --help)")
+			}
+			names := []string{active.Active.Name}
+			for c := active.Active; c.Active != nil; c = c.Active {
+				names = append(names, c.Active.Name)
+			}
+			o.Ingest.Subcommand = joinCommandPath(names...)
+			if err := o.Ingest.checkCrawler(); err != nil {
+				return "", err
+			}
+			return command, nil
+		}
 		if err := o.Ingest.check(); err != nil {
 			return "", err
 		}

@@ -17,7 +17,7 @@ type OpFlags struct {
 	ConfigFilePath string `long:"config-file-path" description:"Configuration YAML file path. If not filled in, it will default to disabled." default:""`
 
 	Crawl   CrawlOptions   `command:"crawl" description:"Run the DHT crawler: precheck, fetch metadata, queue it durably on local disk and deliver it to the ingest service over authenticated HTTP." subcommands-optional:"true"`
-	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer)."`
+	Ingest  IngestOptions  `command:"ingest" description:"Run the authenticated HTTP ingest service (existence lookup and durable record admission into the PostgreSQL queue, plus the single queue consumer). Subcommand crawler is the operator CLI for crawler credentials." subcommands-optional:"true"`
 	Web     WebOptions     `command:"web" description:"Run the authenticated web UI service: torrent search and details, the file browser, accounts and invitations, the v1 legacy RSS feed and the v2 API. Subcommands user and tracker are the operator CLI." subcommands-optional:"true"`
 	Migrate MigrateOptions `command:"migrate" description:"Database schema maintenance."`
 	Dev     DevOptions     `command:"dev" description:"Development helpers. NOT for production databases: seed-torrents writes synthetic torrents into an initialized 0.8.0 database." subcommands-optional:"true"`

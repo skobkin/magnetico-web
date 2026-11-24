@@ -192,10 +192,16 @@ if docker run -d --name "$RUN_ID-pg" --network "$NET" -e POSTGRES_HOST_AUTH_METH
 		WEXIT="$(docker inspect --format '{{.State.ExitCode}}' "$RUN_ID-web" 2>/dev/null)"
 		[ "$WEXIT" = "0" ] && pass "SIGTERM: web exits 0 (graceful shutdown)" || fail "web exited $WEXIT after docker stop"
 		if svc migrate ingest-schema-init >/dev/null 2>&1; then
-			TOK="$(head -c 48 /dev/urandom | base64 | tr -d '\n=+/' | head -c 48)"
+			# Per-crawler credentials live in PostgreSQL: register one through the image's own CLI.
+			# shellcheck disable=SC2086
+			CRAWLER_OUT="$(docker run --rm $PLAT_FLAG --network "$NET" -e "MAGNETICO_INGEST_DATABASE=$DSN" "$IMAGE" ingest crawler add smoke 2>&1)"
+			case "$CRAWLER_OUT" in
+			*"token: mgc_"*) pass "ingest crawler add registers a crawler and prints its token once" ;;
+			*) fail "ingest crawler add failed: $CRAWLER_OUT" ;;
+			esac
 			# shellcheck disable=SC2086
 			docker run -d --name "$RUN_ID-ingest" $PLAT_FLAG --network "$NET" --read-only --cap-drop ALL --security-opt no-new-privileges \
-				-e "MAGNETICO_INGEST_DATABASE=$DSN" -e "MAGNETICO_INGEST_TOKEN=$TOK" -e MAGNETICO_INGEST_LISTEN=0.0.0.0:8080 "$IMAGE" ingest >/dev/null
+				-e "MAGNETICO_INGEST_DATABASE=$DSN" -e MAGNETICO_INGEST_LISTEN=0.0.0.0:8080 "$IMAGE" ingest >/dev/null
 			sleep 4
 			if [ "$(docker inspect --format '{{.State.Running}}' "$RUN_ID-ingest" 2>/dev/null)" = "true" ] && ! docker logs "$RUN_ID-ingest" 2>&1 | grep -qi 'unknown environment variable'; then
 				pass "ingest starts with the image's default environment (MAGNETICO_CRAWL_QUEUE_DIR is tolerated)"

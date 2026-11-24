@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlers"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -38,7 +40,23 @@ func prepareDB(t *testing.T, withIngest bool) string {
 	return dsn
 }
 
+// registerCrawler adds a crawler to the database and returns its token.
+func registerCrawler(t *testing.T, dsn, name string) string {
+	t.Helper()
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	c, err := crawlers.New(pool).Add(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c.Token
+}
+
 type running struct {
+	token  string
 	base   string
 	cancel context.CancelFunc
 	done   chan error
@@ -61,8 +79,13 @@ func (r *running) wait(d time.Duration) (error, bool) {
 
 func startService(t *testing.T, dsn string, mutate func(*Options)) *running {
 	t.Helper()
+	return startServiceWithToken(t, dsn, registerCrawler(t, dsn, "integration-"+pgtest.RandomSuffix()), mutate)
+}
+
+func startServiceWithToken(t *testing.T, dsn, token string, mutate func(*Options)) *running {
+	t.Helper()
 	o := Options{
-		Listen: "127.0.0.1:0", DatabaseURL: dsn, Token: testToken,
+		Listen: "127.0.0.1:0", DatabaseURL: dsn,
 		QueueMaxBytes: 1 << 30, CacheMaxBytes: 1 << 20, Logger: nil,
 	}
 	if mutate != nil {
@@ -75,7 +98,7 @@ func startService(t *testing.T, dsn string, mutate func(*Options)) *running {
 	go func() { done <- Run(ctx, o) }()
 	select {
 	case a := <-ready:
-		r := &running{base: "http://" + a.String() + APIPrefix, cancel: cancel, done: done}
+		r := &running{token: token, base: "http://" + a.String() + APIPrefix, cancel: cancel, done: done}
 		t.Cleanup(func() { cancel(); _, _ = r.wait(60 * time.Second) }) // best-effort drain at cleanup
 		return r
 	case err := <-done:
@@ -90,7 +113,7 @@ func startService(t *testing.T, dsn string, mutate func(*Options)) *running {
 
 func (r *running) post(path, body string) (int, []byte, error) {
 	req, _ := http.NewRequest(http.MethodPost, r.base+path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Authorization", "Bearer "+r.token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
 	if err != nil {
@@ -161,15 +184,102 @@ func TestServiceEndToEnd(t *testing.T) {
 	}
 }
 
-func TestServiceRefusesMissingIngestSchemaAndShortToken(t *testing.T) {
+func TestServiceRefusesAMissingOrIncompatibleIngestSchema(t *testing.T) {
 	dsn := prepareDB(t, false)
-	err := Run(context.Background(), Options{Listen: "127.0.0.1:0", DatabaseURL: dsn, Token: testToken})
+	err := Run(context.Background(), Options{Listen: "127.0.0.1:0", DatabaseURL: dsn})
 	if !errors.Is(err, pgqueue.ErrSchemaMissing) {
 		t.Fatalf("Run without ingest schema: %v, want ErrSchemaMissing", err)
 	}
+	// An older development schema without the crawler registry is refused, not repaired.
 	dsn = prepareDB(t, true)
-	if err := Run(context.Background(), Options{Listen: "127.0.0.1:0", DatabaseURL: dsn, Token: "short"}); err == nil {
-		t.Fatal("Run with a short token must fail")
+	pool, perr := pgxpool.New(context.Background(), dsn)
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if _, perr = pool.Exec(context.Background(), `DROP TABLE magnetico_ingest.crawlers`); perr != nil {
+		t.Fatal(perr)
+	}
+	pool.Close()
+	err = Run(context.Background(), Options{Listen: "127.0.0.1:0", DatabaseURL: dsn})
+	if !errors.Is(err, pgqueue.ErrSchemaInvalid) {
+		t.Fatalf("Run over a schema without crawlers: %v, want ErrSchemaInvalid", err)
+	}
+	if countRows(t, dsn, `SELECT count(*) FROM pg_class WHERE relname = 'crawlers'`) != 0 {
+		t.Fatal("the refused start recreated the crawlers table")
+	}
+}
+
+func TestNoCrawlerRegisteredWarningAtStart(t *testing.T) {
+	dsn := prepareDB(t, true)
+	var logs strings.Builder
+	r := startServiceWithToken(t, dsn, "mgc_"+strings.Repeat("a", 43), func(o *Options) {
+		o.Logger = log.New(&syncWriter{w: &logs}, "", 0)
+	})
+	if st, _, err := r.post("/torrents", records(recJSON(t, 1))); err != nil || st != http.StatusUnauthorized {
+		t.Fatalf("with no crawler registered: %v %d, want 401", err, st)
+	}
+	if !strings.Contains(logs.String(), "no enabled crawler is registered") {
+		t.Fatalf("no warning logged:\n%s", logs.String())
+	}
+	// A crawler added later works without a restart: its digest is not cached.
+	r.token = registerCrawler(t, dsn, "late")
+	if st, b, err := r.post("/torrents", records(recJSON(t, 1))); err != nil || st != http.StatusAccepted {
+		t.Fatalf("after adding a crawler: %v %d %s", err, st, b)
+	}
+}
+
+func TestPersistenceAcrossIngestRestart(t *testing.T) {
+	dsn := prepareDB(t, true)
+	token := registerCrawler(t, dsn, "durable")
+	for i := 0; i < 2; i++ {
+		r := startServiceWithToken(t, dsn, token, nil)
+		if st, b, err := r.post("/torrents", records(recJSON(t, i+1))); err != nil || st != http.StatusAccepted {
+			t.Fatalf("run %d: %v %d %s", i, err, st, b)
+		}
+		r.cancel()
+		if err, done := r.wait(60 * time.Second); !done || err != nil {
+			t.Fatalf("run %d did not stop cleanly: %v %v", i, err, done)
+		}
+	}
+}
+
+func TestServiceRefusesToStartWithoutSelectOnTheRegistry(t *testing.T) {
+	c := pgtest.IntegrationCluster(t)
+	dsn := prepareDB(t, true)
+	role := "ing_" + pgtest.RandomSuffix()
+	pool, err := pgxpool.New(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	for _, q := range []string{
+		`CREATE ROLE ` + pgtest.QuoteIdent(role) + ` LOGIN`,
+		`GRANT USAGE ON SCHEMA magnetico_ingest TO ` + pgtest.QuoteIdent(role),
+		`GRANT USAGE ON SCHEMA magneticod TO ` + pgtest.QuoteIdent(role),
+		`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA magnetico_ingest TO ` + pgtest.QuoteIdent(role),
+		`REVOKE ALL ON magnetico_ingest.crawlers FROM ` + pgtest.QuoteIdent(role),
+		`GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA magneticod TO ` + pgtest.QuoteIdent(role),
+	} {
+		if _, err := pool.Exec(context.Background(), q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		if conn, err := pgx.Connect(ctx, dsn); err == nil {
+			_, _ = conn.Exec(ctx, `DROP OWNED BY `+pgtest.QuoteIdent(role))
+			conn.Close(ctx)
+		}
+		if conn, err := pgx.Connect(ctx, c.AdminDSN); err == nil {
+			_, _ = conn.Exec(ctx, `DROP ROLE IF EXISTS `+pgtest.QuoteIdent(role))
+			conn.Close(ctx)
+		}
+	})
+	u, _ := url.Parse(dsn)
+	u.User = url.User(role)
+	err = Run(context.Background(), Options{Listen: "127.0.0.1:0", DatabaseURL: dsn, QueueDatabaseURL: u.String(), AllowNonDurable: true})
+	if !errors.Is(err, ErrCrawlerRegistry) {
+		t.Fatalf("Run without SELECT on crawlers: %v, want ErrCrawlerRegistry", err)
 	}
 }
 

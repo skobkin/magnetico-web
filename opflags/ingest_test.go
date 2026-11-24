@@ -1,33 +1,68 @@
 package opflags
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
 
 const goodToken = "0123456789abcdef0123456789abcdef"
 
-func TestIngestTokenEnvOnlyAndRequired(t *testing.T) {
+func TestSharedTokenVariableIsRefusedWithAMessage(t *testing.T) {
+	for _, v := range []string{goodToken, "short-secret", ""} {
+		t.Setenv("MAGNETICO_INGEST_TOKEN", v)
+		o := &OpFlags{}
+		_, err := o.parseArgs([]string{"ingest"})
+		if err == nil {
+			t.Fatalf("MAGNETICO_INGEST_TOKEN=%q must be refused (no fallback)", v)
+		}
+		for _, want := range []string{"MAGNETICO_INGEST_TOKEN", "ingest crawler add", "MAGNETICO_CRAWL_INGEST_TOKEN"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q lacks %q", err, want)
+			}
+		}
+		if v != "" && strings.Contains(err.Error(), v) {
+			t.Errorf("the value was echoed: %v", err)
+		}
+	}
+	// Without the variable the service starts with no token at all: there is
+	// no flag, no variable and no option for one.
 	t.Setenv("MAGNETICO_INGEST_TOKEN", "")
-	o := &OpFlags{}
-	if _, err := o.parseArgs([]string{"ingest"}); err == nil || !strings.Contains(err.Error(), "MAGNETICO_INGEST_TOKEN") {
-		t.Fatalf("missing token: %v", err)
+	os.Unsetenv("MAGNETICO_INGEST_TOKEN")
+	if _, err := (&OpFlags{}).parseArgs([]string{"ingest"}); err != nil {
+		t.Fatalf("ingest without a token: %v", err)
 	}
-	t.Setenv("MAGNETICO_INGEST_TOKEN", "short-secret")
-	o = &OpFlags{}
-	if _, err := o.parseArgs([]string{"ingest"}); err == nil || strings.Contains(err.Error(), "short-secret") {
-		t.Fatalf("short token must fail without echoing it: %v", err)
-	}
-	// There is no token flag.
-	t.Setenv("MAGNETICO_INGEST_TOKEN", goodToken)
-	o = &OpFlags{}
-	if _, err := o.parseArgs([]string{"ingest", "--token", goodToken}); err == nil {
+	if _, err := (&OpFlags{}).parseArgs([]string{"ingest", "--token", goodToken}); err == nil {
 		t.Fatal("--token must not exist")
 	}
 }
 
-func TestIngestEnvAndCLIPrecedence(t *testing.T) {
+func TestIngestCrawlerSubcommandsParse(t *testing.T) {
+	for args, want := range map[string]string{
+		"add alpha": "crawler add", "list": "crawler list", "disable alpha": "crawler disable",
+		"enable alpha": "crawler enable", "rotate-token alpha": "crawler rotate-token",
+	} {
+		o := &OpFlags{}
+		cmd, err := o.parseArgs(append([]string{"ingest", "--database", "postgres://u@h/db", "crawler"}, strings.Fields(args)...))
+		if err != nil || cmd != "ingest" || o.Ingest.Subcommand != want {
+			t.Errorf("%s: cmd=%q sub=%q err=%v", args, cmd, o.Ingest.Subcommand, err)
+		}
+	}
+	o := &OpFlags{}
+	if _, err := o.parseArgs([]string{"ingest", "crawler", "add"}); err == nil {
+		t.Error("add without a name must fail")
+	}
+	if _, err := (&OpFlags{}).parseArgs([]string{"ingest", "crawler"}); err == nil {
+		t.Error("bare `ingest crawler` must fail")
+	}
+	// The commands need no service options and the removed variable is still refused.
 	t.Setenv("MAGNETICO_INGEST_TOKEN", goodToken)
+	if _, err := (&OpFlags{}).parseArgs([]string{"ingest", "crawler", "list"}); err == nil {
+		t.Error("the removed variable must be refused for the crawler commands as well")
+	}
+}
+
+func TestIngestEnvAndCLIPrecedence(t *testing.T) {
 	t.Setenv("MAGNETICO_INGEST_LISTEN", "0.0.0.0:9000")
 	t.Setenv("MAGNETICO_INGEST_QUEUE_MAX_BYTES", "12345")
 	t.Setenv("MAGNETICO_INGEST_CACHE_DISABLED", "true")
@@ -36,13 +71,12 @@ func TestIngestEnvAndCLIPrecedence(t *testing.T) {
 	if err != nil || cmd != "ingest" {
 		t.Fatalf("parse: %q %v", cmd, err)
 	}
-	if o.Ingest.Listen != "0.0.0.0:9000" || o.Ingest.QueueMaxBytes != 999 || !o.Ingest.CacheDisabled || o.Ingest.Token != goodToken {
+	if o.Ingest.Listen != "0.0.0.0:9000" || o.Ingest.QueueMaxBytes != 999 || !o.Ingest.CacheDisabled {
 		t.Fatalf("options = %+v", o.Ingest)
 	}
 }
 
 func TestIngestRejectsUnknownEnvAndBadValues(t *testing.T) {
-	t.Setenv("MAGNETICO_INGEST_TOKEN", goodToken)
 	t.Setenv("MAGNETICO_INGEST_BOGUS", "1")
 	if _, err := (&OpFlags{}).parseArgs([]string{"ingest"}); err == nil || !strings.Contains(err.Error(), "MAGNETICO_INGEST_BOGUS") {
 		t.Fatalf("unknown env: %v", err)

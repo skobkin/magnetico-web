@@ -11,7 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/internal/ingest/cache"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlers"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -36,6 +39,11 @@ const (
 	DefaultAbortGrace    = 5 * time.Second
 	DefaultHandlerGrace  = 3 * time.Second
 )
+
+// ErrCrawlerRegistry is returned when the crawler registry cannot be read at
+// start (missing SELECT on magnetico_ingest.crawlers, or the database refuses).
+var ErrCrawlerRegistry = errors.New(
+	"ingest: cannot read magnetico_ingest.crawlers; the ingest role needs SELECT on it (see docs/container.md)")
 
 // ErrShutdownIncomplete is returned by Run when a goroutine using the database
 // pools could not be stopped within its budget. The pools were left open and
@@ -66,7 +74,6 @@ type Options struct {
 	Listen           string
 	DatabaseURL      string // the 0.8.0 store
 	QueueDatabaseURL string // optional least-privilege DSN for magnetico_ingest (default DatabaseURL)
-	Token            string
 
 	QueueMaxBytes   int64
 	CacheMaxBytes   int64
@@ -132,6 +139,33 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}()
 
+	// Authentication reads the crawler registry through its own small pool: at
+	// most MaxActiveLookups queries are ever in flight.
+	authCfg, err := pgxpool.ParseConfig(queueDSN)
+	if err != nil {
+		return fmt.Errorf("%w: %w", persistence.ErrStorageIO, err)
+	}
+	authCfg.MaxConns = crawlerauth.MaxActiveLookups
+	authPool, err := pgxpool.NewWithConfig(ctx, authCfg)
+	if err != nil {
+		return fmt.Errorf("%w: %w", persistence.ErrStorageIO, err)
+	}
+	defer func() {
+		if !abandoned.Load() {
+			authPool.Close()
+		}
+	}()
+	var registered, enabled int64
+	if err := authPool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE enabled) FROM magnetico_ingest.crawlers`).Scan(&registered, &enabled); err != nil {
+		return ErrCrawlerRegistry
+	}
+	if enabled == 0 {
+		lg.Printf("WARNING: no enabled crawler is registered (%d registered); every request is refused with 401 "+
+			"until one is added with `magnetico ingest crawler add <name>`", registered)
+	}
+	auth := crawlerauth.New(crawlers.New(authPool), crawlerauth.Options{Logger: lg})
+
 	if st, err := q.Stats(ctx); err == nil {
 		lg.Printf("ingest queue: %d pending (%d bytes), %d quarantined (%d bytes)",
 			st.QueueRows, st.QueueBytes, st.QuarantineRows, st.QuarantineBytes)
@@ -154,7 +188,7 @@ func Run(ctx context.Context, o Options) error {
 	consumer := pgqueue.NewConsumer(q, consumerStore, pgqueue.ConsumerOptions{OnStored: exist.MarkExisting})
 
 	srv, err := New(Config{
-		Token: o.Token, Queue: q, Exist: exist, OnAdmitted: consumer.Wake, Logger: lg,
+		Auth: auth, Queue: q, Exist: exist, OnAdmitted: consumer.Wake, Logger: lg,
 	})
 	if err != nil {
 		return err
@@ -201,7 +235,7 @@ func Run(ctx context.Context, o Options) error {
 			case <-consumerCtx.Done():
 				return
 			case <-t.C:
-				logSummary(lg, srv, exist, consumer, q)
+				logSummary(lg, srv, auth, exist, consumer, q)
 			}
 		}
 	}()
@@ -272,12 +306,15 @@ func Run(ctx context.Context, o Options) error {
 			"reprocessed idempotently after the next start", strings.Join(stuck, ", "))
 		return errors.Join(runErr, ErrShutdownIncomplete)
 	}
-	logSummary(lg, srv, exist, consumer, q)
+	logSummary(lg, srv, auth, exist, consumer, q)
 	return runErr
 }
 
-func logSummary(lg *log.Logger, s *Server, e *existence.Service, c *pgqueue.Consumer, q *pgqueue.Queue) {
+func logSummary(lg *log.Logger, s *Server, a *crawlerauth.Authenticator, e *existence.Service, c *pgqueue.Consumer, q *pgqueue.Queue) {
 	sc, es, cs := s.Counters(), e.Stats(), c.Stats()
+	as := a.Stats()
+	lg.Printf("ingest auth: cache_hits=%d misses=%d db_lookups=%d storage_failures=%d busy=%d",
+		as.Hits, as.Misses, as.DBLookups, as.StorageFailures, as.Busy)
 	lg.Printf("ingest summary: submit requests=%d accepted=%d rejected=%d queue_full=%d storage_errors=%d busy=%d auth_failures=%d | "+
 		"exists requests=%d unknown=%d cache_hits=%d db_lookups=%d db_errors=%d | "+
 		"consumer stored=%d already=%d quarantined=%d retried=%d storage_errors=%d lock_losses=%d",

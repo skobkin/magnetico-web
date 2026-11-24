@@ -19,6 +19,7 @@ import (
 
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/ingest/cache"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
@@ -26,6 +27,29 @@ import (
 )
 
 const testToken = "0123456789abcdef0123456789abcdef-secret-token"
+
+// fakeAuth maps tokens to identities; behaviour for unknown tokens is chosen
+// by err (default ErrUnauthorized).
+type fakeAuth struct {
+	ids map[string]crawlerauth.Identity
+	err error // returned instead of looking the token up
+}
+
+func (f fakeAuth) Authenticate(_ context.Context, bearer string) (crawlerauth.Identity, error) {
+	if f.err != nil {
+		return crawlerauth.Identity{}, f.err
+	}
+	if id, ok := f.ids[bearer]; ok {
+		return id, nil
+	}
+	return crawlerauth.Identity{}, crawlerauth.ErrUnauthorized
+}
+
+var testIdentity = crawlerauth.Identity{CrawlerID: "11111111-1111-4111-8111-111111111111", Name: "test-crawler"}
+
+func okAuth() fakeAuth {
+	return fakeAuth{ids: map[string]crawlerauth.Identity{testToken: testIdentity}}
+}
 
 var limits = codec.DefaultLimits()
 
@@ -84,7 +108,7 @@ func newEnv(t *testing.T, mutate func(*Config)) *env {
 	t.Helper()
 	e := &env{q: &fakeQueue{}, logs: &bytes.Buffer{}}
 	cfg := Config{
-		Token: testToken, Queue: e.q,
+		Auth: okAuth(), Queue: e.q,
 		Exist:      fakeChecker{fn: func(h [][20]byte) existence.Result { return existence.Result{Missing: h} }},
 		Logger:     log.New(&syncWriter{w: e.logs}, "", 0),
 		OnAdmitted: func() { e.woken.Add(1) },
@@ -169,10 +193,9 @@ func records(items ...string) string { return `{"records":[` + strings.Join(item
 
 // --- authentication ----------------------------------------------------
 
-func TestNewRejectsShortToken(t *testing.T) {
-	_, err := New(Config{Token: "short", Queue: &fakeQueue{}, Exist: fakeChecker{}})
-	if err == nil || strings.Contains(err.Error(), "short") {
-		t.Fatalf("New(short token) error = %v; must fail without echoing the token", err)
+func TestNewRequiresAnAuthenticator(t *testing.T) {
+	if _, err := New(Config{Queue: &fakeQueue{}, Exist: fakeChecker{}}); err == nil {
+		t.Fatal("New without an authenticator must fail: there is no unauthenticated mode")
 	}
 }
 
@@ -534,5 +557,137 @@ func TestExistsConcurrentIdenticalMissesCollapse(t *testing.T) {
 	}
 	if n := f.calls.Load(); n != 1 {
 		t.Fatalf("database lookups = %d, want 1 (in-flight join)", n)
+	}
+}
+
+// --- per-crawler authentication (revision 2/3) --------------------------
+
+// identityQueue records the crawler identity seen at admission.
+type identityQueue struct {
+	fakeQueue
+	seen []crawlerauth.Identity
+}
+
+func (q *identityQueue) Admit(ctx context.Context, items []pgqueue.Item) (pgqueue.AdmitResult, error) {
+	id, _ := crawlerauth.FromContext(ctx)
+	q.mu.Lock()
+	q.seen = append(q.seen, id)
+	q.mu.Unlock()
+	return q.fakeQueue.Admit(ctx, items)
+}
+
+func TestAuthenticationHappensAfterMethodAndBeforeContentTypeAndBody(t *testing.T) {
+	e := newEnv(t, nil)
+	// Method first: a GET with a bad token is a 405, not a 401.
+	req, _ := http.NewRequest(http.MethodGet, e.ts.URL+APIPrefix+"/torrents", nil)
+	req.Header.Set("Authorization", "Bearer nope")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("GET with a bad token: %d, want 405", resp.StatusCode)
+	}
+	// Authentication before the content type: a bad token with a bad content type is a 401.
+	resp2, b := e.post(t, "/torrents", "nope", "text/plain", []byte("x"))
+	if resp2.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("bad token + bad content type: %d %s, want 401", resp2.StatusCode, b)
+	}
+	// Authentication before the body: the handler never reads it for an
+	// unauthenticated request (the spy sits directly under the handler).
+	for _, path := range []string{"/torrents", "/torrents/exists"} {
+		var read atomic.Bool
+		hreq := httptest.NewRequest(http.MethodPost, APIPrefix+path, io.NopCloser(readerFunc(func(p []byte) (int, error) {
+			read.Store(true)
+			return 0, io.EOF
+		})))
+		hreq.Header.Set("Authorization", "Bearer nope")
+		hreq.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		e.srv.Handler().ServeHTTP(rec, hreq)
+		if rec.Code != http.StatusUnauthorized || read.Load() {
+			t.Fatalf("%s: status %d, body read=%v; want 401 without reading the body", path, rec.Code, read.Load())
+		}
+	}
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+func TestIdentityComesOnlyFromTheCredential(t *testing.T) {
+	q := &identityQueue{}
+	e := newEnv(t, func(c *Config) { c.Queue = q })
+	req, _ := http.NewRequest(http.MethodPost, e.ts.URL+APIPrefix+"/torrents", strings.NewReader(records(recJSON(t, 1))))
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Content-Type", "application/json")
+	// A forged identity header (the removed X-Magnetico-Crawler-ID) changes nothing.
+	req.Header.Set("X-Magnetico-Crawler-ID", "22222222-2222-4222-8222-222222222222")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status %d", resp.StatusCode)
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.seen) != 1 || q.seen[0] != testIdentity {
+		t.Fatalf("identity at admission = %+v, want %+v (from the credential only)", q.seen, testIdentity)
+	}
+}
+
+func TestCrossCrawlerIsolation(t *testing.T) {
+	a := crawlerauth.Identity{CrawlerID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Name: "a"}
+	b := crawlerauth.Identity{CrawlerID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Name: "b"}
+	q := &identityQueue{}
+	e := newEnv(t, func(c *Config) {
+		c.Queue = q
+		c.Auth = fakeAuth{ids: map[string]crawlerauth.Identity{"tok-a": a, "tok-b": b}}
+	})
+	for _, tc := range []struct {
+		tok  string
+		want crawlerauth.Identity
+	}{{"tok-a", a}, {"tok-b", b}, {"tok-a", a}} {
+		if resp, body := e.post(t, "/torrents", tc.tok, "application/json", []byte(records(recJSON(t, 1)))); resp.StatusCode != 202 {
+			t.Fatalf("%s: %d %s", tc.tok, resp.StatusCode, body)
+		}
+		q.mu.Lock()
+		got := q.seen[len(q.seen)-1]
+		q.mu.Unlock()
+		if got != tc.want {
+			t.Fatalf("token %s produced identity %+v, want %+v", tc.tok, got, tc.want)
+		}
+	}
+}
+
+func TestAuthStorageFailureIs503RetryableNeverUnauthorized(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		code string
+		wait string
+	}{
+		"storage": {crawlerauth.ErrUnavailable{}, "storage_unavailable", "5"},
+		"busy":    {crawlerauth.ErrUnavailable{Busy: true}, "busy", "1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := &fakeQueue{}
+			e := newEnv(t, func(c *Config) { c.Queue = q; c.Auth = fakeAuth{err: tc.err} })
+			for _, path := range []string{"/torrents", "/torrents/exists"} {
+				resp, b := e.json(t, path, records(recJSON(t, 1)))
+				if resp.StatusCode != http.StatusServiceUnavailable || errCode(t, b) != tc.code ||
+					resp.Header.Get("Retry-After") != tc.wait || resp.Header.Get("WWW-Authenticate") != "" {
+					t.Fatalf("%s: %d %s retry-after=%q", path, resp.StatusCode, b, resp.Header.Get("Retry-After"))
+				}
+			}
+			if q.batches() != 0 {
+				t.Fatal("a request whose authentication failed reached the queue")
+			}
+			if c := e.srv.Counters(); c.AuthUnavailable != 2 || c.AuthFailures != 0 {
+				t.Fatalf("counters = %+v", c)
+			}
+		})
 	}
 }

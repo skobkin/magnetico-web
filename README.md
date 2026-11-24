@@ -164,8 +164,9 @@ mapping of historical report commands are in [`docs/testing.md`](docs/testing.md
 
 ## Examples
 
-    MAGNETICO_INGEST_TOKEN=… magnetico ingest --listen 127.0.0.1:8080
-    MAGNETICO_CRAWL_INGEST_TOKEN=… magnetico --config-file-path config.yaml crawl \
+    magnetico ingest crawler add paris-1          # prints the crawler's token once
+    magnetico ingest --listen 127.0.0.1:8080
+    MAGNETICO_CRAWL_INGEST_TOKEN=<that token> magnetico --config-file-path config.yaml crawl \
       --ingest-url http://127.0.0.1:8080 --indexer-addr 0.0.0.0:6881
 
 Optional `config.yaml` keys (crawl settings): `ingestURL`, `queueDir`,

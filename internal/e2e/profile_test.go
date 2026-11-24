@@ -539,7 +539,6 @@ func TestE2EIngestMemoryProfile(t *testing.T) {
 	ingestd := buildIngestd(t)
 	addr, pprofAddr := freePort(t), freePort(t)
 	env := []string{
-		"MAGNETICO_INGEST_TOKEN=" + token,
 		"MAGNETICO_INGEST_DATABASE=" + w.dsn,
 		"MAGNETICO_INGEST_LISTEN=" + addr,
 		"INGESTD_PPROF=" + pprofAddr,

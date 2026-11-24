@@ -20,6 +20,10 @@ import (
 // Error text is reduced to controlled content: database URLs and driver
 // messages never reach the log.
 func runIngest(opFlags *opflags.IngestOptions) {
+	if opFlags.Subcommand != "" {
+		runIngestCrawler(opFlags)
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -27,7 +31,6 @@ func runIngest(opFlags *opflags.IngestOptions) {
 		Listen:           opFlags.Listen,
 		DatabaseURL:      opFlags.DatabaseURL,
 		QueueDatabaseURL: opFlags.QueueDatabaseURL,
-		Token:            opFlags.Token,
 		QueueMaxBytes:    opFlags.QueueMaxBytes,
 		CacheMaxBytes:    opFlags.CacheMaxBytes,
 		CacheDisabled:    opFlags.CacheDisabled,
@@ -53,6 +56,10 @@ func ingestErrorDetail(err error) string {
 	switch {
 	case errors.Is(err, pgqueue.ErrSchemaMissing):
 		return pgqueue.ErrSchemaMissing.Error()
+	case errors.Is(err, pgqueue.ErrSchemaInvalid):
+		return err.Error()
+	case errors.Is(err, ingestserver.ErrCrawlerRegistry):
+		return ingestserver.ErrCrawlerRegistry.Error()
 	case errors.Is(err, pgqueue.ErrImportIncomplete):
 		return pgqueue.ErrImportIncomplete.Error()
 	case errors.Is(err, pgqueue.ErrNonDurableDatabase):
@@ -67,7 +74,7 @@ func ingestErrorDetail(err error) string {
 func runMigrateIngestSchemaInit(opFlags *opflags.SchemaInitOptions) {
 	if err := pgqueue.InitSchema(context.Background(), opFlags.DatabaseURL); err != nil {
 		switch {
-		case errors.Is(err, pgqueue.ErrSchemaMissing):
+		case errors.Is(err, pgqueue.ErrSchemaMissing), errors.Is(err, pgqueue.ErrSchemaInvalid):
 			log.Fatalln(appendSchemaStateDetails(fmt.Sprintf(
 				"Could not initialize the ingest schema on %s. %s",
 				redactDatabaseURL(opFlags.DatabaseURL), err.Error()), err))

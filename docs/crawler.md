@@ -45,27 +45,32 @@ All of this happens on the main server, with a database you have already initial
 
    | Variable | Meaning | Default |
    |---|---|---|
-   | `MAGNETICO_INGEST_TOKEN` | the shared secret, **required, at least 32 bytes** | — |
    | `MAGNETICO_INGEST_DATABASE` | PostgreSQL URL (contains a password: keep it in the environment) | development default |
    | `MAGNETICO_INGEST_QUEUE_DATABASE` | optional second URL for the `magnetico_ingest` queue (a role with DML on that schema only) | the main URL |
    | `MAGNETICO_INGEST_LISTEN` | listen address, **plain HTTP** | `127.0.0.1:8080` |
    | `MAGNETICO_INGEST_QUEUE_MAX_BYTES` | quota of queued + quarantined payload bytes; above it admissions get `503 queue_full` | `2147483648` |
    | `MAGNETICO_INGEST_CACHE_MAX_BYTES` / `_CACHE_DISABLED` | existence cache | 8 MiB / off |
 
-   Set `GOMEMLIMIT=256MiB` and give the container a 1 GiB memory limit (the measured staging recommendation in `UPGRADE.md`). When ingest runs in a container behind Traefik, listen on `0.0.0.0:8080` **inside the container network only** and publish no host port. Any variable starting with `MAGNETICO_INGEST_` that is not in the table above is rejected at startup.
+   Set `GOMEMLIMIT=256MiB` and give the container a 1 GiB memory limit (the measured staging recommendation in `UPGRADE.md`). When ingest runs in a container behind Traefik, listen on `0.0.0.0:8080` **inside the container network only** and publish no host port. Any variable starting with `MAGNETICO_INGEST_` that is not in the table above is rejected at startup. `MAGNETICO_INGEST_TOKEN` (the former shared secret) is refused with a message: crawler credentials are per crawler and live in PostgreSQL (§3).
 
-## 3. Generate and distribute the shared secret
+## 3. Register crawlers and distribute their credentials
 
-Generate a random value of at least 32 bytes. This produces 64 URL-safe characters (48 random bytes):
+Every crawler has its **own** credential, stored in the `magnetico_ingest.crawlers` table of the ingest database (only a SHA-256 digest is stored). The ingest service no longer has a token of its own. A crawler's identity (a stable, server-generated UUID and a unique name) comes **only** from the credential it presents; there is no identity header and no identity file.
 
 ```bash
-openssl rand -base64 48 | tr '+/' '-_' | tr -d '=\n'
+# the database URL comes first (flag or MAGNETICO_INGEST_DATABASE; the queue role works too: --queue-database)
+magnetico ingest crawler add paris-1        # prints the id and the token ONCE
+magnetico ingest crawler list               # id, name, enabled, created, token rotated, disabled; never a token
+magnetico ingest crawler rotate-token paris-1
+magnetico ingest crawler disable paris-1    # and: enable paris-1
 ```
 
-- Store it in a secret manager or in root-only files (`chmod 600`) on the two machines. **Do not** commit it, put it in `docker-compose.yml` literally, pass it as a command-line argument (it would show in process listings; there is no flag for it anyway) or paste it into tickets and logs.
-- Configure the **identical** value as `MAGNETICO_INGEST_TOKEN` on the ingest service and as `MAGNETICO_CRAWL_INGEST_TOKEN` on each crawler. The two names differ; the value is the same. The crawler ignores `MAGNETICO_INGEST_*` variables, so setting `MAGNETICO_INGEST_TOKEN` on the crawler machine does nothing (and the crawler still fails without `MAGNETICO_CRAWL_INGEST_TOKEN`); it rejects any unknown `MAGNETICO_CRAWL_*` variable, and a stray `MAGNETICO_CRAWL_DATABASE` is refused outright (the crawler no longer has a database).
-- No stray whitespace: a trailing newline or space is part of the value and makes the two sides differ. With Docker, use an `--env-file`/`.env` entry `NAME=value` with no quotes, or Docker secrets exported into the environment by your entrypoint.
-- **Rotation:** generate a new value, update the ingest service and restart it, then update and restart each crawler. In the gap the crawler gets `401`, keeps everything queued and retries slowly (§9); nothing is lost. Anyone holding the old value can submit records until ingest is restarted with the new one, so rotate immediately if it leaks.
+- `add` and `rotate-token` print `token: mgc_…`; it cannot be shown again. Names are 1–64 characters of `A-Z a-z 0-9 . _ -`, unique case-insensitively. There is no automatic registration, no second token and no expiry: **exactly one** valid token per crawler; rotating replaces it.
+- Give the printed token to that crawler as `MAGNETICO_CRAWL_INGEST_TOKEN`. Store it in a secret manager or a root-only file (`chmod 600`); **do not** commit it, put it literally in `docker-compose.yml`, pass it as an argument or paste it into tickets and logs. No stray whitespace: a trailing newline or space is part of the value. With Docker, use an `--env-file` entry `NAME=value` with no quotes.
+- **A new token works at once.** A disabled, rotated-away or removed token keeps working on a running ingest for **up to 60 seconds** (the positive authentication cache); after that the crawler gets `401`, keeps everything queued and retries slowly (§9). Nothing is lost. Rotate immediately if a token leaks, and disable the crawler if you need it refused.
+- A missing, malformed, unknown or disabled token all answer the same `401`. If the database cannot be read during authentication, ingest answers a retryable `503` (never a false `401`).
+- After a fresh `migrate ingest-schema-init` **no crawler exists**: ingest starts, logs one warning (`no enabled crawler is registered`), and every request gets `401` until `ingest crawler add` has been run. No restart is needed.
+- Permissions: the ingest role needs `SELECT` on `magnetico_ingest.crawlers`; the role running `ingest crawler …` needs `SELECT`, `INSERT` and `UPDATE` on it (the default single account has everything). An older **development** `magnetico_ingest` without the `crawlers` table is refused and must be reinitialised by hand ([`UPGRADE.md`](../UPGRADE.md)).
 
 ## 4. Traefik on the main server
 
@@ -93,7 +98,7 @@ services:
       GOMEMLIMIT: 256MiB
       MAGNETICO_INGEST_LISTEN: 0.0.0.0:8080
     env_file:
-      - ./ingest.env          # MAGNETICO_INGEST_TOKEN=..., MAGNETICO_INGEST_DATABASE=... (chmod 600, never committed)
+      - ./ingest.env          # MAGNETICO_INGEST_DATABASE=... (chmod 600, never committed)
     mem_limit: 1g
     stop_grace_period: 60s
     networks: [traefik, db]
@@ -151,7 +156,7 @@ Settings (environment, which is the recommended way in containers; every setting
 | Variable | Meaning | Default |
 |---|---|---|
 | `MAGNETICO_CRAWL_INGEST_URL` | `https://ingest.example.org` | required |
-| `MAGNETICO_CRAWL_INGEST_TOKEN` | the shared secret, **at least 32 bytes, environment only** | required |
+| `MAGNETICO_CRAWL_INGEST_TOKEN` | this crawler's own token from `magnetico ingest crawler add` (`mgc_…`; ≥ 32 bytes, **environment only**) | required |
 | `MAGNETICO_CRAWL_QUEUE_DIR` | directory of the SQLite queue | `magnetico-crawl-queue` (relative to the working directory: set an absolute path, e.g. `/data`) |
 | `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` | limit of queued + quarantined payload bytes; at the limit new metadata is dropped and counted | `1073741824` |
 | `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE` | concurrent metadata downloads | `32` |
@@ -174,7 +179,7 @@ services:
       MAGNETICO_CRAWL_QUEUE_DIR: /data
       MAGNETICO_CRAWL_INDEXER_ADDR: 0.0.0.0:6881
     env_file:
-      - ./crawler.env           # MAGNETICO_CRAWL_INGEST_TOKEN=<the shared secret>  (chmod 600, never committed)
+      - ./crawler.env           # MAGNETICO_CRAWL_INGEST_TOKEN=<this crawler's token>  (chmod 600, never committed)
     ports:
       - "6881:6881/udp"         # the DHT socket; allow/forward the same UDP port on your firewall/NAT
     volumes:

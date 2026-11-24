@@ -146,7 +146,6 @@ func main() {
 		Listen:           os.Getenv("MAGNETICO_INGEST_LISTEN"),
 		DatabaseURL:      os.Getenv("MAGNETICO_INGEST_DATABASE"),
 		QueueDatabaseURL: os.Getenv("MAGNETICO_INGEST_QUEUE_DATABASE"),
-		Token:            os.Getenv("MAGNETICO_INGEST_TOKEN"),
 		QueueMaxBytes:    envInt("MAGNETICO_INGEST_QUEUE_MAX_BYTES", 2<<30),
 		CacheMaxBytes:    envInt("MAGNETICO_INGEST_CACHE_MAX_BYTES", 8<<20),
 	})

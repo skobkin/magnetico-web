@@ -12,7 +12,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -171,12 +170,10 @@ func newHarnessWorldAfterSchema(t *testing.T, afterSchema func(w *harnessWorld),
 			t.Fatalf("web %v: %d %s%s", c.args, code, out, errOut)
 		}
 	}
-	tok := make([]byte, 24)
-	_, _ = rand.Read(tok)
-	w.ingestToken = hex.EncodeToString(tok)
+	w.ingestToken = registerCrawler(t, w.bin, w.dsn, "harness")
 	w.ingestAddr = freeLoopbackAddr(t)
 	w.ingest = harnessStart(t, w.bin, []string{
-		"MAGNETICO_INGEST_TOKEN=" + w.ingestToken, "MAGNETICO_INGEST_DATABASE=" + w.dsn, "MAGNETICO_INGEST_LISTEN=" + w.ingestAddr,
+		"MAGNETICO_INGEST_DATABASE=" + w.dsn, "MAGNETICO_INGEST_LISTEN=" + w.ingestAddr,
 	}, "ingest")
 	w.waitIngest()
 	w.web = startWeb(t, w.bin, w.dsn, "http", webEnvExtra...)
@@ -881,7 +878,7 @@ func TestServicesFailClosedWithoutTheirSchemas(t *testing.T) {
 		return string(out), 0
 	}
 	addr := freeLoopbackAddr(t)
-	out, code := run([]string{"MAGNETICO_INGEST_TOKEN=" + strings.Repeat("t", 40), "MAGNETICO_INGEST_DATABASE=" + dsn, "MAGNETICO_INGEST_LISTEN=" + addr}, "ingest")
+	out, code := run([]string{"MAGNETICO_INGEST_DATABASE=" + dsn, "MAGNETICO_INGEST_LISTEN=" + addr}, "ingest")
 	if code != 1 || strings.Contains(out, secret) {
 		t.Fatalf("ingest without its schema: exit %d\n%s", code, out)
 	}

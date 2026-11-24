@@ -69,7 +69,7 @@ consumer stores them. Design: `docs/specs/crawler-ingest-delivery-v1.md`.
 | Flag | Environment | YAML | Default |
 |---|---|---|---|
 | `--ingest-url` | `MAGNETICO_CRAWL_INGEST_URL` | `ingestURL` | — (required; `https://`, or `http://` to a loopback host only) |
-| *(none)* | `MAGNETICO_CRAWL_INGEST_TOKEN` | *(none)* | — (required, ≥ 32 bytes; **environment only**) |
+| *(none)* | `MAGNETICO_CRAWL_INGEST_TOKEN` | *(none)* | — (required: **this crawler's own** token from `magnetico ingest crawler add`; ≥ 32 bytes; **environment only**) |
 | `--queue-dir` | `MAGNETICO_CRAWL_QUEUE_DIR` | `queueDir` | `magnetico-crawl-queue` |
 | `--queue-max-bytes` | `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` | `queueMaxBytes` | `1073741824` |
 | `--leech-max-active` | `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE` | `leechMaxActive` | `32` |
@@ -99,6 +99,13 @@ limit: the process can exceed it. For initial staging give the container a **1 G
 simultaneous near-limit submissions (peak 518 MiB). A 512 MiB limit is not recommended (the default runtime was
 OOM-killed there in that worst case; with `GOMEMLIMIT` it ran at the limit). 1 GiB has been tested on synthetic
 data only and is not claimed to suffice for every workload. The crawler needs no setting (RSS ≈ 30 MiB).
+
+**Per-crawler credentials replace the shared ingest token.** `MAGNETICO_INGEST_TOKEN` is **removed from the
+ingest service** with no fallback: setting it is a startup error naming the replacement. Register each crawler with
+`magnetico ingest crawler add <name>` (the generated UUID and the `mgc_…` token are printed once), and give that token to
+the crawler as `MAGNETICO_CRAWL_INGEST_TOKEN`. A crawler's identity comes only from its credential; the crawler no
+longer sends or stores an identity. Rotation (`rotate-token`), `disable` and `enable` take effect on a running ingest
+within 60 seconds. Protocol version 1 is unchanged.
 
 **Deployment order** (new databases or after the migration):
 

@@ -8,8 +8,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +20,7 @@ import (
 	"sync/atomic"
 
 	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
@@ -31,7 +30,6 @@ import (
 // Protocol limits (spec §5).
 const (
 	APIPrefix           = "/api/ingest/v1"
-	MinTokenBytes       = 32
 	MaxExistsHashes     = 1024
 	MaxExistsBodyBytes  = 64 << 10
 	MaxSubmitRecords    = 256
@@ -40,6 +38,12 @@ const (
 	DefaultExistsSlots  = 64
 	maxBatchDiagnostics = 16
 )
+
+// Authenticator resolves the Bearer credential of a request to a crawler
+// (*crawlerauth.Authenticator). The credential is the only source of identity.
+type Authenticator interface {
+	Authenticate(ctx context.Context, bearer string) (crawlerauth.Identity, error)
+}
 
 // Admitter is the queue seam (*pgqueue.Queue).
 type Admitter interface {
@@ -53,8 +57,8 @@ type Checker interface {
 
 // Config configures New.
 type Config struct {
-	// Token is the bearer token (>= MinTokenBytes). Required.
-	Token string
+	// Auth authenticates requests. Required.
+	Auth  Authenticator
 	Queue Admitter
 	Exist Checker
 	// Limits are the record validation limits (default codec.DefaultLimits).
@@ -71,34 +75,34 @@ type Config struct {
 
 // Counters are the service counters.
 type Counters struct {
-	SubmitRequests uint64
-	SubmitAccepted uint64 // records acknowledged with 202
-	SubmitRejected uint64 // 4xx other than auth
-	QueueFull      uint64
-	StorageErrors  uint64
-	Busy           uint64
-	AuthFailures   uint64
-	ExistsRequests uint64
-	ExistsUnknown  uint64
-	InternalErrors uint64
+	SubmitRequests  uint64
+	SubmitAccepted  uint64 // records acknowledged with 202
+	SubmitRejected  uint64 // 4xx other than auth
+	QueueFull       uint64
+	StorageErrors   uint64
+	Busy            uint64
+	AuthFailures    uint64
+	AuthUnavailable uint64 // 503 raised by the authenticator (storage failure or saturation)
+	ExistsRequests  uint64
+	ExistsUnknown   uint64
+	InternalErrors  uint64
 }
 
 // Server is the HTTP handler set.
 type Server struct {
-	cfg       Config
-	tokenHash [sha256.Size]byte
-	submit    chan struct{}
-	exists    chan struct{}
-	log       *log.Logger
+	cfg    Config
+	submit chan struct{}
+	exists chan struct{}
+	log    *log.Logger
 
-	submitReq, submitAcc, submitRej, queueFull, storageErr, busy, authFail,
+	submitReq, submitAcc, submitRej, queueFull, storageErr, busy, authFail, authUnavail,
 	existsReq, existsUnk, internalErr atomic.Uint64
 }
 
 // New validates the configuration and builds the server.
 func New(cfg Config) (*Server, error) {
-	if len(cfg.Token) < MinTokenBytes {
-		return nil, errors.New("server: the ingest token must be at least 32 bytes")
+	if cfg.Auth == nil {
+		return nil, errors.New("server: an authenticator is required")
 	}
 	if cfg.Queue == nil || cfg.Exist == nil {
 		return nil, errors.New("server: queue and existence service are required")
@@ -117,11 +121,10 @@ func New(cfg Config) (*Server, error) {
 		l = log.Default()
 	}
 	return &Server{
-		cfg:       cfg,
-		tokenHash: sha256.Sum256([]byte(cfg.Token)),
-		submit:    make(chan struct{}, cfg.SubmitSlots),
-		exists:    make(chan struct{}, cfg.ExistsSlots),
-		log:       l,
+		cfg:    cfg,
+		submit: make(chan struct{}, cfg.SubmitSlots),
+		exists: make(chan struct{}, cfg.ExistsSlots),
+		log:    l,
 	}, nil
 }
 
@@ -130,7 +133,7 @@ func (s *Server) Counters() Counters {
 	return Counters{
 		SubmitRequests: s.submitReq.Load(), SubmitAccepted: s.submitAcc.Load(), SubmitRejected: s.submitRej.Load(),
 		QueueFull: s.queueFull.Load(), StorageErrors: s.storageErr.Load(), Busy: s.busy.Load(),
-		AuthFailures: s.authFail.Load(), ExistsRequests: s.existsReq.Load(), ExistsUnknown: s.existsUnk.Load(),
+		AuthFailures: s.authFail.Load(), AuthUnavailable: s.authUnavail.Load(), ExistsRequests: s.existsReq.Load(), ExistsUnknown: s.existsUnk.Load(),
 		InternalErrors: s.internalErr.Load(),
 	}
 }
@@ -191,35 +194,52 @@ func writeRetryable(w http.ResponseWriter, code string, seconds int) {
 }
 
 // preflight applies method, authentication and content-type checks in that
-// order, before anything is read from the body.
-func (s *Server) preflight(w http.ResponseWriter, r *http.Request) bool {
+// order, before anything is read from the body. On success it returns the
+// request carrying the authenticated crawler in its context.
+func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", false)
-		return false
+		return nil, false
 	}
-	if !s.authorized(r) {
+	id, err := s.cfg.Auth.Authenticate(r.Context(), bearerToken(r))
+	switch {
+	case err == nil:
+		r = r.WithContext(crawlerauth.WithIdentity(r.Context(), id))
+	case errors.Is(err, crawlerauth.ErrUnauthorized):
 		s.authFail.Add(1)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, "unauthorized", false)
-		return false
+		return nil, false
+	case r.Context().Err() != nil:
+		return nil, false // client went away while a lookup was pending
+	default:
+		// Authentication could not be decided: retryable, and never a 401.
+		s.authUnavail.Add(1)
+		var un crawlerauth.ErrUnavailable
+		if errors.As(err, &un) && un.Busy {
+			writeRetryable(w, "busy", 1)
+		} else {
+			writeRetryable(w, "storage_unavailable", 5)
+		}
+		return nil, false
 	}
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mt != "application/json" {
 		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", false)
-		return false
+		return nil, false
 	}
-	return true
+	return r, true
 }
 
-func (s *Server) authorized(r *http.Request) bool {
+// bearerToken extracts the Bearer credential ("" when absent or another scheme).
+func bearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")
 	const prefix = "Bearer "
 	if len(h) <= len(prefix) || !strings.EqualFold(h[:len(prefix)], prefix) {
-		return false
+		return ""
 	}
-	got := sha256.Sum256([]byte(strings.TrimSpace(h[len(prefix):])))
-	return subtle.ConstantTimeCompare(got[:], s.tokenHash[:]) == 1
+	return strings.TrimSpace(h[len(prefix):])
 }
 
 func acquire(slots chan struct{}) bool {
@@ -269,7 +289,8 @@ type existsResponse struct {
 }
 
 func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
-	if !s.preflight(w, r) {
+	r, ok := s.preflight(w, r)
+	if !ok {
 		return
 	}
 	if !acquire(s.exists) {
@@ -342,7 +363,8 @@ type submitRequest struct {
 }
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	if !s.preflight(w, r) {
+	r, ok := s.preflight(w, r)
+	if !ok {
 		return
 	}
 	if !acquire(s.submit) {

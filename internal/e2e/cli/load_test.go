@@ -28,10 +28,8 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
@@ -480,12 +478,8 @@ func (e *harnessEnv) startWeb() {
 func (e *harnessEnv) startIngest() {
 	e.t.Helper()
 	e.ingAddr = freeLoopbackAddr(e.t)
-	tok := make([]byte, 24)
-	for i := range tok {
-		tok[i] = byte(rand.IntN(256))
-	}
-	e.ingTok = hex.EncodeToString(tok)
-	env := harnessLoadEnv("MAGNETICO_INGEST_TOKEN="+e.ingTok, "MAGNETICO_INGEST_DATABASE="+e.dsn, "MAGNETICO_INGEST_LISTEN="+e.ingAddr, "GOMAXPROCS=2", "GOMEMLIMIT=256MiB")
+	e.ingTok = registerCrawler(e.t, e.bin, e.dsn, "load")
+	env := harnessLoadEnv("MAGNETICO_INGEST_DATABASE="+e.dsn, "MAGNETICO_INGEST_LISTEN="+e.ingAddr, "GOMAXPROCS=2", "GOMEMLIMIT=256MiB")
 	e.ingest = startScoped(e.t, "ingest", "1G", 100, env, e.bin, "ingest")
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {

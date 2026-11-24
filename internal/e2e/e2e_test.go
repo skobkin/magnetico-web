@@ -28,12 +28,16 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlers"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
-const token = "e2e-token-0123456789abcdef0123456789abcdef"
+// token is the credential of the crawler newWorld registers in the world's
+// database (per-crawler credentials; there is no shared ingest token). The tests
+// of this package do not run in parallel, so one variable serves them all.
+var token string
 
 func TestMain(m *testing.M) { os.Exit(pgtest.RunTests(m)) }
 
@@ -189,6 +193,11 @@ func newWorld(t *testing.T) *world {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	created, err := crawlers.New(pool).Add(ctx, "e2e")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token = created.Token
 	return &world{t: t, dsn: dsn, c: c, pool: pool, mag: mag, cd: cd}
 }
 
@@ -214,7 +223,6 @@ func (w *world) usageDrift() int {
 func (w *world) startIngest(addr string, extraEnv ...string) *proc {
 	w.t.Helper()
 	env := append([]string{
-		"MAGNETICO_INGEST_TOKEN=" + token,
 		"MAGNETICO_INGEST_DATABASE=" + w.dsn,
 		"MAGNETICO_INGEST_LISTEN=" + addr,
 	}, extraEnv...)

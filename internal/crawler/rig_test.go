@@ -13,6 +13,7 @@ import (
 
 	"github.com/skobkin/magnetico-web/codec"
 	"github.com/skobkin/magnetico-web/internal/crawlqueue"
+	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
@@ -115,7 +116,7 @@ func newRig(t *testing.T) *rig {
 	r.q = q
 	t.Cleanup(func() { _ = q.Close() })
 
-	srv, err := server.New(server.Config{Token: token, Queue: r.ingest, Exist: missingExist{}})
+	srv, err := server.New(server.Config{Auth: rigAuth{}, Queue: r.ingest, Exist: missingExist{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,4 +183,15 @@ func (r *rig) drain(t *testing.T) outcome {
 	}
 	t.Fatal("drain did not converge")
 	return outcomeStop
+}
+
+// rigAuth accepts exactly the rig's token and answers with a fixed identity,
+// standing in for the registry-backed authenticator.
+type rigAuth struct{}
+
+func (rigAuth) Authenticate(_ context.Context, bearer string) (crawlerauth.Identity, error) {
+	if bearer != token {
+		return crawlerauth.Identity{}, crawlerauth.ErrUnauthorized
+	}
+	return crawlerauth.Identity{CrawlerID: "00000000-0000-4000-8000-000000000001", Name: "rig"}, nil
 }

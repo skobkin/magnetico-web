@@ -215,7 +215,6 @@ func TestWebYamlIsStrict(t *testing.T) {
 // disturb the other commands.
 func TestWebYamlCompatibleWithExistingCommands(t *testing.T) {
 	webEnvClean(t)
-	t.Setenv("MAGNETICO_INGEST_TOKEN", goodToken)
 	o := &OpFlags{}
 	file := writeWebConfig(t, "web:\n  publicURL: https://magnet.example.org\n  requestTimeout: 45s\n")
 	if _, err := o.parseArgs([]string{"--config-file-path", file, "ingest"}); err != nil {

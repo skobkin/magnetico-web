@@ -157,7 +157,6 @@ func (w *world) startEdgeIngest(addr, goMemLimit, dockerMem string) *edgeIngest 
 	t := w.t
 	pprof := freePort(t)
 	envKV := []string{
-		"MAGNETICO_INGEST_TOKEN=" + token,
 		"MAGNETICO_INGEST_DATABASE=" + w.dsn,
 		"MAGNETICO_INGEST_LISTEN=" + addr,
 		"INGESTD_PPROF=" + pprof,

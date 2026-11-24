@@ -375,3 +375,17 @@ WHERE tgrelid = 'magnetico_ingest.crawlers'::regclass AND NOT tgisinternal`, fun
 	}
 	return nil
 }
+
+// VerifySchema checks that magnetico_ingest exists with the supported version
+// and the expected crawler-registry structure. It only reads; an invalid
+// schema is reported, never repaired. Errors match ErrSchemaMissing,
+// ErrSchemaInvalid or persistence.ErrStorageIO.
+func VerifySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	if err := verifySchema(ctx, pool); err != nil {
+		if errors.Is(err, ErrSchemaMissing) || errors.Is(err, ErrSchemaInvalid) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", persistence.ErrStorageIO, err)
+	}
+	return nil
+}

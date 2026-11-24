@@ -103,7 +103,7 @@ services:
     environment:
       MAGNETICO_INGEST_LISTEN: 0.0.0.0:8080
       GOMEMLIMIT: 256MiB
-    env_file: [./ingest.env]                                   # MAGNETICO_INGEST_TOKEN=…, MAGNETICO_INGEST_DATABASE=…
+    env_file: [./ingest.env]                                   # MAGNETICO_INGEST_DATABASE=…  (crawler tokens live in PostgreSQL: `ingest crawler add`)
     mem_limit: 1g
     stop_grace_period: 60s
     read_only: true

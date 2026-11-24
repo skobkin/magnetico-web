@@ -11,16 +11,19 @@ import (
 const (
 	ingestEnvPrefix = "MAGNETICO_INGEST_"
 
-	// MinIngestTokenBytes is the minimum bearer-token length.
+	// MinIngestTokenBytes is the minimum length of the crawler's credential.
 	MinIngestTokenBytes = 32
 
-	ingestTokenEnv = ingestEnvPrefix + "TOKEN"
+	// removedIngestTokenEnv was the shared ingest token. It has no
+	// replacement variable on the server: every crawler has its own
+	// credential in the database.
+	removedIngestTokenEnv = ingestEnvPrefix + "TOKEN"
 )
 
 // IngestOptions carries the options of the `ingest` subcommand
 // (docs/specs/crawler-ingest-delivery-v1.md §10). Precedence: CLI > ENV >
-// built-in defaults. There is no config-file layer for this command. The
-// bearer token is ENV-only: no flag, no YAML key, never printed.
+// built-in defaults. There is no config-file layer for this command. Crawler
+// credentials live in PostgreSQL and are managed with `ingest crawler …`.
 type IngestOptions struct {
 	Listen           string `long:"listen" description:"HTTP listen address (plain HTTP; terminate TLS in a reverse proxy)." default:"127.0.0.1:8080"`
 	DatabaseURL      string `long:"database" description:"URL of the PostgreSQL database holding the 0.8.0 schema." default:"postgres://magnetico:magnetico@localhost:5432/magnetico?sslmode=disable"`
@@ -30,8 +33,32 @@ type IngestOptions struct {
 	CacheDisabled    bool   `long:"cache-disabled" description:"Disable the existence cache."`
 	AllowNonDurable  bool   `long:"allow-non-durable-db" description:"Allow a PostgreSQL server running with fsync=off (development and tests only)."`
 
-	// Token is the bearer token (MAGNETICO_INGEST_TOKEN only).
-	Token string `yaml:"-"`
+	Crawler IngestCrawlerCommands `command:"crawler" description:"Operator commands for the crawler registry: add, list, disable, enable, rotate-token."`
+
+	// Subcommand is the selected operator command ("crawler add", …), empty
+	// when the service itself runs.
+	Subcommand string `yaml:"-"`
+}
+
+// IngestCrawlerCommands are the operator commands of `magnetico ingest crawler`.
+// They connect with --database (or --queue-database when set); both must come
+// before the subcommand, as with `web user …`.
+type IngestCrawlerCommands struct {
+	Add         IngestCrawlerName `command:"add" description:"Register a crawler and print its generated id and token once."`
+	List        IngestNoArgs      `command:"list" description:"List crawlers (id, name, enabled, created, token rotated, disabled); never a token."`
+	Disable     IngestCrawlerName `command:"disable" description:"Refuse a crawler's token (running ingest instances apply it within 60 seconds)."`
+	Enable      IngestCrawlerName `command:"enable" description:"Accept a disabled crawler's token again."`
+	RotateToken IngestCrawlerName `command:"rotate-token" description:"Replace a crawler's token (same identity) and print the new token once."`
+}
+
+// IngestNoArgs is a command without arguments.
+type IngestNoArgs struct{}
+
+// IngestCrawlerName is a command taking one crawler name.
+type IngestCrawlerName struct {
+	Args struct {
+		Name string `positional-arg-name:"name" required:"true"`
+	} `positional-args:"true"`
 }
 
 type ingestEnv struct {
@@ -74,11 +101,16 @@ var ingestEnvFlag = map[string]string{
 	ingestEnvPrefix + "ALLOW_NON_DURABLE_DB": "allow-non-durable-db",
 }
 
-// applyEnvIngestConfig applies MAGNETICO_INGEST_* variables (CLI wins), reads
-// the ENV-only token and rejects unknown variables. Values are never echoed
-// in errors.
+// applyEnvIngestConfig applies MAGNETICO_INGEST_* variables (CLI wins) and
+// rejects unknown ones, and the removed shared token with a message naming its
+// replacement. Values are never echoed in errors.
 func (o *OpFlags) applyEnvIngestConfig(explicit map[string]bool) error {
-	known := map[string]bool{ingestTokenEnv: true}
+	if _, present := os.LookupEnv(removedIngestTokenEnv); present {
+		return errors.New(removedIngestTokenEnv + " is no longer supported: the shared ingest token was replaced by " +
+			"per-crawler credentials stored in PostgreSQL. Register each crawler with `magnetico ingest crawler add <name>` " +
+			"and set the printed token as MAGNETICO_CRAWL_INGEST_TOKEN on that crawler (see UPGRADE.md)")
+	}
+	known := map[string]bool{}
 	for _, e := range ingestEnvs {
 		known[e.name] = true
 		if explicit[ingestEnvFlag[e.name]] {
@@ -90,12 +122,11 @@ func (o *OpFlags) applyEnvIngestConfig(explicit map[string]bool) error {
 			}
 		}
 	}
-	o.Ingest.Token = os.Getenv(ingestTokenEnv)
 
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
 		if strings.HasPrefix(name, ingestEnvPrefix) && !known[name] {
-			names := []string{ingestTokenEnv}
+			var names []string
 			for _, e := range ingestEnvs {
 				names = append(names, e.name)
 			}
@@ -106,12 +137,16 @@ func (o *OpFlags) applyEnvIngestConfig(explicit map[string]bool) error {
 	return nil
 }
 
-// check validates the ingest options. Error text never contains the token.
-func (o *IngestOptions) check() error {
-	if len(o.Token) < MinIngestTokenBytes {
-		return fmt.Errorf("%s is required and must be at least %d bytes long (it is read from the environment only)",
-			ingestTokenEnv, MinIngestTokenBytes)
+// checkCrawler validates what the operator commands use: the database.
+func (o *IngestOptions) checkCrawler() error {
+	if strings.TrimSpace(o.DatabaseURL) == "" && strings.TrimSpace(o.QueueDatabaseURL) == "" {
+		return errors.New("the database URL cannot be empty")
 	}
+	return nil
+}
+
+// check validates the ingest service options.
+func (o *IngestOptions) check() error {
 	if strings.TrimSpace(o.Listen) == "" {
 		return errors.New("the listen address cannot be empty")
 	}
