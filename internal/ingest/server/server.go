@@ -15,15 +15,19 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
 	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/internal/clientip"
 	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
+	"github.com/skobkin/magnetico-web/internal/ingest/stats"
+	"github.com/skobkin/magnetico-web/internal/opstats"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -67,6 +71,12 @@ type Config struct {
 	// extra requests receive 503 busy.
 	SubmitSlots int
 	ExistsSlots int
+	// Stats records operational statistics (nil: disabled). It never changes a
+	// decision, a status code or the order of anything the handlers do.
+	Stats *stats.Recorder
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed
+	// when resolving a crawler's last address (none: the TCP peer is used).
+	TrustedProxies []netip.Prefix
 	// OnAdmitted is called after a successful admission (wakes the consumer).
 	OnAdmitted func()
 	// Logger receives controlled messages only (default log.Default()).
@@ -154,6 +164,7 @@ func (s *Server) recoverer(next http.Handler) http.Handler {
 					panic(rec)
 				}
 				s.internalErr.Add(1)
+				s.cfg.Stats.RequestRejected(opstats.RejectInternal, "")
 				s.log.Printf("ingest: handler panic recovered (details withheld)")
 				writeError(w, http.StatusInternalServerError, "internal_error", false)
 			}
@@ -199,6 +210,7 @@ func writeRetryable(w http.ResponseWriter, code string, seconds int) {
 func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
+		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, "")
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", false)
 		return nil, false
 	}
@@ -208,6 +220,9 @@ func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Reques
 		r = r.WithContext(crawlerauth.WithIdentity(r.Context(), id))
 	case errors.Is(err, crawlerauth.ErrUnauthorized):
 		s.authFail.Add(1)
+		// A disabled crawler's refused request is also counted for that crawler;
+		// an unknown or malformed credential has no crawler and counts globally.
+		s.cfg.Stats.RequestRejected(opstats.RejectAuth, id.CrawlerID)
 		w.Header().Set("WWW-Authenticate", "Bearer")
 		writeError(w, http.StatusUnauthorized, "unauthorized", false)
 		return nil, false
@@ -216,6 +231,7 @@ func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Reques
 	default:
 		// Authentication could not be decided: retryable, and never a 401.
 		s.authUnavail.Add(1)
+		s.cfg.Stats.RequestRejected(opstats.RejectUnavailableAuth, "")
 		var un crawlerauth.ErrUnavailable
 		if errors.As(err, &un) && un.Busy {
 			writeRetryable(w, "busy", 1)
@@ -226,10 +242,27 @@ func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Reques
 	}
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mt != "application/json" {
+		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, id.CrawlerID)
 		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", false)
 		return nil, false
 	}
 	return r, true
+}
+
+// countingReader counts the request-body bytes actually read.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+func (s *Server) clientAddr(r *http.Request) netip.Addr {
+	return clientip.Resolve(r.RemoteAddr, r.Header.Values("X-Forwarded-For"), s.cfg.TrustedProxies)
 }
 
 // bearerToken extracts the Bearer credential ("" when absent or another scheme).
@@ -293,25 +326,33 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	crawler, _ := crawlerauth.FromContext(r.Context())
+	cid := crawler.CrawlerID
 	if !acquire(s.exists) {
 		s.busy.Add(1)
+		s.cfg.Stats.RequestRejected(opstats.RejectBusy, cid)
 		writeRetryable(w, "busy", 1)
 		return
 	}
 	defer func() { <-s.exists }()
 	s.existsReq.Add(1)
+	s.cfg.Stats.ExistsRequest(cid)
 
 	var req existsRequest
-	body := http.MaxBytesReader(w, r.Body, MaxExistsBodyBytes)
+	body := &countingReader{r: http.MaxBytesReader(w, r.Body, MaxExistsBodyBytes)}
+	defer func() { s.cfg.Stats.RequestBytes(cid, body.n) }()
 	if err := decodeEnvelope(body, "info_hashes", &req); err != nil {
 		if errors.Is(err, errBodyTooLarge) {
+			s.cfg.Stats.RequestRejected(opstats.RejectTooLarge, cid)
 			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", false)
 			return
 		}
+		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, cid)
 		writeError(w, http.StatusBadRequest, "invalid_request", false)
 		return
 	}
 	if req.InfoHashes == nil || len(*req.InfoHashes) > MaxExistsHashes {
+		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, cid)
 		writeError(w, http.StatusBadRequest, "invalid_request", false)
 		return
 	}
@@ -319,10 +360,12 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 	for _, hx := range *req.InfoHashes {
 		var h [20]byte
 		if len(hx) != 40 {
+			s.cfg.Stats.RequestRejected(opstats.RejectMalformed, cid)
 			writeError(w, http.StatusBadRequest, "invalid_request", false)
 			return
 		}
 		if _, err := hex.Decode(h[:], []byte(hx)); err != nil {
+			s.cfg.Stats.RequestRejected(opstats.RejectMalformed, cid)
 			writeError(w, http.StatusBadRequest, "invalid_request", false)
 			return
 		}
@@ -337,9 +380,15 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 	if len(res.Unknown) > 0 && len(res.Exists) == 0 && len(res.Missing) == 0 {
 		// Nothing could be answered: a whole-request storage failure.
 		s.storageErr.Add(1)
+		s.cfg.Stats.RequestRejected(opstats.RejectStorageUnavailable, cid)
 		writeRetryable(w, "storage_unavailable", 5)
 		return
 	}
+	s.cfg.Stats.ExistsDone(cid, s.clientAddr(r), stats.ExistsOutcome{
+		Hashes: len(res.Exists) + len(res.Missing) + len(res.Unknown),
+		Found:  len(res.Exists), Missing: len(res.Missing), Unknown: len(res.Unknown),
+		CacheHitPositive: res.CacheHitsPositive, CacheHitNegative: res.CacheHitsNegative, CacheMiss: res.CacheMisses,
+	})
 	out := existsResponse{
 		Exists:  hexList(res.Exists),
 		Missing: hexList(res.Missing),
@@ -367,8 +416,12 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	crawler, _ := crawlerauth.FromContext(r.Context())
+	cid := crawler.CrawlerID
+	s.cfg.Stats.SubmitAuthenticated(cid)
 	if !acquire(s.submit) {
 		s.busy.Add(1)
+		s.cfg.Stats.RequestRejected(opstats.RejectBusy, cid)
 		writeRetryable(w, "busy", 1)
 		return
 	}
@@ -376,18 +429,22 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	s.submitReq.Add(1)
 
 	var req submitRequest
-	body := http.MaxBytesReader(w, r.Body, MaxSubmitBodyBytes)
+	body := &countingReader{r: http.MaxBytesReader(w, r.Body, MaxSubmitBodyBytes)}
+	defer func() { s.cfg.Stats.RequestBytes(cid, body.n) }()
 	if err := decodeEnvelope(body, "records", &req); err != nil {
 		s.submitRej.Add(1)
 		if errors.Is(err, errBodyTooLarge) {
+			s.cfg.Stats.RequestRejected(opstats.RejectTooLarge, cid)
 			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", false)
 			return
 		}
+		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, cid)
 		writeError(w, http.StatusBadRequest, "invalid_request", false)
 		return
 	}
 	if req.Records == nil || len(*req.Records) == 0 || len(*req.Records) > MaxSubmitRecords {
 		s.submitRej.Add(1)
+		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, cid)
 		writeError(w, http.StatusBadRequest, "invalid_request", false)
 		return
 	}
@@ -396,6 +453,11 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	items, status, code, issues := s.validateAll(raws)
 	if status != 0 {
 		s.submitRej.Add(1)
+		if status == http.StatusRequestEntityTooLarge {
+			s.cfg.Stats.RequestRejected(opstats.RejectTooLarge, cid)
+		} else {
+			s.cfg.Stats.RequestRejected(opstats.RejectInvalidRecord, cid)
+		}
 		if len(issues) > 0 {
 			writeJSON(w, status, errorBody{Error: errorDetail{Code: code, Items: issues}})
 			return
@@ -404,25 +466,41 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := s.cfg.Queue.Admit(r.Context(), items)
+	// The records are received (validated); the recorder is not held across the
+	// admission I/O: the outcome is recorded when it is known.
+	s.cfg.Stats.SubmitValidated(cid, s.clientAddr(r), len(items))
+	// Every validated record gets an outcome, even if admission panics.
+	resolved := false
+	defer func() {
+		if !resolved {
+			s.cfg.Stats.SubmitRefused(cid, len(items), stats.NoReject)
+		}
+	}()
+	res, err := s.cfg.Queue.Admit(r.Context(), items)
+	resolved = true
 	switch {
 	case err == nil:
 	case errors.Is(err, pgqueue.ErrQueueFull):
 		s.queueFull.Add(1)
+		s.cfg.Stats.SubmitRefused(cid, len(items), opstats.RejectQueueFull)
 		writeRetryable(w, "queue_full", 30)
 		return
 	case r.Context().Err() != nil:
+		s.cfg.Stats.SubmitRefused(cid, len(items), stats.NoReject)
 		return // client went away; the admission rolled back or committed idempotently
 	case errors.Is(err, persistence.ErrStorageIO):
 		s.storageErr.Add(1)
+		s.cfg.Stats.SubmitRefused(cid, len(items), opstats.RejectStorageUnavailable)
 		writeRetryable(w, "storage_unavailable", 5)
 		return
 	default:
 		s.internalErr.Add(1)
+		s.cfg.Stats.SubmitRefused(cid, len(items), opstats.RejectInternal)
 		s.log.Printf("ingest: admission failed with an unclassified error (details withheld)")
 		writeError(w, http.StatusInternalServerError, "internal_error", true)
 		return
 	}
+	s.cfg.Stats.SubmitAcked(cid, res.Inserted, res.Duplicates, res.InsertedBytes)
 	s.submitAcc.Add(uint64(len(items)))
 	if s.cfg.OnAdmitted != nil {
 		s.cfg.OnAdmitted()

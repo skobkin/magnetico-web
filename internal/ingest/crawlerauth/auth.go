@@ -168,7 +168,8 @@ func wellFormed(bearer string) bool {
 }
 
 // Authenticate resolves the bearer credential to a crawler. It returns
-// ErrUnauthorized, ErrUnavailable, or the context's error when the caller's
+// ErrUnauthorized (together with the crawler's identity when the credential
+// belongs to a disabled crawler; otherwise a zero Identity), ErrUnavailable, or the context's error when the caller's
 // context ends while waiting.
 func (a *Authenticator) Authenticate(ctx context.Context, bearer string) (Identity, error) {
 	if !wellFormed(bearer) {
@@ -283,7 +284,13 @@ func (a *Authenticator) run(digest [32]byte, c *call) {
 		if a.clock.Now().Before(exp) {
 			a.store(digest, entry{id: id, expiresAt: exp})
 		}
-	case lerr == nil, errors.Is(lerr, crawlers.ErrNotFound):
+	case lerr == nil:
+		// A disabled crawler: refused like an unknown credential, but its
+		// identity travels with the refusal so statistics can count the request
+		// for that crawler. It is never cached and never reaches the response.
+		id = Identity{CrawlerID: rec.ID, Name: rec.Name}
+		err = ErrUnauthorized
+	case errors.Is(lerr, crawlers.ErrNotFound):
 		err = ErrUnauthorized
 	default:
 		err = ErrUnavailable{}

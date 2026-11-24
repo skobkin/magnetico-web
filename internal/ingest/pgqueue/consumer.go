@@ -36,8 +36,28 @@ type Store interface {
 	AddTorrent(ctx context.Context, meta persistence.Torrent, files []persistence.File) (bool, int32, error)
 }
 
+// ConsumerObserver receives the events statistics count. Every method is
+// called without any consumer lock held and must not block; a nil observer is
+// skipped.
+type ConsumerObserver interface {
+	ProcessAttempt()
+	ProcessRetry()
+	ProcessStorageError()
+	// TorrentCreated: AddTorrent reported a new torrent (creation boundary).
+	TorrentCreated()
+	// SettledStoredNew / SettledStoredExisting: the queue row was deleted after a
+	// successful AddTorrent (settlement boundary); d is claim-to-delete time.
+	SettledStoredNew(d time.Duration)
+	SettledStoredExisting(d time.Duration)
+	// SettledQuarantined: the row moved to quarantine.
+	SettledQuarantined()
+}
+
 // ConsumerOptions configures a Consumer. Zero values select the defaults.
 type ConsumerOptions struct {
+	// Observer receives statistics events (optional).
+	Observer ConsumerObserver
+
 	// OnStored is called after a record was stored (created or already
 	// present) and its queue row deleted; the ingest service uses it to
 	// promote the existence cache.
@@ -228,6 +248,9 @@ func (c *Consumer) processOwned(ctx context.Context, conn *pgx.Conn) (lost bool)
 				return false
 			}
 			c.storageErrs.Add(1)
+			if c.o.Observer != nil {
+				c.o.Observer.ProcessStorageError()
+			}
 			if !sleep(ctx, backoff) {
 				return false
 			}
@@ -264,6 +287,9 @@ func (c *Consumer) processOwned(ctx context.Context, conn *pgx.Conn) (lost bool)
 			}
 			// Global storage backoff: the row stays untouched.
 			c.storageErrs.Add(1)
+			if c.o.Observer != nil {
+				c.o.Observer.ProcessStorageError()
+			}
 			if !sleep(ctx, backoff) {
 				return false
 			}
@@ -332,6 +358,10 @@ func (c *Consumer) processRow(ctx context.Context, id int64) error {
 		return err
 	}
 
+	claimed := time.Now()
+	if c.o.Observer != nil {
+		c.o.Observer.ProcessAttempt()
+	}
 	rec, err := record.Decode(payload, c.o.Limits)
 	if err != nil {
 		return c.quarantineRow(ctx, id, ReasonInvalidRecord, "record decode failed")
@@ -346,6 +376,9 @@ func (c *Consumer) processRow(ctx context.Context, id int64) error {
 	default:
 		return c.retryRow(ctx, id, attempts)
 	}
+	if created && c.o.Observer != nil {
+		c.o.Observer.TorrentCreated() // the creation boundary: whatever happens to the row next
+	}
 	if c.o.beforeDelete != nil {
 		if err := c.o.beforeDelete(rec.InfoHash); err != nil {
 			return err
@@ -358,6 +391,13 @@ func (c *Consumer) processRow(ctx context.Context, id int64) error {
 		c.stored.Add(1)
 	} else {
 		c.already.Add(1)
+	}
+	if c.o.Observer != nil { // the settlement boundary: the row has left the queue
+		if created {
+			c.o.Observer.SettledStoredNew(time.Since(claimed))
+		} else {
+			c.o.Observer.SettledStoredExisting(time.Since(claimed))
+		}
 	}
 	if c.o.OnStored != nil {
 		c.o.OnStored(rec.InfoHash)
@@ -388,6 +428,9 @@ WHERE id = $1`, id, attempts, delay)
 		return err
 	}
 	c.retried.Add(1)
+	if c.o.Observer != nil {
+		c.o.Observer.ProcessRetry()
+	}
 	return nil
 }
 
@@ -407,5 +450,8 @@ SELECT info_hash, format, payload, payload_bytes, $2, $3, attempts, received_at 
 		return err
 	}
 	c.quarantined.Add(1)
+	if c.o.Observer != nil {
+		c.o.Observer.SettledQuarantined()
+	}
 	return nil
 }

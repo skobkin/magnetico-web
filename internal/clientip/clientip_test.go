@@ -1,4 +1,4 @@
-package server
+package clientip
 
 import (
 	"net/netip"
@@ -18,7 +18,7 @@ func prefixes(t *testing.T, ss ...string) []netip.Prefix {
 	return out
 }
 
-func TestResolveClientIP(t *testing.T) {
+func TestResolve(t *testing.T) {
 	proxies := prefixes(t, "10.0.0.0/8", "192.0.2.1/32", "2001:db8:ffff::/48")
 	cases := []struct {
 		name   string
@@ -59,7 +59,7 @@ func TestResolveClientIP(t *testing.T) {
 			if c.name == "no proxies configured" {
 				ps = nil
 			}
-			if got := ResolveClientIP(c.remote, c.xff, ps).String(); got != c.want {
+			if got := Resolve(c.remote, c.xff, ps).String(); got != c.want {
 				t.Fatalf("got %s, want %s", got, c.want)
 			}
 		})

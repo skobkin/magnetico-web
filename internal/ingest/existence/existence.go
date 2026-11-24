@@ -35,6 +35,10 @@ type Result struct {
 	Exists  [][20]byte
 	Missing [][20]byte
 	Unknown [][20]byte
+
+	// Cache outcome of the distinct hashes of this call: answered from a
+	// positive entry, from a negative entry, or not answered by the cache.
+	CacheHitsPositive, CacheHitsNegative, CacheMisses int
 }
 
 // Stats are the service counters.
@@ -120,13 +124,16 @@ func (s *Service) Check(ctx context.Context, hashes [][20]byte) Result {
 
 	// 2. Cache.
 	var misses [][20]byte
+	var hitsPos, hitsNeg int
 	for _, h := range distinct {
 		if st, ok := s.cache.Get(h); ok {
 			s.cacheHits.Add(1)
 			if st == cache.Exists {
 				state[h] = 'e'
+				hitsPos++
 			} else {
 				state[h] = 'm'
+				hitsNeg++
 			}
 			continue
 		}
@@ -190,7 +197,7 @@ func (s *Service) Check(ctx context.Context, hashes [][20]byte) Result {
 		}
 	}
 
-	var r Result
+	r := Result{CacheHitsPositive: hitsPos, CacheHitsNegative: hitsNeg, CacheMisses: len(misses)}
 	for _, h := range distinct {
 		switch state[h] {
 		case 'e':

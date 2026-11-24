@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/skobkin/magnetico-web/internal/ingest/crawlers"
 	"github.com/skobkin/magnetico-web/internal/ingest/existence"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
+	"github.com/skobkin/magnetico-web/internal/ingest/stats"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -79,6 +81,13 @@ type Options struct {
 	CacheMaxBytes   int64
 	CacheDisabled   bool
 	AllowNonDurable bool
+
+	// TrustedProxies are the reverse proxies whose X-Forwarded-For is believed
+	// when recording a crawler's last address.
+	TrustedProxies []netip.Prefix
+	// StatsDisabled is the kill switch: no recorder is created and nothing is
+	// collected. Authentication and admission never depend on statistics.
+	StatsDisabled bool
 
 	Logger *log.Logger
 	// Ready, when set, receives the bound listen address once the service
@@ -164,7 +173,15 @@ func Run(ctx context.Context, o Options) error {
 		lg.Printf("WARNING: no enabled crawler is registered (%d registered); every request is refused with 401 "+
 			"until one is added with `magnetico ingest crawler add <name>`", registered)
 	}
-	auth := crawlerauth.New(crawlers.New(authPool), crawlerauth.Options{Logger: lg})
+	var rec *stats.Recorder
+	if !o.StatsDisabled {
+		rec = stats.New(nil)
+	}
+	authOpt := crawlerauth.Options{Logger: lg}
+	if rec != nil {
+		authOpt.Observer = rec
+	}
+	auth := crawlerauth.New(crawlers.New(authPool), authOpt)
 
 	if st, err := q.Stats(ctx); err == nil {
 		lg.Printf("ingest queue: %d pending (%d bytes), %d quarantined (%d bytes)",
@@ -185,10 +202,15 @@ func Run(ctx context.Context, o Options) error {
 	if o.consumerStore != nil {
 		consumerStore = o.consumerStore(store)
 	}
-	consumer := pgqueue.NewConsumer(q, consumerStore, pgqueue.ConsumerOptions{OnStored: exist.MarkExisting})
+	consumerOpt := pgqueue.ConsumerOptions{OnStored: exist.MarkExisting}
+	if rec != nil {
+		consumerOpt.Observer = rec
+	}
+	consumer := pgqueue.NewConsumer(q, consumerStore, consumerOpt)
 
 	srv, err := New(Config{
 		Auth: auth, Queue: q, Exist: exist, OnAdmitted: consumer.Wake, Logger: lg,
+		Stats: rec, TrustedProxies: o.TrustedProxies,
 	})
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@ package opflags
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -31,7 +32,12 @@ type IngestOptions struct {
 	QueueMaxBytes    int64  `long:"queue-max-bytes" description:"Quota of queue + quarantine payload bytes; above it admissions get 503 queue_full." default:"2147483648"`
 	CacheMaxBytes    int64  `long:"cache-max-bytes" description:"Memory budget of the existence cache." default:"8388608"`
 	CacheDisabled    bool   `long:"cache-disabled" description:"Disable the existence cache."`
+	TrustedProxies   string `long:"trusted-proxies" description:"Comma-separated CIDRs (or addresses) of reverse proxies whose X-Forwarded-For is trusted when recording a crawler's last address. Empty: the TCP peer is used." default:""`
+	StatsDisabled    bool   `long:"stats-disabled" description:"Kill switch: collect and persist no ingestion statistics. Authentication and admission are unaffected either way."`
 	AllowNonDurable  bool   `long:"allow-non-durable-db" description:"Allow a PostgreSQL server running with fsync=off (development and tests only)."`
+
+	// TrustedProxyPrefixes is the parsed form of TrustedProxies.
+	TrustedProxyPrefixes []netip.Prefix `yaml:"-"`
 
 	Crawler IngestCrawlerCommands `command:"crawler" description:"Operator commands for the crawler registry: add, list, disable, enable, rotate-token."`
 
@@ -84,6 +90,11 @@ var ingestEnvs = []ingestEnv{
 		o.CacheDisabled, err = parseBool(v)
 		return
 	}},
+	{ingestEnvPrefix + "TRUSTED_PROXIES", func(o *IngestOptions, v string) error { o.TrustedProxies = v; return nil }},
+	{ingestEnvPrefix + "STATS_DISABLED", func(o *IngestOptions, v string) (err error) {
+		o.StatsDisabled, err = parseBool(v)
+		return
+	}},
 	{ingestEnvPrefix + "ALLOW_NON_DURABLE_DB", func(o *IngestOptions, v string) (err error) {
 		o.AllowNonDurable, err = parseBool(v)
 		return
@@ -98,6 +109,8 @@ var ingestEnvFlag = map[string]string{
 	ingestEnvPrefix + "QUEUE_MAX_BYTES":      "queue-max-bytes",
 	ingestEnvPrefix + "CACHE_MAX_BYTES":      "cache-max-bytes",
 	ingestEnvPrefix + "CACHE_DISABLED":       "cache-disabled",
+	ingestEnvPrefix + "TRUSTED_PROXIES":      "trusted-proxies",
+	ingestEnvPrefix + "STATS_DISABLED":       "stats-disabled",
 	ingestEnvPrefix + "ALLOW_NON_DURABLE_DB": "allow-non-durable-db",
 }
 
@@ -156,5 +169,10 @@ func (o *IngestOptions) check() error {
 	if o.CacheMaxBytes < 0 {
 		return errors.New("cache-max-bytes cannot be negative")
 	}
+	prefixes, err := parseTrustedProxies(o.TrustedProxies)
+	if err != nil {
+		return err
+	}
+	o.TrustedProxyPrefixes = prefixes
 	return nil
 }

@@ -268,7 +268,10 @@ func TestConcurrentIdenticalMissesCollapse(t *testing.T) {
 	}
 	<-f.entered // the leader is inside the lookup, everyone else must join it
 	deadline := time.Now().Add(5 * time.Second)
-	for s.Stats().Requests < n || s.Stats().Joined < n-1 {
+	// Every follower joins both hashes of the leader's lookup, so all of them have
+	// joined once Joined reaches 2*(n-1); a smaller bound lets late starters begin
+	// after the gate opens and query the database a second time.
+	for s.Stats().Requests < n || s.Stats().Joined < 2*(n-1) {
 		if time.Now().After(deadline) {
 			t.Fatalf("requests did not join: %+v", s.Stats())
 		}
@@ -285,7 +288,7 @@ func TestConcurrentIdenticalMissesCollapse(t *testing.T) {
 			t.Fatalf("result %d: %+v", i, r)
 		}
 	}
-	if st := s.Stats(); st.DBLookups != 1 || st.Joined < n-1 {
+	if st := s.Stats(); st.DBLookups != 1 || st.Joined < 2*(n-1) {
 		t.Errorf("stats: %+v", st)
 	}
 }

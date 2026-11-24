@@ -9,6 +9,8 @@ import (
 	"net/netip"
 	"runtime/debug"
 	"time"
+
+	"github.com/skobkin/magnetico-web/internal/clientip"
 )
 
 // maxBodyBytes bounds request bodies of every route (forms and small JSON).
@@ -205,7 +207,7 @@ func securityHeaders(hsts bool) func(http.Handler) http.Handler {
 func resolveClientIP(proxies []netip.Prefix) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			stateOf(r.Context()).clientIP = ResolveClientIP(r.RemoteAddr, r.Header.Values("X-Forwarded-For"), proxies)
+			stateOf(r.Context()).clientIP = clientip.Resolve(r.RemoteAddr, r.Header.Values("X-Forwarded-For"), proxies)
 			next.ServeHTTP(w, r)
 		})
 	}

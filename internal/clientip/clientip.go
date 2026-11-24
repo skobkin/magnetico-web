@@ -1,4 +1,7 @@
-package server
+// Package clientip resolves the address of a client behind trusted reverse
+// proxies. It is shared by the web service (rate limits) and the ingest service
+// (the last address of a crawler) and has no dependencies on either.
+package clientip
 
 import (
 	"net/netip"
@@ -45,7 +48,7 @@ func parseForwardedEntry(s string) (netip.Addr, bool) {
 	return netip.Addr{}, false
 }
 
-// ResolveClientIP returns the client address of a request (spec §3.2).
+// Resolve returns the client address of a request (web spec §3.2).
 //
 // The forwarding header is consulted only when the direct TCP peer is inside
 // a trusted-proxy prefix; otherwise the peer is the client and the header is
@@ -56,7 +59,7 @@ func parseForwardedEntry(s string) (netip.Addr, bool) {
 // left can be believed — so resolution stops and the peer address is used.
 // If every hop is trusted the peer is used as well. The result is the
 // zero Addr only when the peer address itself is unparsable.
-func ResolveClientIP(remoteAddr string, forwardedFor []string, proxies []netip.Prefix) netip.Addr {
+func Resolve(remoteAddr string, forwardedFor []string, proxies []netip.Prefix) netip.Addr {
 	ap, err := netip.ParseAddrPort(remoteAddr)
 	if err != nil {
 		return netip.Addr{}

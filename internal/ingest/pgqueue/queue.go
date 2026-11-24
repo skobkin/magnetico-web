@@ -53,8 +53,9 @@ type Item struct {
 
 // AdmitResult describes a committed admission.
 type AdmitResult struct {
-	Inserted   int // rows newly queued
-	Duplicates int // rows already pending (ON CONFLICT DO NOTHING)
+	Inserted      int   // rows newly queued
+	Duplicates    int   // rows already pending (ON CONFLICT DO NOTHING)
+	InsertedBytes int64 // payload bytes of the rows newly queued (duplicates add none)
 }
 
 // Queue is the PostgreSQL ingest queue.
@@ -179,16 +180,21 @@ func (q *Queue) Admit(ctx context.Context, items []Item) (AdmitResult, error) {
 	}
 	// Duplicate input hashes inside one batch would make ON CONFLICT touch
 	// the same row twice; collapse them (first wins) before the insert.
-	tag, err := tx.Exec(ctx, `
-INSERT INTO magnetico_ingest.queue (info_hash, format, payload, payload_bytes)
-SELECT DISTINCT ON (h) h, f, p, s
-FROM unnest($1::bytea[], $2::smallint[], $3::bytea[], $4::int[]) WITH ORDINALITY AS t(h, f, p, s, ord)
-ORDER BY h, ord
-ON CONFLICT (info_hash) DO NOTHING`, hashes, formats, payloads, sizes)
+	var inserted int64
+	err = tx.QueryRow(ctx, `
+WITH ins AS (
+    INSERT INTO magnetico_ingest.queue (info_hash, format, payload, payload_bytes)
+    SELECT DISTINCT ON (h) h, f, p, s
+    FROM unnest($1::bytea[], $2::smallint[], $3::bytea[], $4::int[]) WITH ORDINALITY AS t(h, f, p, s, ord)
+    ORDER BY h, ord
+    ON CONFLICT (info_hash) DO NOTHING
+    RETURNING payload_bytes
+)
+SELECT count(*), COALESCE(sum(payload_bytes), 0) FROM ins`, hashes, formats, payloads, sizes).Scan(&inserted, &res.InsertedBytes)
 	if err != nil {
 		return AdmitResult{}, storageErr(err)
 	}
-	res.Inserted = int(tag.RowsAffected())
+	res.Inserted = int(inserted)
 	res.Duplicates = len(items) - res.Inserted
 
 	if res.Inserted > 0 {

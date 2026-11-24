@@ -650,3 +650,19 @@ func TestConcurrentAuthentication(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestDisabledCrawlerIdentityIsReturnedWithTheRefusalAndNeverCached(t *testing.T) {
+	l := newLookup()
+	l.set(tok(1), crawlers.Record{ID: "id-off", Name: "off", Enabled: false})
+	a := newAuth(l, newClock())
+	id, err := a.Authenticate(context.Background(), tok(1))
+	if !errors.Is(err, ErrUnauthorized) || id.CrawlerID != "id-off" {
+		t.Fatalf("disabled: %+v %v, want the identity with ErrUnauthorized", id, err)
+	}
+	if id, err = a.Authenticate(context.Background(), tok(2)); !errors.Is(err, ErrUnauthorized) || id != (Identity{}) {
+		t.Fatalf("unknown: %+v %v, want a zero identity", id, err)
+	}
+	if a.cacheLen() != 0 {
+		t.Fatal("a disabled crawler was cached")
+	}
+}

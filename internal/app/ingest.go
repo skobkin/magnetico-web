@@ -35,6 +35,8 @@ func runIngest(opFlags *opflags.IngestOptions) {
 		CacheMaxBytes:    opFlags.CacheMaxBytes,
 		CacheDisabled:    opFlags.CacheDisabled,
 		AllowNonDurable:  opFlags.AllowNonDurable,
+		TrustedProxies:   opFlags.TrustedProxyPrefixes,
+		StatsDisabled:    opFlags.StatsDisabled,
 	})
 	if errors.Is(err, ingestserver.ErrShutdownIncomplete) {
 		// Same convention as `crawl`: a stuck goroutine was abandoned within

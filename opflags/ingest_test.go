@@ -82,3 +82,36 @@ func TestIngestRejectsUnknownEnvAndBadValues(t *testing.T) {
 		t.Fatalf("unknown env: %v", err)
 	}
 }
+
+func TestIngestTrustedProxiesAndStatsKillSwitch(t *testing.T) {
+	t.Setenv("MAGNETICO_INGEST_TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.7 ,::ffff:172.16.0.0/108")
+	t.Setenv("MAGNETICO_INGEST_STATS_DISABLED", "true")
+	o := &OpFlags{}
+	if _, err := o.parseArgs([]string{"ingest"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range o.Ingest.TrustedProxyPrefixes {
+		got[p.String()] = true
+	}
+	if len(got) != 3 || !got["10.0.0.0/8"] || !got["192.0.2.7/32"] || !got["172.16.0.0/12"] || !o.Ingest.StatsDisabled {
+		t.Fatalf("prefixes %v, disabled %v", got, o.Ingest.StatsDisabled)
+	}
+	// A bad entry is refused without echoing it; a bad boolean too.
+	t.Setenv("MAGNETICO_INGEST_TRUSTED_PROXIES", "not-a-cidr")
+	if _, err := (&OpFlags{}).parseArgs([]string{"ingest"}); err == nil || strings.Contains(err.Error(), "not-a-cidr") {
+		t.Fatalf("bad proxy entry: %v", err)
+	}
+	t.Setenv("MAGNETICO_INGEST_TRUSTED_PROXIES", "")
+	t.Setenv("MAGNETICO_INGEST_STATS_DISABLED", "maybe")
+	if _, err := (&OpFlags{}).parseArgs([]string{"ingest"}); err == nil || strings.Contains(err.Error(), "maybe") {
+		t.Fatalf("bad boolean: %v", err)
+	}
+	// The flags exist and win over the environment.
+	t.Setenv("MAGNETICO_INGEST_STATS_DISABLED", "true")
+	t.Setenv("MAGNETICO_INGEST_TRUSTED_PROXIES", "")
+	o = &OpFlags{}
+	if _, err := o.parseArgs([]string{"ingest", "--trusted-proxies", "198.51.100.0/24"}); err != nil || len(o.Ingest.TrustedProxyPrefixes) != 1 {
+		t.Fatalf("flag: %v %v", err, o.Ingest.TrustedProxyPrefixes)
+	}
+}
