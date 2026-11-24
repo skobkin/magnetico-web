@@ -1105,6 +1105,11 @@ func TestBinaryDoesNotLinkTestSupport(t *testing.T) {
 			"github.com/santhosh-tekuri/jsonschema",
 			"github.com/dlclark/regexp2",
 			"net/http/pprof",
+			"testing",
+			"github.com/skobkin/magnetico-web/internal/pgtest",
+			"github.com/skobkin/magnetico-web/internal/testkit",
+			"github.com/skobkin/magnetico-web/internal/repocheck",
+			"github.com/skobkin/magnetico-web/internal/e2e",
 		} {
 			if dep == bad || strings.HasPrefix(dep, bad+"/") {
 				t.Errorf("the binary links %s", dep)
@@ -1141,5 +1146,40 @@ func TestDiagTagIsAbsentFromTheDefaultBuild(t *testing.T) {
 	}
 	if bytes.Contains(raw, []byte("MAGNETICO_DIAG_ADDR")) {
 		t.Error("the default binary knows MAGNETICO_DIAG_ADDR")
+	}
+}
+
+// The release shape of the executable: no build tag was passed (so no
+// diagnostic listener, no experimental code), and the diagnostic symbols are
+// absent; the same check on a deliberately tagged build proves the symbol probe
+// can see the listener at all.
+func TestDefaultBinaryCarriesNoBuildTagsAndNoDiagnosticSymbols(t *testing.T) {
+	versionM := func(bin string) string {
+		out, err := exec.Command("go", "version", "-m", bin).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go version -m: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	symbols := func(bin string) string {
+		out, err := exec.Command("go", "tool", "nm", bin).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go tool nm: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	plain := testkit.Binary(t)
+	if v := versionM(plain); strings.Contains(v, "-tags") {
+		t.Errorf("the default binary was built with build tags:\n%s", v)
+	}
+	if strings.Contains(symbols(plain), "startDiag") {
+		t.Error("the default binary contains the diagnostic listener")
+	}
+	diag := testkit.Binary(t, "diag")
+	if !strings.Contains(versionM(diag), "-tags=diag") {
+		t.Error("the diag binary does not record its build tag: the build-setting probe is vacuous")
+	}
+	if !strings.Contains(symbols(diag), "startDiag") {
+		t.Error("the diag binary lacks the listener: the symbol probe is vacuous")
 	}
 }
