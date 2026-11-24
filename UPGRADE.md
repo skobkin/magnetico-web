@@ -19,8 +19,8 @@ before upgrading.
 
 Magnetico Web 0.8.0 is a rewrite in Go: the PHP application's configuration and database layout are **incompatible**
 with it, and nothing is migrated or translated automatically. To save operators who point the new image at their old
-deployment from reading unrelated configuration errors, every command except `--help`, `--version` and the plain usage
-(no arguments) first checks the process environment for the **names** `APP_DATABASE_URL` and
+deployment from reading unrelated configuration errors, every command except `--help`, `-h` and `--version` first checks
+the process environment for the **names** `APP_DATABASE_URL` and
 `MAGNETICOD_DATABASE_URL` (the two variables only the PHP application used; the generic `APP_ENV`, `APP_SECRET`,
 `MAILER_DSN`, … are deliberately not triggers). If one is present it prints a boxed warning on standard error, before
 the configuration is read:
@@ -40,7 +40,9 @@ Upgrade instructions: https://github.com/skobkin/magnetico-web/blob/master/UPGRA
 ================================================================================
 ```
 
-The warning prints variable **names only**, never a value, a DSN or a credential; it changes no exit code, never
+The old PHP image had no command of its own, so a deployment whose image tag is merely bumped starts this image
+**without arguments**: the banner is printed before the usage error then too (the usage text and exit status 1 are
+unchanged). The warning prints variable **names only**, never a value, a DSN or a credential; it changes no exit code, never
 connects to anything and does not weaken the fail-closed schema verification or the required-configuration checks (the
 real error follows it unchanged). The link targets `master`: the instructions are this file's 0.8.0 section and
 [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md), which reach `master` when the owner merges the 0.8.0 branch.
