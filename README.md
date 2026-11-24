@@ -104,8 +104,9 @@ global option that must precede the subcommand.
 The storage layer (codec + PostgreSQL persistence), the crawler/ingest delivery,
 the migration toolchain, the web UI and API (milestones W1–W7), the user
 migration (W8) and the development fixtures and operator guides (07I) are
-implemented and accepted by the owner; the W9 integration, security and
-regression task (07J) is tracked in [`docs/wip/`](docs/wip/). Not done: CI and
+implemented and accepted by the owner, as is the W9 integration, security and
+regression task (07J); the CI/OCI and release-engineering task (08) is in
+progress and tracked in [`docs/wip/`](docs/wip/). Not done: CI and
 OCI image publishing, release-candidate testing (including live-DHT
 acceptance) and the production cutover. No 0.8.0 release exists yet.
 

@@ -1,6 +1,6 @@
 # Task 07J report — W9 integration, security, regression and release preparation
 
-**Status:** implemented; awaiting owner review. Approved plan: [`07J-web-integration-security-plan.md`](07J-web-integration-security-plan.md). Raw measurements: [`07J-measurements/`](07J-measurements/README.md). Nothing was deployed, published or run against production; no schema, grant, wire-format or index change; no live DHT, BitTorrent or tracker traffic. Observed results, assumptions and recommendations are labelled as such.
+**Status:** implemented; accepted by the owner, including the follow-up corrections (recorded in Task 08). Approved plan: [`07J-web-integration-security-plan.md`](07J-web-integration-security-plan.md). Raw measurements: [`07J-measurements/`](07J-measurements/README.md). Nothing was deployed, published or run against production; no schema, grant, wire-format or index change; no live DHT, BitTorrent or tracker traffic. Observed results, assumptions and recommendations are labelled as such.
 
 ## 1. Implementation summary
 
