@@ -726,6 +726,7 @@ type w9Env struct {
 	samp      *w9Sampler
 	failed    []string
 	producers []*w9Producer
+	diagAddr  string
 }
 
 func (e *w9Env) startWeb() {
@@ -733,6 +734,10 @@ func (e *w9Env) startWeb() {
 	e.webAddr = freeLoopbackAddr(e.t)
 	env := w9LoadEnv("MAGNETICO_WEB_DATABASE="+e.dsn, "MAGNETICO_WEB_LISTEN="+e.webAddr, "MAGNETICO_WEB_PUBLIC_URL=http://"+e.webAddr,
 		"MAGNETICO_WEB_TRUSTED_PROXIES=127.0.0.1/32", "MAGNETICO_WEB_POOL_MAX_CONNS=20", "GOMAXPROCS=2", "GODEBUG=gctrace=1", "GOMEMLIMIT="+e.goMem)
+	if strings.Contains(os.Getenv("MAGNETICO_W9_TAGS"), "w9diag") {
+		e.diagAddr = freeLoopbackAddr(e.t)
+		env = append(env, "MAGNETICO_W9_DIAG_ADDR="+e.diagAddr)
+	}
 	e.web = startScoped(e.t, "web", e.webMem, 200, env, e.bin, "web")
 	e.waitReady("http://" + e.webAddr + "/readyz")
 }
@@ -808,13 +813,15 @@ func (e *w9Env) segment(name string, conc int, d time.Duration, ingest bool, gat
 		prod = startProducer(e.ingAddr, e.ingTok, w9IngestRate)
 	}
 	start := time.Now()
+	tStart := time.Since(e.samp.start).Seconds()
 	if conc > 0 {
 		load.run(conc, d, gates.think, acc)
 	} else {
 		time.Sleep(d)
 	}
 	wall := time.Since(start)
-	rec := map[string]any{"segment": name, "concurrency": conc, "seconds": wall.Seconds(), "ingest": ingest}
+	rec := map[string]any{"segment": name, "concurrency": conc, "seconds": wall.Seconds(), "ingest": ingest,
+		"t_start": tStart, "t_end": time.Since(e.samp.start).Seconds()}
 	total, classes := acc.stats()
 	n := 0
 	for _, v := range total {
@@ -1019,9 +1026,43 @@ func (e *w9Env) begin() {
 	e.pools = w9Identities(e.t, e.webAddr, e.dsn)
 	e.samp = startSampler([]*w9Scoped{e.web, e.ingest}, e.dsn)
 	e.write("start", map[string]any{
-		"machine": benchkit.Describe().String(), "web_mem": e.webMem, "web_gomemlimit": e.goMem, "git": gitSHA(),
+		// The web process started this long before the sampler's clock: add it to a
+		// gctrace timestamp to compare it with a sample time.
+		"web_age_at_sampler_start_s": time.Since(e.web.start).Seconds(),
+		"machine":                    benchkit.Describe().String(), "web_mem": e.webMem, "web_gomemlimit": e.goMem, "git": gitSHA(),
 		"pools": map[string]int{"small": len(e.pools.small), "medium": len(e.pools.medium), "large": len(e.pools.large), "huge": len(e.pools.huge)},
 	})
+}
+
+// poll records one reading of the diagnostic endpoint (the w9diag build only).
+func (e *w9Env) poll(label string) {
+	e.t.Helper()
+	if e.diagAddr == "" {
+		return
+	}
+	resp, err := http.Get("http://" + e.diagAddr + "/diag")
+	if err != nil {
+		e.t.Fatalf("diag endpoint: %v", err)
+	}
+	defer resp.Body.Close()
+	var v map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		e.t.Fatal(err)
+	}
+	v["label"], v["t"] = label, time.Since(e.samp.start).Seconds()
+	e.write("diag", v)
+}
+
+// pollEvery polls every d until stop is closed.
+func (e *w9Env) pollEvery(d time.Duration, label string, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-time.After(d):
+			e.poll(label)
+		}
+	}
 }
 
 func gitSHA() string {
@@ -1070,6 +1111,29 @@ func TestW9Load(t *testing.T) {
 		e.drain()
 		e.segment("idle", 0, dur(20), false, segGates{})
 		e.finish("soak")
+	case "diag":
+		// The diagnostic run (build tag w9diag): the soak timeline, shorter, with
+		// non-destructive readings of one process before, during and after the
+		// load. Its numbers are not used for performance (the polling would
+		// perturb the idle phase); it explains growth and shows leaks.
+		scale, _ := strconv.ParseFloat(envOr("MAGNETICO_W9_SOAK_SCALE", "0.35"), 64)
+		dur := func(min float64) time.Duration { return time.Duration(min * scale * float64(time.Minute)) }
+		e.begin()
+		if e.diagAddr == "" {
+			t.Fatal("the diag profile needs MAGNETICO_W9_TAGS=w9diag")
+		}
+		e.poll("baseline-after-start")
+		stop := make(chan struct{})
+		go e.pollEvery(2*time.Minute, "during-load", stop)
+		e.segment("warmup", 16, dur(30), false, segGates{noTimeouts: true, noBusy: true})
+		e.segment("steady", 16, dur(90), true, segGates{noTimeouts: true, noBusy: true})
+		close(stop)
+		e.poll("after-load")
+		e.drain()
+		e.poll("idle-start")
+		e.segment("idle", 0, dur(20), false, segGates{})
+		e.poll("idle-end")
+		e.finish("diag")
 	default:
 		t.Fatalf("unknown profile %q", profile)
 	}
