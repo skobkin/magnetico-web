@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,10 +98,13 @@ type RunOptions struct {
 	SignalAfter time.Duration
 }
 
-// RunResult is the outcome of Run. Output is stdout and stderr combined.
+// RunResult is the outcome of Run. Output is stdout and stderr combined (in
+// arrival order); Stdout and Stderr are the separate streams.
 type RunResult struct {
 	ExitCode int
 	Output   string
+	Stdout   string
+	Stderr   string
 }
 
 // Run executes bin and waits for it. A process killed by the timeout or by a
@@ -123,8 +127,8 @@ func Run(t testing.TB, bin string, opts RunOptions) RunResult {
 	if opts.Stdin != "" {
 		cmd.Stdin = strings.NewReader(opts.Stdin)
 	}
-	var out SyncBuffer
-	cmd.Stdout, cmd.Stderr = &out, &out
+	var out, so, se SyncBuffer
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(&out, &so), io.MultiWriter(&out, &se)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start %s: %v", bin, err)
 	}
@@ -136,7 +140,7 @@ func Run(t testing.TB, bin string, opts RunOptions) RunResult {
 	if timer != nil {
 		timer.Stop()
 	}
-	res := RunResult{Output: out.String()}
+	res := RunResult{Output: out.String(), Stdout: so.String(), Stderr: se.String()}
 	var ee *exec.ExitError
 	switch {
 	case err == nil:

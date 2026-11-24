@@ -24,6 +24,16 @@ func TestRunCapturesOutputAndExitCode(t *testing.T) {
 	}
 }
 
+func TestRunSeparatesStandardStreams(t *testing.T) {
+	res := Run(t, "/bin/sh", RunOptions{Args: []string{"-c", "echo to-out; echo to-err >&2"}})
+	if strings.TrimSpace(res.Stdout) != "to-out" || strings.TrimSpace(res.Stderr) != "to-err" {
+		t.Fatalf("stdout=%q stderr=%q", res.Stdout, res.Stderr)
+	}
+	if !strings.Contains(res.Output, "to-out") || !strings.Contains(res.Output, "to-err") {
+		t.Fatalf("combined output lost a stream: %q", res.Output)
+	}
+}
+
 func TestRunPassesEnvAndStdin(t *testing.T) {
 	res := Run(t, "/bin/sh", RunOptions{
 		Args:  []string{"-c", `read x; echo "$GREETING $x"`},

@@ -1,12 +1,26 @@
 package app
 
 import (
+	"fmt"
 	"log"
+	"os"
 
+	"github.com/skobkin/magnetico-web/internal/buildinfo"
 	"github.com/skobkin/magnetico-web/opflags"
 )
 
+// Main is the entry point of the magnetico executable: it parses the command
+// line and runs one of the commands. Commands report failures through their
+// documented exit codes (see the migrate and service commands) and never return
+// an error to the caller.
 func Main() {
+	// `magnetico --version` is answered before anything else is read: no
+	// configuration file, no environment validation, no database, no network.
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(buildinfo.Info())
+		os.Exit(0)
+	}
+
 	// opFlags is the "operational flags"
 	opFlags := opflags.OpFlags{}
 	command, err := opFlags.Parse()
