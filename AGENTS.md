@@ -37,6 +37,17 @@ Normative contracts: `docs/specs/wire-format-v1.md` and `docs/specs/postgresql-p
 - The rule applies to both v1 and v2, including the RSS authentication contract (RSS tokens are separate from general API tokens).
 - Tests SHOULD keep implemented routes and OpenAPI descriptions consistent where feasible.
 
+## Architecture comparison document
+
+[`docs/projects_differences.md`](docs/projects_differences.md) explains how Magnetico Web 0.8.0 differs from `boramalper/magnetico` and `tgragnato/magnetico`. Whenever a change introduces or modifies a **significant architectural difference** (storage, ingestion, migration, the web service and its interfaces, deployment), update that document in the same change:
+
+- the **comparison table** and the explanation of the affected difference;
+- the **rationale and trade-offs** (what changed, why, what it costs; not every difference is an improvement);
+- every **Mermaid diagram** that shows the affected component, keeping diagrams in agreement with the implementation (no invented components, connections or guarantees);
+- the **last-updated date** at the top.
+
+Keep comparisons grounded in identifiable versions or commits of the other projects (tags or commit hashes, never "upstream" in general), cite measurements only with their dataset, configuration and report, and keep **implemented** behaviour separate from planned, researched or refused work (the non-goals section lists the latter and states they are not commitments).
+
 ## Later work, not yet started
 
 The torrent migrator, its verification and forensic tooling, the user migration, the crawler/ingest pipeline and the authenticated web UI and API are implemented (see `docs/wip/README.md`). Still requiring separate owner-approved tasks: Woodpecker CI and OCI distribution, release-candidate testing including live-DHT acceptance (`docs/wip/rc0-acceptance-checklist.md`), and the final single offline production cutover. Owner decisions on distribution: Forgejo is the primary repository and GitHub a mirror; Woodpecker CI is the intended build system; Docker Hub is the intended OCI registry (GHCR may be added in the CI/OCI task); Forgejo is not an OCI publication target.

@@ -96,6 +96,7 @@ global option that must precede the subcommand.
 | [`docs/crawler.md`](docs/crawler.md) | Running `magnetico crawl` on a separate machine with `magnetico ingest` next to PostgreSQL |
 | [`docs/web-deployment.md`](docs/web-deployment.md) | Web service configuration, database roles, reverse proxy, administrator commands, user migration |
 | [`docs/development-fixtures.md`](docs/development-fixtures.md) | Synthetic torrents for manual testing |
+| [`docs/projects_differences.md`](docs/projects_differences.md) | How 0.8.0 differs from `boramalper/magnetico` and `tgragnato/magnetico`: lineage, architecture, rationale and trade-offs |
 | [`docs/specs/`](docs/specs/) | Normative contracts |
 
 ## Development status and remaining work
