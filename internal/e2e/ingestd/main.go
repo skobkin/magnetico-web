@@ -12,7 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux
+	_ "net/http/pprof" //nolint:gosec // G108: test-only harness daemon; /debug/pprof/* is served only on a loopback listener (see loopbackOnly) and only when INGESTD_PPROF is set
 	"os"
 	"os/signal"
 	"regexp"
@@ -98,7 +98,8 @@ func main() {
 			debug.FreeOSMemory()
 			fmt.Fprintln(w, "ok")
 		})
-		go func() { _ = http.Serve(ln, nil) }()
+		srv := &http.Server{ReadHeaderTimeout: 10 * time.Second} // default mux: pprof and /debug/freeos
+		go func() { _ = srv.Serve(ln) }()
 	}
 
 	interval := time.Duration(envInt("INGESTD_SAMPLE_MS", 2000)) * time.Millisecond

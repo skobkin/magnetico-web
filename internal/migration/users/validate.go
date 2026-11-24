@@ -216,7 +216,7 @@ func Analyze(s *Snapshot) *Analysis {
 // the Analyze finding code that replicates it, or why it cannot be reached.
 // A test fails when the version-1 schema gains a constraint that is not
 // listed here, so the replicas cannot silently fall behind the DDL.
-var ConstraintCoverage = map[string]string{
+var ConstraintCoverage = map[string]string{ //nolint:gosec // G101: constraint names mapped to finding codes, not credentials
 	"users_pkey":                    "user-id-duplicate",
 	"users_username_key":            "username-duplicate",
 	"users_username_length":         "username-length",

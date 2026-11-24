@@ -43,7 +43,7 @@ func writeBody(w http.ResponseWriter, body *fileview.Body) {
 	hd.Set("Content-Type", "application/json")
 	hd.Set("Cache-Control", "private, no-store")
 	hd.Set("Content-Length", strconv.Itoa(len(b)))
-	_, _ = w.Write(b)
+	_, _ = w.Write(b) //nolint:gosec // G705: a JSON document encoded by the fileview package, served as application/json (the server adds nosniff)
 }
 
 // Tree serves the complete hierarchy of the torrent in {id}, only when it is

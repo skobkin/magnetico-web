@@ -119,7 +119,7 @@ func Run(t testing.TB, bin string, opts RunOptions) RunResult {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, opts.Args...)
+	cmd := exec.CommandContext(ctx, bin, opts.Args...) //nolint:gosec // G204: a test helper; bin and args are chosen by the calling test
 	// A killed process may leave children holding the output pipes open; do not
 	// wait for them forever.
 	cmd.WaitDelay = 2 * time.Second

@@ -59,7 +59,9 @@ func (a *Auth) readSession(r *http.Request) (token string, hash []byte, present,
 }
 
 func (a *Auth) setSessionCookie(w http.ResponseWriter, res accounts.LoginResult) {
-	c := &http.Cookie{
+	// Secure is true unless the development switch (plain HTTP) is on; pinned by
+	// TestWebBinaryProductionCookieAttributes.
+	c := &http.Cookie{ //nolint:gosec // G124: Secure depends on DevMode only
 		Name: a.sessionName(), Value: res.Token, Path: "/",
 		HttpOnly: true, Secure: !a.cfg.DevMode, SameSite: http.SameSiteLaxMode,
 	}
@@ -74,14 +76,14 @@ func (a *Auth) setSessionCookie(w http.ResponseWriter, res accounts.LoginResult)
 }
 
 func (a *Auth) clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure depends on DevMode only (plain-HTTP development)
 		Name: a.sessionName(), Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(0, 0),
 		HttpOnly: true, Secure: !a.cfg.DevMode, SameSite: http.SameSiteLaxMode,
 	})
 }
 
 func (a *Auth) clearPreCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure depends on DevMode only (plain-HTTP development)
 		Name: a.preName(), Value: "", Path: "/", MaxAge: -1, Expires: time.Unix(0, 0),
 		HttpOnly: true, Secure: !a.cfg.DevMode, SameSite: http.SameSiteStrictMode,
 	})
@@ -133,7 +135,7 @@ func (a *Auth) ensurePre(w http.ResponseWriter, r *http.Request) string {
 		return v
 	}
 	v := a.newPreValue()
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure depends on DevMode only (plain-HTTP development)
 		Name: a.preName(), Value: v, Path: "/", MaxAge: int(preSessionTTL.Seconds()),
 		HttpOnly: true, Secure: !a.cfg.DevMode, SameSite: http.SameSiteStrictMode,
 	})

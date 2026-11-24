@@ -234,7 +234,7 @@ func Run(ctx context.Context, o Options) error {
 	// max(HTTPGrace, ConsumerGrace+AbortGrace) + HandlerGrace + the summary.
 	stopConsumer()
 	httpDone := make(chan struct{})
-	go func() {
+	go func() { //nolint:gosec // G118: the shutdown budget needs a fresh context; the serving context is already cancelled
 		defer close(httpDone)
 		sctx, cancel := context.WithTimeout(context.Background(), o.durations().httpGrace)
 		defer cancel()

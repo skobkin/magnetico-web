@@ -25,6 +25,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func init() { diagHook = startDiag }
@@ -126,6 +127,7 @@ func startDiag(src diagSources) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"top_inuse": top})
 	})
-	go func() { _ = http.Serve(ln, mux) }()
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
 	log.Println("diag build: diagnostics on", ln.Addr())
 }

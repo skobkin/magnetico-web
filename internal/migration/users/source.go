@@ -83,7 +83,7 @@ func openSource(ctx context.Context, dsn string) (*source, *Error) {
 func (s *source) close() { _ = s.conn.Close(context.Background()) }
 
 var expectedColumns = map[string]map[string]string{
-	"users": {
+	"users": { //nolint:gosec // G101: legacy column definitions (a column named "password"), not a credential
 		"id": "integer NOT NULL", "username": "character varying(25) NOT NULL",
 		"password": "text NOT NULL", "email": "character varying(254) NOT NULL",
 		"roles": "json NOT NULL", "created_at": "timestamp(0) without time zone NOT NULL",

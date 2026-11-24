@@ -87,7 +87,7 @@ func isExpectedTable(name string) bool {
 // expectedConstraints and expectedIndexes are keyed "table.name" and hold the
 // whitespace-normalized PostgreSQL deparse of each definition, baselined on
 // PostgreSQL 17 (the supported minimum) with search_path = pg_catalog.
-var expectedConstraints = map[string]string{
+var expectedConstraints = map[string]string{ //nolint:gosec // G101: deparsed constraint definitions of the web schema, not credentials
 	"api_tokens.api_tokens_label_length":                    "CHECK (((label IS NULL) OR ((char_length(label) >= 1) AND (char_length(label) <= 100))))",
 	"api_tokens.api_tokens_pkey":                            "PRIMARY KEY (id)",
 	"api_tokens.api_tokens_token_hash_key":                  "UNIQUE (token_hash)",
@@ -131,7 +131,7 @@ var expectedConstraints = map[string]string{
 	"web_version.web_version_pkey":                          "PRIMARY KEY (version)",
 }
 
-var expectedIndexes = map[string]string{
+var expectedIndexes = map[string]string{ //nolint:gosec // G101: deparsed index definitions of the web schema, not credentials
 	"api_tokens.api_tokens_pkey":                   "CREATE UNIQUE INDEX api_tokens_pkey ON magnetico_web.api_tokens USING btree (id)",
 	"api_tokens.api_tokens_token_hash_key":         "CREATE UNIQUE INDEX api_tokens_token_hash_key ON magnetico_web.api_tokens USING btree (token_hash)",
 	"api_tokens.api_tokens_user_id_idx":            "CREATE INDEX api_tokens_user_id_idx ON magnetico_web.api_tokens USING btree (user_id)",
