@@ -588,14 +588,12 @@ func (f *flight) build() (filetree.Index, error) {
 		c.onDecode()
 	}
 	files, err := persistence.DecodeFileList(f.t, blob, l)
-	blob = nil
 	if err != nil {
 		return nil, err
 	}
 	// BuildArena checks its context; use the root context so waiters leaving
 	// cannot abort work that is already paid for, while shutdown still can.
 	idx, err := filetree.BuildArena(c.rootCtx, files)
-	files = nil
 	if err != nil {
 		switch {
 		case errors.Is(err, context.Canceled):

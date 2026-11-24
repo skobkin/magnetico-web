@@ -258,7 +258,7 @@ func genWide(rng *rand.Rand, s Spec) []codec.File {
 func genLongPath(rng *rand.Rand, s Spec) []codec.File {
 	var prefix strings.Builder
 	for i := 0; i < 20; i++ {
-		prefix.WriteString(fmt.Sprintf("level%02d-%s/", i, word(rng, 3)))
+		fmt.Fprintf(&prefix, "level%02d-%s/", i, word(rng, 3))
 	}
 	pre := prefix.String() // ~200 bytes
 	files := make([]codec.File, s.Files)
@@ -269,7 +269,7 @@ func genLongPath(rng *rand.Rand, s Spec) []codec.File {
 }
 
 func genAdversarial(rng *rand.Rand, s Spec) []codec.File {
-	pieces := []string{"", ".", "..", "a", "b b", "\xff\xfe", "\x00", "x\xc3", "é", "‮", "�", "100%", "a+b&c#d?e", "\\x41"}
+	pieces := []string{"", ".", "..", "a", "b b", "\xff\xfe", "\x00", "x\xc3", "é", "\u202e", "�", "100%", "a+b&c#d?e", "\\x41"}
 	files := make([]codec.File, 0, s.Files+s.Files/10)
 	for i := 0; len(files) < s.Files; i++ {
 		depth := rng.IntN(5)

@@ -632,7 +632,7 @@ func TestWebAdminBinary(t *testing.T) {
 		t.Fatalf("stray argument: exit %d: %s", code, errOut)
 	}
 	// Link-printing commands need the public URL; the others do not.
-	out, errOut, code = runWebAdminBinary(t, bin, dsn, "", []string{"MAGNETICO_WEB_PUBLIC_URL="}, "user", "add", "bob")
+	_, errOut, code = runWebAdminBinary(t, bin, dsn, "", []string{"MAGNETICO_WEB_PUBLIC_URL="}, "user", "add", "bob")
 	if code == 0 || !strings.Contains(errOut, "public URL") {
 		t.Fatalf("add without a public URL: exit %d: %s", code, errOut)
 	}

@@ -220,10 +220,7 @@ func (c *Consumer) processOwned(ctx context.Context, conn *pgx.Conn) (lost bool)
 	backoff := c.o.BackoffMin
 	for ctx.Err() == nil {
 		if !c.verifyOwnership(ctx, conn) {
-			if ctx.Err() != nil {
-				return false
-			}
-			return true
+			return ctx.Err() == nil // lost, unless the context was cancelled (graceful stop)
 		}
 		ids, err := c.claimIDs(ctx)
 		if err != nil {

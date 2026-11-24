@@ -32,8 +32,8 @@ func runWeb(o *opflags.WebOptions) {
 
 	backend, err := webdb.Open(ctx, o.DatabaseURL, o.PoolMaxConns)
 	if err != nil {
-		log.Fatalln(fmt.Sprintf("The web service could not start: database %s. %s",
-			redactDatabaseURL(o.DatabaseURL), controlledErrorDetail(err)))
+		log.Fatalf("The web service could not start: database %s. %s",
+			redactDatabaseURL(o.DatabaseURL), controlledErrorDetail(err))
 	}
 	srv, err := assemble.Web(o, backend, logger, diagHook)
 	if err != nil {

@@ -189,7 +189,6 @@ func TestColdBuildChild(t *testing.T) {
 	for _, f := range files {
 		res.PathBytes += len(f.Path)
 	}
-	files = nil
 
 	// ---- phase run ----
 	var dec []codec.File

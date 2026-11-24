@@ -368,12 +368,11 @@ func TestMigratedLegacyTokenSurvivesDisableEnableAndDiesOnReset(t *testing.T) {
 		}
 		return s
 	}
-	before := dump()
 	url := V1Path + "?api-token=" + legacy
 	if e.do(url, nil).Status != 200 {
 		t.Fatal("legacy token rejected")
 	}
-	before = dump() // last_used_at is written by the first use
+	before := dump() // last_used_at is written by the first use
 	if _, err := e.store.Disable(tctx(t), "alice"); err != nil {
 		t.Fatal(err)
 	}
