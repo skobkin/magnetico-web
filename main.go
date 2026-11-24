@@ -349,6 +349,18 @@ func runIngest(opFlags *opflags.IngestOptions) {
 // verifies the database read-only, serves until SIGINT/SIGTERM and then shuts
 // down within the configured grace period. Error text is reduced to
 // controlled content: database URLs and driver messages never reach the log.
+// diagSources are the live objects a diagnostic build may report on. The hook is
+// nil in every normal build: only a binary built with the test-only `w9diag`
+// tag (main_w9diag.go) sets it, to serve non-destructive runtime statistics on a
+// loopback listener for the W9 soak. Nothing in a production build can be
+// reached through it.
+type diagSources struct {
+	FileCache *filecache.Cache
+	Backend   *webdb.Backend
+}
+
+var diagHook func(diagSources)
+
 // assembleWeb builds the complete web service: every route the production
 // binary serves, over backend and the resolved options. It is the single place
 // the pieces are wired together, so tests can assemble exactly the router
@@ -435,6 +447,9 @@ func assembleWeb(o *opflags.WebOptions, backend *webdb.Backend, logger *slog.Log
 			"replaced", st.Replaced, "oversize", st.Oversize, "retries", st.Retries, "entries", st.Entries, "bytes", st.Bytes)
 		return err
 	})
+	if diagHook != nil {
+		diagHook(diagSources{FileCache: fileCache, Backend: backend})
+	}
 	viewSvc, err := fileview.New(fileCache, reader, fileview.Config{Logger: logger})
 	if err != nil {
 		return nil, err

@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -1109,5 +1110,36 @@ func TestW9BinaryDoesNotLinkTestSupport(t *testing.T) {
 				t.Errorf("the binary links %s", dep)
 			}
 		}
+	}
+}
+
+// The diagnostic build is opt-in: the default build does not contain the
+// w9diag files, so no diagnostic listener can exist in a production binary.
+func TestW9DiagTagIsAbsentFromTheDefaultBuild(t *testing.T) {
+	files := func(tags string) string {
+		args := []string{"list", "-f", "{{.GoFiles}}"}
+		if tags != "" {
+			args = append(args, "-tags", tags)
+		}
+		out, err := exec.Command("go", append(args, ".")...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("go list: %v\n%s", err, out)
+		}
+		return string(out)
+	}
+	if strings.Contains(files(""), "w9diag") {
+		t.Error("the default build contains the diagnostic files")
+	}
+	if !strings.Contains(files("w9diag"), "main_w9diag.go") {
+		t.Error("the w9diag tag does not select the diagnostic file")
+	}
+	// And the default binary never reads the diagnostic address.
+	bin := buildBinary(t)
+	raw, err := os.ReadFile(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("MAGNETICO_W9_DIAG_ADDR")) {
+		t.Error("the default binary knows MAGNETICO_W9_DIAG_ADDR")
 	}
 }
