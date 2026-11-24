@@ -65,6 +65,7 @@ def main():
         ev = d.get('memory_events', {})
         print(f"| {d['proc']} | {d['exit_code']} | {d['vmhwm_mib']:.0f} | {d['cgroup_peak_mib']:.0f} | {ev.get('oom_kill',0)}/{ev.get('oom',0)} (high {ev.get('high',0)}, max {ev.get('max',0)}) | {d['gc_count']} | {d['gc_pause_ms_total']:.0f} | {d.get('heap_after_gc_mib_max','-')} |")
         if d.get('shutdown_stats'): print(f"\n  `{d['proc']}` shutdown stats: {d['shutdown_stats'][:400]}")
+        if d.get('warn_error_lines') is not None: print(f"\n  `{d['proc']}` WARN/ERROR log lines: {d['warn_error_lines'] or 'none'}")
     # soak windows
     steady = next((s for s in segs if s['segment'] == 'steady'), None)
     if steady:

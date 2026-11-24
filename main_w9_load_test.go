@@ -954,6 +954,21 @@ func (e *w9Env) finish(prefix string) {
 			}
 		}
 		rep["gc_series"] = thin(gcs, 400)
+		// Log lines of level WARN and ERROR, counted by message (the logs carry no
+		// names, paths, queries or secrets by design, so the messages are safe to keep).
+		lv := map[string]int{}
+		msgRe := regexp.MustCompile(`level=(WARN|ERROR) msg="?([^"=]*[^" ])"?`)
+		for _, l := range strings.Split(p.out.String(), "\n") {
+			if m := msgRe.FindStringSubmatch(l); m != nil {
+				lv[m[1]+": "+m[2]]++
+			}
+		}
+		rep["warn_error_lines"] = lv
+		for k, n := range lv {
+			if strings.HasPrefix(k, "ERROR") {
+				e.gate(false, "%s: %d log line(s) at level %s", prefix, n, k)
+			}
+		}
 		e.write("process", rep)
 	}
 	e.write("samples", map[string]any{"samples": thinS(samples, 2000), "ingest_queue": queue})
