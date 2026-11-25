@@ -73,13 +73,19 @@ func startDiag(src diagSources) {
 			gl = append(gl, kv{k, v})
 		}
 		sort.Slice(gl, func(i, j int) bool { return gl[i].N > gl[j].N })
-		ps := src.Backend.Pool().Stat()
 		out := map[string]any{
 			"goroutines": runtime.NumGoroutine(), "goroutine_groups": gl,
 			"heap_alloc": ms.HeapAlloc, "heap_inuse": ms.HeapInuse, "heap_sys": ms.HeapSys, "sys": ms.Sys, "num_gc": ms.NumGC,
 			"pause_total_ns": ms.PauseTotalNs, "next_gc": ms.NextGC, "gc_cpu_fraction": ms.GCCPUFraction,
-			"file_cache": src.FileCache.Stats(),
-			"pool":       map[string]any{"acquired": ps.AcquiredConns(), "idle": ps.IdleConns(), "total": ps.TotalConns(), "max": ps.MaxConns(), "acquire_count": ps.AcquireCount(), "empty_acquire": ps.EmptyAcquireCount(), "canceled_acquire": ps.CanceledAcquireCount()},
+		}
+		// The web service reports its file cache and pool; ingest has neither (its
+		// sources are empty), so those keys are absent there.
+		if src.FileCache != nil {
+			out["file_cache"] = src.FileCache.Stats()
+		}
+		if src.Backend != nil {
+			ps := src.Backend.Pool().Stat()
+			out["pool"] = map[string]any{"acquired": ps.AcquiredConns(), "idle": ps.IdleConns(), "total": ps.TotalConns(), "max": ps.MaxConns(), "acquire_count": ps.AcquireCount(), "empty_acquire": ps.EmptyAcquireCount(), "canceled_acquire": ps.CanceledAcquireCount()}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)

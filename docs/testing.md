@@ -119,6 +119,15 @@ MAGNETICO_BENCH_LARGE=1 MAGNETICO_LOAD_DSN=… go test -tags loadtest -run 'Test
 #   TestMeasure (MAGNETICO_CRAWLQUEUE_MEASURE_DIR), TestE2E* (MAGNETICO_E2E_*_DIR), TestMeasureSearchPlans (MAGNETICO_MEASURE=1),
 #   TestColdBuildReport/TestMeasureTreeSize/… (MAGNETICO_BENCH_LARGE=1), TestWebDemoServer (MAGNETICO_DEMO_DIR)
 
+# The pre-RC qualification of Task 09A (docs/wip/09A-pre-rc-qualification-report.md)
+#   the locked-statistics sabotage at a production-like rate, with the two controls (not an artificial maximum rate):
+MAGNETICO_STATS_OUT=<dir> go test -tags loadtest -count=1 -v -timeout 3h -run TestQualifySabotageAtProductionRate ./internal/e2e/cli
+#   the combined-service soak (crawlers, interactive web users, administrator, rotation, restart, statistics outage), profile soak09a
+#   of TestLoad; MAGNETICO_BENCH_SOAK_SCALE=1 is about 4 h 50 min, 0.05 a 15-minute smoke run:
+MAGNETICO_BENCH_LARGE=1 MAGNETICO_BENCH_DSN=… MAGNETICO_BENCH_CONFIRM_DISPOSABLE_DB=bench MAGNETICO_BENCH_OUT=<dir> \
+  MAGNETICO_BENCH_LABEL=soak09a MAGNETICO_BENCH_PROFILE=soak09a MAGNETICO_BENCH_TAGS=diag MAGNETICO_BENCH_SOAK_SCALE=1 \
+  go test -tags loadtest -run 'TestLoad$' -count=1 -v -timeout 8h ./internal/e2e/cli
+
 # Extended fuzzing (seed corpora already run in regular CI); one target per invocation:
 go test -fuzz=FuzzDecode      -fuzztime=10m ./codec
 go test -fuzz=FuzzDecode      -fuzztime=10m ./internal/ingest/record

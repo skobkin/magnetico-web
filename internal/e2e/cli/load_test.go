@@ -148,6 +148,7 @@ func cgCPUSeconds(cg string) float64 {
 type harnessSampler struct {
 	start   time.Time
 	mu      sync.Mutex
+	procs   []*harnessScoped // the processes sampled; replaced when a service is restarted
 	samples []harnessSample
 	queue   []harnessPoint // ingest queue depth
 	// qTries counts the queue samples attempted; qFails those that produced no
@@ -163,7 +164,7 @@ type harnessPoint struct {
 }
 
 func startSampler(procs []*harnessScoped, dsn string) *harnessSampler {
-	s := &harnessSampler{start: time.Now(), stop: make(chan struct{})}
+	s := &harnessSampler{start: time.Now(), stop: make(chan struct{}), procs: procs}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
@@ -183,7 +184,7 @@ func startSampler(procs []*harnessScoped, dsn string) *harnessSampler {
 			}
 			now := time.Since(s.start).Seconds()
 			s.mu.Lock()
-			for _, p := range procs {
+			for _, p := range s.procs {
 				rss, _, th := readStatusOf(p.pid)
 				s.samples = append(s.samples, harnessSample{T: now, Proc: p.name, RSSMiB: float64(rss) / (1 << 20),
 					CgroupMiB: float64(readUint(p.cg+"/memory.current")) / (1 << 20), CPUSec: cgCPUSeconds(p.cg), Threads: th, FDs: countFDs(p.pid)})
@@ -219,6 +220,13 @@ func startSampler(procs []*harnessScoped, dsn string) *harnessSampler {
 		}
 	}()
 	return s
+}
+
+// setProcs replaces the sampled processes (after a restart of a service).
+func (s *harnessSampler) setProcs(procs []*harnessScoped) {
+	s.mu.Lock()
+	s.procs = procs
+	s.mu.Unlock()
 }
 
 func (s *harnessSampler) finish() {
@@ -452,6 +460,7 @@ type harnessEnv struct {
 	failed    []string
 	producers []*harnessProducer
 	diagAddr  string
+	ingDiag   string // the diag listener of the ingest service (build tag diag), "" otherwise
 
 	// drainDeadline overrides harnessDrainDeadline (tests only); onFail, when set,
 	// receives gate failures instead of the test (tests of the harness itself).
@@ -479,7 +488,11 @@ func (e *harnessEnv) startIngest() {
 	e.t.Helper()
 	e.ingAddr = freeLoopbackAddr(e.t)
 	e.ingTok = registerCrawler(e.t, e.bin, e.dsn, "load")
-	env := harnessLoadEnv("MAGNETICO_INGEST_DATABASE="+e.dsn, "MAGNETICO_INGEST_LISTEN="+e.ingAddr, "GOMAXPROCS=2", "GOMEMLIMIT=256MiB")
+	env := harnessLoadEnv("MAGNETICO_INGEST_DATABASE="+e.dsn, "MAGNETICO_INGEST_LISTEN="+e.ingAddr, "GOMAXPROCS=2", "GOMEMLIMIT=256MiB", "GODEBUG=gctrace=1")
+	if strings.Contains(os.Getenv("MAGNETICO_BENCH_TAGS"), "diag") {
+		e.ingDiag = freeLoopbackAddr(e.t)
+		env = append(env, "MAGNETICO_DIAG_ADDR="+e.ingDiag)
+	}
 	e.ingest = startScoped(e.t, "ingest", "1G", 100, env, e.bin, "ingest")
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
@@ -933,6 +946,8 @@ func TestLoad(t *testing.T) {
 		e.drain()
 		e.segment("idle", 0, dur(20), false, segGates{})
 		e.finish("soak")
+	case "soak09a":
+		e.soak09a()
 	case "knee":
 		// How the interactive capacity depends on the number of search slots
 		// (MAGNETICO_BENCH_SEARCH_CONCURRENCY): the same interactive tiers once.

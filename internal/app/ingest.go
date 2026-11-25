@@ -27,6 +27,9 @@ func runIngest(opFlags *opflags.IngestOptions) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if diagHook != nil { // only the diag build sets it: a loopback listener with goroutine and heap readings
+		diagHook(diagSources{})
+	}
 	err := ingestserver.Run(ctx, ingestserver.Options{
 		Listen:           opFlags.Listen,
 		DatabaseURL:      opFlags.DatabaseURL,
