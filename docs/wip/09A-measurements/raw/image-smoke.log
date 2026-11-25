@@ -23,7 +23,7 @@ ok    Swagger UI bundle is embedded in the executable
 ok    uPlot (the administrator charts) is embedded in the executable
 ok    executable is not writable by the runtime user
 == executable behaviour (no network, read-only root, all capabilities dropped)
-ok    --version: magnetico 0.0.0-qual (commit 3c1d7875eb23, go1.27.4, linux/amd64)
+ok    --version: magnetico 0.0.0-qual (commit f253276a3afa, go1.27.4, linux/amd64)
 ok    no arguments: usage and exit 1
 ok    no arguments: nothing was created in /data
 ok    magnetico web --help exits 0
@@ -43,7 +43,9 @@ ok    web /readyz answers (database reachable)
 ok    embedded static assets are served (3)
 ok    SIGTERM: web exits 0 (graceful shutdown)
 ok    ingest crawler add registers a crawler and prints its token once
+ok    migrate stats-schema-init succeeded in the container
 ok    ingest starts with the image's default environment (MAGNETICO_CRAWL_QUEUE_DIR is tolerated)
+ok    the ingest of the image published its statistics heartbeat (magnetico_stats.snapshot)
 ok    SIGTERM: ingest exits 0 (graceful shutdown)
 
 image smoke test: all checks passed (staged.invalid/magnetico-web:staged)
