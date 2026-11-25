@@ -384,13 +384,7 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 	}
 	finished, pass, counts, err := finishVerificationOutcome(runCtx, pool, run, nil, &observed, finalizeIssues)
 	if err != nil {
-		if cause := fatalCause(runCtx); cause != nil {
-			return nil, cause
-		}
-		if runCtx.Err() != nil {
-			return nil, interruptScan(runCtx, pool, run)
-		}
-		return nil, verificationFatal("coverage", checkpoint, err)
+		return nil, finishFailure(runCtx, pool, run, err, "coverage", checkpoint)
 	}
 
 	result.VerificationID = finished.VerificationID

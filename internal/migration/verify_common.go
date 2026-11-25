@@ -211,14 +211,27 @@ func finishVerificationOutcome(
 		Issues:            finalizeIssues,
 	})
 	if err != nil {
+		// A lost run lock decides first: whether the verdict in the table is this call's own
+		// cannot be known (another process may have adopted the run), so no verdict is
+		// reported; the caller surfaces the lock loss.
+		if fatalCause(ctx) != nil {
+			return nil, false, nil, err
+		}
 		// The commit is ambiguous from here: the server may have committed the verdict
 		// although the client never saw the acknowledgement (a cancellation or a lost
-		// connection in that window; issue #52). The durable row decides. A run that
-		// is no longer running was finished by this very call (it holds the run lock,
-		// and its issues and verdict commit in one transaction), so the verdict stands
-		// and is reported; only a run that is still running was not finished.
+		// connection in that window; issue #52), or the finishing transaction may still be
+		// on its way. The durable row decides, read after any transaction that is changing
+		// it has ended. A run that is no longer running was finished by this very call (it
+		// holds the run lock, and its issues and verdict commit in one transaction), so the
+		// verdict stands and is reported; a run that is still running was not finished. If
+		// the outcome cannot be established within the bound it is reported as unknown:
+		// neither a verdict nor an interruption.
 		reconciled, rerr := durableVerdict(pool, run.VerificationID)
-		if rerr != nil || reconciled == nil {
+		if rerr != nil {
+			return nil, false, nil, fmt.Errorf("%w: %s (finish error: %s); the verdict may or may not be recorded, run the verification again",
+				errFinishOutcomeUnknown, sanitizeDetail(rerr.Error()), sanitizeDetail(err.Error()))
+		}
+		if reconciled == nil {
 			return nil, false, nil, err
 		}
 		finished = reconciled
@@ -247,20 +260,47 @@ func finishVerificationOutcome(
 	return finished, pass, counts, nil
 }
 
-// durableVerdict reads the run on a context detached from the caller's
-// cancellation: it returns the run when its verdict is durable (completed_pass or
-// completed_fail) and nil when it is still running, absent or unreadable.
+// finishReconcileTimeout bounds the reconciliation of an ambiguous finish (only a test changes it).
+var finishReconcileTimeout = dbOpTimeout
+
+// errFinishOutcomeUnknown marks a finish whose outcome could not be established.
+var errFinishOutcomeUnknown = errors.New("the outcome of finishing the verification run is unknown")
+
+// durableVerdict reads the run, on a context detached from the caller's cancellation and after
+// any transaction still changing it has ended: it returns the run when its verdict is durable
+// (completed_pass or completed_fail) and nil when it is settled as not finished. An error means
+// the outcome could not be established (the wait for the unresolved transaction timed out, the
+// run is absent or unreadable).
 func durableVerdict(pool *pgxpool.Pool, id string) (*state.VerificationRun, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), dbOpTimeout)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), finishReconcileTimeout)
 	defer cancel()
-	run, err := state.GetVerification(ctx, pool, id)
-	if err != nil || run == nil {
+	run, err := state.GetVerificationSettled(ctx, pool, id)
+	if err != nil {
 		return nil, err
+	}
+	if run == nil {
+		return nil, errors.New("the verification run is absent")
 	}
 	if run.State != state.VerificationCompletedPass && run.State != state.VerificationCompletedFail {
 		return nil, nil
 	}
 	return run, nil
+}
+
+// finishFailure maps a failed finishVerificationOutcome to the error the pass returns: a lost run
+// lock, then an unknown outcome (a safety-level failure, exit 1), then an operator interruption
+// (resumable), else the infrastructure failure at the given stage.
+func finishFailure(runCtx context.Context, pool *pgxpool.Pool, run *state.VerificationRun, err error, stage string, checkpoint int64) error {
+	if cause := fatalCause(runCtx); cause != nil {
+		return cause
+	}
+	if errors.Is(err, errFinishOutcomeUnknown) {
+		return verificationFatal("finish", checkpoint, err)
+	}
+	if runCtx.Err() != nil {
+		return interruptScan(runCtx, pool, run)
+	}
+	return verificationFatal(stage, checkpoint, err)
 }
 
 // normalizeVerifyConfig applies the shared verification tunable defaults

@@ -841,13 +841,7 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	finished, pass, counts, err := finishVerificationOutcome(
 		runCtx, pool, run, &observedSource, &observedTarget, finalizeIssues)
 	if err != nil {
-		if cause := fatalCause(runCtx); cause != nil {
-			return nil, cause
-		}
-		if runCtx.Err() != nil {
-			return nil, interruptScan(runCtx, pool, run)
-		}
-		return nil, verificationFatal("coverage", targetAfter, err)
+		return nil, finishFailure(runCtx, pool, run, err, "coverage", targetAfter)
 	}
 
 	result.VerificationID = finished.VerificationID

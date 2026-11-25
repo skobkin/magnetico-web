@@ -445,6 +445,15 @@ func GetVerification(ctx context.Context, pool *pgxpool.Pool, verificationID str
         WHERE verification_id = $1::uuid`, verificationID))
 }
 
+// GetVerificationSettled reads one run like GetVerification, but waits for any transaction that
+// is changing the row (FOR SHARE conflicts with the UPDATE of a finishing transaction): what it
+// returns is never a state about to be overwritten by a commit that is still on its way.
+// It is for the reconciliation of an ambiguous finish; the wait is bounded by ctx.
+func GetVerificationSettled(ctx context.Context, pool *pgxpool.Pool, verificationID string) (*VerificationRun, error) {
+	return scanVerificationRow(pool.QueryRow(ctx, `SELECT `+verificationProjection+` FROM magnetico_migration.verification_runs
+        WHERE verification_id = $1::uuid FOR SHARE`, verificationID))
+}
+
 // LatestVerification returns the run with the HIGHEST seq of the kind —
 // the AUTHORITATIVE verification result. It is a current pass iff
 // `state = 'completed_pass' AND start_data_revision = progress.data_revision`;
