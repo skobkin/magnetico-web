@@ -26,9 +26,11 @@ type fakeForge struct {
 	mu              sync.Mutex
 	srv             *httptest.Server
 	calls           []string
-	existing        bool  // a release for the tag already exists
-	failUpload      int   // 1-based index of the upload that answers 500 (0: none)
-	forcePrerelease *bool // the read-back reports this instead of what was sent
+	existing        bool   // a release for the tag already exists
+	failUpload      int    // 1-based index of the upload that answers 500 (0: none)
+	forcePrerelease *bool  // the read-back reports this instead of what was sent
+	patchReplyLost  bool   // the publishing PATCH is applied but its reply never arrives
+	onCreate        func() // runs when the release is created, i.e. after the files were verified
 	release         map[string]any
 	assets          map[string][]byte
 	uploads         int
@@ -49,6 +51,9 @@ func newForge(t *testing.T) *fakeForge {
 	})
 	mux.HandleFunc("/api/v1/repos/skobkin/magnetico-web/releases", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
+		if f.onCreate != nil {
+			f.onCreate()
+		}
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
@@ -63,6 +68,7 @@ func newForge(t *testing.T) *fakeForge {
 		f.uploads++
 		n := f.uploads
 		f.mu.Unlock()
+
 		if f.failUpload == n {
 			http.Error(w, "boom", http.StatusInternalServerError)
 			return
@@ -92,6 +98,14 @@ func newForge(t *testing.T) *fakeForge {
 			_ = json.NewDecoder(r.Body).Decode(&patch)
 			for k, v := range patch {
 				f.release[k] = v
+			}
+			if f.patchReplyLost { // applied, but the client never gets the answer
+				if hj, ok := w.(http.Hijacker); ok {
+					if c, _, err := hj.Hijack(); err == nil {
+						_ = c.Close()
+						return
+					}
+				}
 			}
 		}
 		var as []string
@@ -308,5 +322,53 @@ func TestRefusesBadInputsWithoutAnyRequest(t *testing.T) {
 				t.Fatalf("exit %d, calls %v:\n%s", code, f.calls, out)
 			}
 		})
+	}
+}
+
+// A lost reply to the publishing PATCH must not produce "left as a draft, nothing was
+// published" advice when the release is in fact public: the tool looks before it advises
+// (review finding).
+func TestALostPublishReplyIsCheckedAgainstTheForgeBeforeAnyAdvice(t *testing.T) {
+	f := newForge(t)
+	f.patchReplyLost = true
+	tag := "0.8.0-rc.0"
+	out, code := run(t, f, makeDist(t, tag), tag, nil)
+	if code != 0 || !strings.Contains(out, "published release") {
+		t.Fatalf("the release was published and must be reported so (exit %d):\n%s", code, out)
+	}
+	if strings.Contains(out, "DRAFT") || strings.Contains(out, "delete that draft") {
+		t.Fatalf("misleading recovery advice for a published release:\n%s", out)
+	}
+}
+
+// Notes that were asked for must be readable: a release without its body is not what was
+// promised (review finding). Without --notes the body is deliberately empty.
+func TestAnUnreadableNotesFileFailsBeforeAnyRequest(t *testing.T) {
+	f := newForge(t)
+	tag := "0.8.0-rc.0"
+	d := makeDist(t, tag)
+	_ = os.Remove(d.notes)
+	out, code := run(t, f, d, tag, nil)
+	if code == 0 || len(f.calls) != 0 {
+		t.Fatalf("exit %d, calls %v:\n%s", code, f.calls, out)
+	}
+}
+
+// The bytes that are uploaded are the bytes that were hashed (review finding): the files are
+// read once, after which a change on disk cannot reach the forge.
+func TestUploadsTheBytesThatWereVerifiedEvenIfTheFileChangesAfterwards(t *testing.T) {
+	f := newForge(t)
+	tag := "0.8.0-rc.0"
+	d := makeDist(t, tag)
+	name := "magnetico-web_" + tag + "_linux_amd64.tar.gz"
+	want, _ := os.ReadFile(filepath.Join(d.dir, name))
+	f.onCreate = func() {
+		_ = os.WriteFile(filepath.Join(d.dir, name), []byte("changed on disk after verification\n"), 0o644)
+	}
+	if out, code := run(t, f, d, tag, nil); code != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	if !bytes.Equal(f.assets[name], want) {
+		t.Fatalf("the forge holds %q, not the verified bytes", f.assets[name])
 	}
 }

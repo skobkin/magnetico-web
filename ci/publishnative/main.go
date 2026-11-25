@@ -57,9 +57,11 @@ func main() {
 	os.Exit(realMain(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, &http.Client{Timeout: 5 * time.Minute}))
 }
 
+// asset is one file to upload. Its bytes are read ONCE, when the files are verified, and
+// those very bytes are uploaded: nothing that changes on disk afterwards can reach the forge.
 type asset struct {
 	name string
-	path string
+	data []byte
 	size int64
 }
 
@@ -104,10 +106,12 @@ func realMain(args []string, getenv func(string) string, stdout, stderr io.Write
 		return fail("%v", err)
 	}
 	body := ""
-	if *notes != "" {
-		if b, err := os.ReadFile(*notes); err == nil {
-			body = string(b)
+	if *notes != "" { // asked for: it must be readable, a release without its body is not what was promised
+		b, err := os.ReadFile(*notes)
+		if err != nil {
+			return fail("the release notes %s cannot be read: %v", *notes, err)
 		}
+		body = string(b)
 	}
 
 	api := &forge{base: base + "/api/v1/repos/" + repo, token: tok, client: client}
@@ -150,7 +154,11 @@ func realMain(args []string, getenv func(string) string, stdout, stderr io.Write
 	}
 	patch, _ := json.Marshal(map[string]any{"draft": false, "prerelease": prerelease})
 	if status, _, err = api.do(http.MethodPatch, rel, "application/json", patch); err != nil || status != http.StatusOK {
-		return fail("publishing the release failed (%s); %s", describe(status, err), recovery)
+		// The reply may have been lost after the release was published: look before advising.
+		if !publishedAlready(api, rel) {
+			return fail("publishing the release failed (%s); %s", describe(status, err), recovery)
+		}
+		fmt.Fprintf(stdout, "the reply to the publishing request was lost (%s) but the release is published; checking it\n", describe(status, err))
 	}
 
 	// ---- read back --------------------------------------------------------------
@@ -225,9 +233,9 @@ func verifyFiles(tag, dist, qualifiedPath string) ([]asset, error) {
 		if got := hex.EncodeToString(sum[:]); got != want {
 			return nil, fmt.Errorf("%s differs from the qualified one (sha256 %s, qualified %s): this is not the qualified build", name, got, want)
 		}
-		out = append(out, asset{name: name, path: p, size: int64(len(data))})
+		out = append(out, asset{name: name, data: data, size: int64(len(data))})
 	}
-	out = append(out, asset{name: "checksums.txt", path: filepath.Join(dist, "checksums.txt"), size: int64(len(published))})
+	out = append(out, asset{name: "checksums.txt", data: published, size: int64(len(published))})
 	return out, nil
 }
 
@@ -261,10 +269,7 @@ func (f *forge) send(req *http.Request) (int, []byte, error) {
 }
 
 func upload(api *forge, rel string, a asset) error {
-	data, err := os.ReadFile(a.path)
-	if err != nil {
-		return err
-	}
+	data := a.data
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	part, err := mw.CreateFormFile("attachment", a.name)
@@ -333,4 +338,16 @@ func redact(s, secret string) string {
 		return s
 	}
 	return strings.ReplaceAll(s, secret, "***")
+}
+
+// publishedAlready reports whether the release is public (not a draft).
+func publishedAlready(api *forge, rel string) bool {
+	status, resp, err := api.do(http.MethodGet, rel, "", nil)
+	if err != nil || status != http.StatusOK {
+		return false
+	}
+	var got struct {
+		Draft bool `json:"draft"`
+	}
+	return json.Unmarshal(resp, &got) == nil && !got.Draft
 }

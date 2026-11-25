@@ -89,7 +89,7 @@ Guarantees, and how each is enforced:
   that both archives hash to the qualified values (it refuses before any request otherwise). The release is created as
   a **draft**, the three assets are uploaded, and only then is it published, so a failure leaves an invisible draft
   and never a visible release with missing files; the metadata is what GoReleaser produced (name and tag are the release
-  tag, the body is the generated `CHANGELOG.md`, a release candidate is a prerelease, a stable tag is not). It never
+  tag, the body is the generated `CHANGELOG.md`, a release candidate is a prerelease, a stable tag is not). The release notes it was given (`--notes`) must be readable, and `ci/native-smoke.sh` requires `dist/CHANGELOG.md` for a tag build, so a build without notes stops before anything is published (GoReleaser skips the changelog in a snapshot build; its behaviour for a tag build is **not verified** here because no tag may be created: RC0 checklist). The bytes uploaded are the bytes that were hashed, and a lost reply to the publishing request is checked against the forge before any recovery advice is printed. It never
   overwrites a release that exists for the tag and never deletes anything. `verify-native` then **downloads the
   published archives** and compares their SHA-256 with the qualified checksums (comparing only the two `checksums.txt`
   files, as before, would not have noticed a different archive behind an honest list). The tool and the verifier were

@@ -29,6 +29,12 @@ cd "$DIST"
 
 if sha256sum -c checksums.txt >/dev/null 2>&1; then ok "checksums.txt verifies every archive"; else fail "sha256sum -c checksums.txt"; fi
 
+# A tag build also produced the release notes that ci/publishnative publishes as the body of the
+# release (GoReleaser skips the changelog in a snapshot build): stop before anything is published.
+if [ -n "$VERSION" ]; then
+	if [ -s CHANGELOG.md ]; then ok "CHANGELOG.md (the release notes) is present"; else fail "no CHANGELOG.md in $DIST: ci/publishnative would publish the release without notes"; fi
+fi
+
 if [ -z "$VERSION" ]; then
 	first="$(ls magnetico-web_*_linux_amd64.tar.gz 2>/dev/null | head -n 1 || true)"
 	[ -n "$first" ] || {
