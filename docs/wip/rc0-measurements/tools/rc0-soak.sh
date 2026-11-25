@@ -71,7 +71,7 @@ status)
 		grep '"kind":"monitor"' "$f" | tail -1 | cut -c1-600
 		grep '"kind":"event"' "$f" | tail -3 | cut -c1-300
 	fi
-	echo "gate failures so far: $(grep -c 'GATE FAILED' "$RC0_ROOT/soak/harness.log" 2>/dev/null || echo 0)"
+	echo "gate failures so far: $(grep -c "GATE FAILED" "$RC0_ROOT/soak/harness.log" 2>/dev/null || true)"
 	grep 'GATE FAILED' "$RC0_ROOT/soak/harness.log" 2>/dev/null | tail -5 || true
 	docker ps --filter name=rc0soak --format '{{.Names}}\t{{.Status}}'
 	;;
