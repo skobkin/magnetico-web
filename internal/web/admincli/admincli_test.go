@@ -159,6 +159,47 @@ func TestSetPasswordAndStates(t *testing.T) {
 	}
 }
 
+// set-password cancels a pending email confirmation and says so, and keeps the
+// stored address and its verification status.
+func TestSetPasswordCancelsPendingEmailLinkButKeepsTheAddress(t *testing.T) {
+	e, out, pool := newEnv(t)
+	ctx := tctx(t)
+	if err := UserAdd(ctx, e, "erin", "", 0); err != nil {
+		t.Fatal(err)
+	}
+	take(out)
+	u, err := e.Store.GetUser(ctx, "erin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE magnetico_web.users SET email = 'erin@example.org', email_verified_at = now() WHERE id = $1`, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	l, err := e.Store.IssueEmailVerifyLink(ctx, u.ID, "erin-new@example.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := UserSetPassword(ctx, e, "erin"); err != nil {
+		t.Fatal(err)
+	}
+	got := take(out)
+	if !strings.Contains(got, "1 pending email confirmation link(s) cancelled") || !strings.Contains(got, "stored email address and its verification status are unchanged") {
+		t.Fatalf("set-password output:\n%s", got)
+	}
+	noSecrets(t, got)
+	after, _ := e.Store.GetUser(ctx, "erin")
+	if after.Email != "erin@example.org" || !after.EmailVerified {
+		t.Fatalf("stored address changed: %+v", after)
+	}
+	if _, ok, _ := e.Store.PendingEmail(ctx, u.ID); ok {
+		t.Fatal("the pending link survived")
+	}
+	if _, err := e.Store.CompleteEmailVerify(ctx, l.Token); !errors.Is(err, accounts.ErrLinkInvalid) {
+		t.Fatalf("old link: %v", err)
+	}
+}
+
 func TestPasswordLineReader(t *testing.T) {
 	for name, tc := range map[string]struct {
 		in   string

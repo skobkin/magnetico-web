@@ -154,7 +154,8 @@ func (h *Handlers) passwordLinkSubmit(setup bool) http.HandlerFunc {
 			return
 		}
 		h.log.Info("password link completed", "request_id", server.RequestID(r.Context()), "user_id", res.UserID,
-			"purpose", purpose, "sessions_revoked", res.Sessions, "api_tokens_revoked", res.APITokens, "rss_tokens_revoked", res.RSSTokens)
+			"purpose", purpose, "sessions_revoked", res.Sessions, "api_tokens_revoked", res.APITokens, "rss_tokens_revoked", res.RSSTokens,
+			"email_links_cancelled", res.EmailLinks)
 		redirect(w, "/login?notice=password-set")
 	}
 }

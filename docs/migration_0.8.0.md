@@ -294,7 +294,7 @@ In this order, with a person ready to roll back (§11) until each step is checke
 ### 8.5 What to tell users
 
 - Everyone has to **sign in again**; sessions did not migrate. Passwords carry over, except for the accounts you told you must be reset.
-- **Verify your email address** on the account page before relying on password recovery.
+- **Verify your email address** on the account page before relying on password recovery. A password change or reset cancels a confirmation link that is still waiting (the stored address is kept): request the confirmation email again afterwards.
 - **RSS URLs keep working.** Create a new RSS URL on the account page when convenient: the old (v1) endpoint is deprecated and may eventually be removed. Expect up to 1,000 recent items to look new once.
 - **API clients** must create a new API token (account page) and use `/api/v2` with `Authorization: Bearer …`; `/api/v1/login` and the v1 JSON endpoints no longer exist.
 - Old bookmarks of the legacy pages may be 404. Search is by name only.

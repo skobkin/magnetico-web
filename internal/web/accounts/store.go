@@ -153,6 +153,9 @@ type Revocations struct {
 	Sessions  int64
 	APITokens int64
 	RSSTokens int64
+	// EmailLinks counts the outstanding email_verify links deleted (the
+	// pending address, never the stored one).
+	EmailLinks int64
 }
 
 func revokeAPITokensTx(ctx context.Context, tx pgx.Tx, userID int64) (int64, error) {
@@ -177,9 +180,19 @@ func revokeTokensTx(ctx context.Context, tx pgx.Tx, userID int64) (api, rss int6
 	return api, rss, nil
 }
 
+// deleteEmailVerifyLinksTx deletes every outstanding email_verify link of the
+// user and returns how many. It writes nothing to users: the stored address
+// and its verification status are not touched, only the pending confirmation
+// is. Every password write calls it in its own transaction (§4.9.11); the
+// caller holds the user row FOR UPDATE.
+func deleteEmailVerifyLinksTx(ctx context.Context, tx pgx.Tx, userID int64) (int64, error) {
+	tag, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose = 'email_verify'`, userID)
+	return tag.RowsAffected(), err
+}
+
 // resetRevocationsTx is the shared tail of every password reset (§4.9.6,
 // §4.10): all sessions deleted, all API and RSS tokens revoked, and every
-// outstanding setup/reset link removed.
+// outstanding setup/reset and email_verify link removed.
 func resetRevocationsTx(ctx context.Context, tx pgx.Tx, userID int64) (Revocations, error) {
 	var r Revocations
 	tag, err := tx.Exec(ctx, `DELETE FROM magnetico_web.sessions WHERE user_id = $1`, userID)
@@ -190,6 +203,9 @@ func resetRevocationsTx(ctx context.Context, tx pgx.Tx, userID int64) (Revocatio
 	if r.APITokens, r.RSSTokens, err = revokeTokensTx(ctx, tx, userID); err != nil {
 		return r, err
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose IN ('setup','reset')`, userID)
+	if _, err = tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose IN ('setup','reset')`, userID); err != nil {
+		return r, err
+	}
+	r.EmailLinks, err = deleteEmailVerifyLinksTx(ctx, tx, userID)
 	return r, err
 }

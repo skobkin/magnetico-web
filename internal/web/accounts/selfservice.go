@@ -40,7 +40,9 @@ type ChangePasswordResult struct {
 // password: it sets the new hash, deletes every session and inserts a rotated
 // replacement for the current one with the SAME absolute expiry and remember
 // flag (rotation never extends a lifetime), deletes outstanding setup/reset
-// links, and optionally revokes all API and/or all RSS tokens. Tokens are kept
+// links and outstanding email_verify links (the stored address and its
+// verification status are kept, only the pending confirmation goes), and
+// optionally revokes all API and/or all RSS tokens. Tokens are kept
 // by default. A concurrent password change, reset or disable makes the
 // conditional UPDATE match nothing: ErrLoginStale. A current session that no
 // longer exists or has expired is ErrUnauthenticated. Nothing is written in
@@ -91,6 +93,9 @@ func (s *Store) ChangePassword(ctx context.Context, p ChangePasswordParams) (Cha
 		if _, err := tx.Exec(ctx, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1 AND purpose IN ('setup','reset')`, p.UserID); err != nil {
 			return err
 		}
+		if res.EmailLinks, err = deleteEmailVerifyLinksTx(ctx, tx, p.UserID); err != nil {
+			return err
+		}
 		if p.RevokeAPI {
 			if res.APITokens, err = revokeAPITokensTx(ctx, tx, p.UserID); err != nil {
 				return err
@@ -116,7 +121,31 @@ func (s *Store) ChangePassword(ctx context.Context, p ChangePasswordParams) (Cha
 // until CompleteEmailVerify. An inactive account is ErrNotFound. Confirming an
 // address another account already holds verified is not checked here (it would
 // reveal who holds it); CompleteEmailVerify refuses it generically.
+//
+// It carries no credential check: use it only where no earlier credential can
+// exist (the account was just registered) or where the caller is the operator.
+// A request authenticated by a session must use IssueEmailVerifyLinkForSession.
 func (s *Store) IssueEmailVerifyLink(ctx context.Context, userID int64, email string) (Link, error) {
+	return s.issueEmailVerifyLink(ctx, userID, email, nil)
+}
+
+// IssueEmailVerifyLinkForSession is IssueEmailVerifyLink for a request that
+// was authorized by the session whose token hash is given. After locking the
+// user row it requires that session to still exist and be unexpired (the same
+// test as ChangePassword's), else ErrUnauthenticated and nothing is written.
+// Every password write deletes the account's sessions (a self-service change
+// replaces the current one with a rotated session) in the transaction that
+// holds the same row lock, so a request authorized by the credentials that a
+// committed password change replaced cannot create a pending link after it
+// (§4.9.11); a request that locks first has its link deleted by the change.
+func (s *Store) IssueEmailVerifyLinkForSession(ctx context.Context, userID int64, email string, session []byte) (Link, error) {
+	if len(session) == 0 {
+		return Link{}, ErrUnauthenticated
+	}
+	return s.issueEmailVerifyLink(ctx, userID, email, session)
+}
+
+func (s *Store) issueEmailVerifyLink(ctx context.Context, userID int64, email string, session []byte) (Link, error) {
 	var l Link
 	if err := ValidateEmail(email); err != nil {
 		return l, err
@@ -128,6 +157,19 @@ func (s *Store) IssueEmailVerifyLink(ctx context.Context, userID int64, email st
 		}
 		if !u.active {
 			return ErrNotFound
+		}
+		if session != nil {
+			// A new statement after the lock wait: READ COMMITTED sees the
+			// sessions a committed password change deleted.
+			var live bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM magnetico_web.sessions
+                WHERE token_hash = $1 AND user_id = $2 AND expires_at > statement_timestamp())`,
+				session, userID).Scan(&live); err != nil {
+				return err
+			}
+			if !live {
+				return ErrUnauthenticated
+			}
 		}
 		l, err = issueLinkForTx(ctx, tx, userID, PurposeEmailVerify, EmailLinkTTL, &email)
 		return err

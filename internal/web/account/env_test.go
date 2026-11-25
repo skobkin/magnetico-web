@@ -74,6 +74,10 @@ func (r *recMailer) all() []mail.Message {
 type spyStore struct {
 	*accounts.Store
 	calls atomic.Int64
+	// beforeSessionIssue, if set, runs just before a session-bound email link
+	// issuance reaches the store: the window between authentication and the
+	// issuing transaction.
+	beforeSessionIssue func()
 }
 
 func (s *spyStore) GetUserByID(ctx context.Context, id int64) (accounts.User, error) {
@@ -99,6 +103,13 @@ func (s *spyStore) CompleteEmailVerify(ctx context.Context, t string) (accounts.
 func (s *spyStore) IssueEmailVerifyLink(ctx context.Context, id int64, e string) (accounts.Link, error) {
 	s.calls.Add(1)
 	return s.Store.IssueEmailVerifyLink(ctx, id, e)
+}
+func (s *spyStore) IssueEmailVerifyLinkForSession(ctx context.Context, id int64, e string, sess []byte) (accounts.Link, error) {
+	s.calls.Add(1)
+	if s.beforeSessionIssue != nil {
+		s.beforeSessionIssue()
+	}
+	return s.Store.IssueEmailVerifyLinkForSession(ctx, id, e, sess)
 }
 func (s *spyStore) IssueRecoveryLink(ctx context.Context, e string) (accounts.RecoveryLink, error) {
 	s.calls.Add(1)

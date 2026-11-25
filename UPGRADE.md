@@ -143,6 +143,19 @@ the cause, `INSERT INTO magnetico_ingest.queue (info_hash, format, payload, payl
 info_hash, format, payload, payload_bytes FROM magnetico_ingest.quarantine WHERE …;` followed by the
 matching `DELETE` in the same transaction (the usage counter is maintained by triggers).
 
+### A password change now cancels pending email confirmation links
+
+No action is required and there is no schema change. Every password write of an existing account (the account page's
+password change, a completed password reset or setup link, `magnetico web user set-password`) now also deletes that
+account's outstanding **email confirmation** links in the same transaction; before, a link mailed before the change
+stayed usable for up to 24 hours and could still confirm or replace the address afterwards. The stored email address
+and its verification status are **not** changed: a verified address stays verified and keeps working for password
+recovery, an unverified one stays stored and unverified. Only the link that was waiting is cancelled, so a pending
+replacement address has to be requested again from the account page (the link in an already delivered email then shows
+the generic "link cannot be used" page). A request that was authorized before the change cannot create a new pending
+link after it. Sessions, API tokens and RSS tokens are revoked exactly as before. `set-password` prints how many
+links it cancelled; the reset and setup email and page, the confirmation email and the account page say the same.
+
 ## 2026-10-21 0.7.0
 
 ### PHP 8.5 required

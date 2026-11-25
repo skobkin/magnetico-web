@@ -42,6 +42,7 @@ type Store interface {
 	CompletePasswordLink(ctx context.Context, token, purpose, newHash string) (accounts.CompleteResult, error)
 	CompleteEmailVerify(ctx context.Context, token string) (accounts.EmailVerifyResult, error)
 	IssueEmailVerifyLink(ctx context.Context, userID int64, email string) (accounts.Link, error)
+	IssueEmailVerifyLinkForSession(ctx context.Context, userID int64, email string, session []byte) (accounts.Link, error)
 	IssueRecoveryLink(ctx context.Context, email string) (accounts.RecoveryLink, error)
 	PendingEmail(ctx context.Context, userID int64) (string, bool, error)
 	RemoveEmail(ctx context.Context, userID int64) (accounts.EmailRemoveResult, error)

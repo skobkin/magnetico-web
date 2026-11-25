@@ -153,8 +153,8 @@ func TestCompletionAndSetPasswordRevokeEverything(t *testing.T) {
 		if linkCount(t, s, u.ID, `'setup','reset'`) != 0 {
 			t.Fatal("outstanding password links survived")
 		}
-		if linkCount(t, s, u.ID, `'email_verify'`) != 1 {
-			t.Fatal("the email verification link was touched by a password operation")
+		if r.EmailLinks != 1 || linkCount(t, s, u.ID, `'email_verify'`) != 0 {
+			t.Fatalf("round %d: the pending email verification link survived a password operation (counted %d)", round, r.EmailLinks)
 		}
 		exec(t, pool, `DELETE FROM magnetico_web.one_time_tokens WHERE user_id = $1`, u.ID)
 	}

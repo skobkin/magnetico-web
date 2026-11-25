@@ -92,7 +92,7 @@ func UserResetPassword(ctx context.Context, e *Env, username string) error {
 		e.printf("note: the account is disabled; the link cannot be used until `web user enable %s`.\n", username)
 	}
 	if l.Purpose == accounts.PurposeReset {
-		e.printf("warning: completing the reset signs the user out everywhere and permanently revokes ALL their API tokens and ALL their RSS tokens (RSS feed URLs); clients must be updated.\n")
+		e.printf("warning: completing the reset signs the user out everywhere and permanently revokes ALL their API tokens and ALL their RSS tokens (RSS feed URLs); clients must be updated. It also cancels any pending email confirmation link (the stored email address is not changed).\n")
 	}
 	return nil
 }
@@ -115,8 +115,8 @@ func UserSetPassword(ctx context.Context, e *Env, username string) error {
 	if err != nil {
 		return err
 	}
-	e.printf("password of %s changed; revoked: %d session(s), %d API token(s), %d RSS token(s); outstanding links removed\n",
-		username, r.Sessions, r.APITokens, r.RSSTokens)
+	e.printf("password of %s changed; revoked: %d session(s), %d API token(s), %d RSS token(s); outstanding password links removed; %d pending email confirmation link(s) cancelled (the stored email address and its verification status are unchanged)\n",
+		username, r.Sessions, r.APITokens, r.RSSTokens, r.EmailLinks)
 	return nil
 }
 

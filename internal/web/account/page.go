@@ -21,7 +21,7 @@ import (
 // notices are the fixed texts the account page can show after a redirect
 // (?done=<slug>). Unknown slugs show nothing.
 var notices = map[string]string{
-	"password":       "Password changed. Your other sessions were signed out and this session was renewed.",
+	"password":       "Password changed. Your other sessions were signed out and this session was renewed. Any email confirmation link requested earlier no longer works; the email address on your account is unchanged, and you can request a new confirmation email.",
 	"email-sent":     "A confirmation link was sent to the new address. Your current address stays in force until it is confirmed.",
 	"email-resent":   "The confirmation email was sent again.",
 	"email-removed":  "Email address removed. Password recovery by email is unavailable until you add and verify an address.",
@@ -235,7 +235,8 @@ func (h *Handlers) postPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cfg.Auth.SetRotatedSession(w, res.Token, res.Remember, res.ExpiresAt, res.Now)
 	h.log.Info("password changed", "request_id", server.RequestID(r.Context()), "user_id", p.UserID,
-		"other_sessions_revoked", res.Sessions, "api_tokens_revoked", res.APITokens, "rss_tokens_revoked", res.RSSTokens)
+		"other_sessions_revoked", res.Sessions, "api_tokens_revoked", res.APITokens, "rss_tokens_revoked", res.RSSTokens,
+		"email_links_cancelled", res.EmailLinks)
 	redirect(w, "/account?tab=profile&done=password")
 }
 
@@ -255,6 +256,11 @@ func (h *Handlers) requireMail(w http.ResponseWriter, r *http.Request) bool {
 // reported before anything is written), then issues the link and hands it to
 // the workers. ok=false means the response was written.
 func (h *Handlers) queueVerification(w http.ResponseWriter, r *http.Request, userID int64, email string) bool {
+	session, ok := webauth.CurrentSessionHash(r.Context())
+	if !ok {
+		h.srv.ErrorPage(w, r, http.StatusInternalServerError)
+		return false
+	}
 	slot, err := h.cfg.Mail.Reserve()
 	if err != nil {
 		w.Header().Set("Retry-After", "30")
@@ -262,9 +268,15 @@ func (h *Handlers) queueVerification(w http.ResponseWriter, r *http.Request, use
 			"The confirmation email could not be sent right now. Nothing was changed; please try again later.", nil)
 		return false
 	}
-	link, err := h.cfg.Store.IssueEmailVerifyLink(r.Context(), userID, email)
+	link, err := h.cfg.Store.IssueEmailVerifyLinkForSession(r.Context(), userID, email, session)
 	if err != nil {
 		slot.Release()
+		if errors.Is(err, accounts.ErrUnauthenticated) {
+			// The session was revoked (a password change or reset) after the
+			// request was authorized: no pending link is created.
+			redirect(w, "/login")
+			return false
+		}
 		if errors.Is(err, accounts.ErrInvalid) {
 			h.renderAccount(w, r, http.StatusBadRequest, "profile", "", "Enter a valid email address.", nil)
 			return false

@@ -26,7 +26,7 @@ const (
 var loginNotices = map[string]string{
 	"registered":          "Your account was created. Sign in to continue.",
 	"registered-mailfail": "Your account was created, but the confirmation email could not be sent right now. Sign in and request it again from your account page.",
-	"password-set":        "Your password was set and every session, API token and RSS token of the account was revoked. Sign in, then create new API and RSS tokens and update your torrent clients.",
+	"password-set":        "Your password was set and every session, API token and RSS token of the account was revoked, and any pending email confirmation link was cancelled (your stored email address is unchanged). Sign in, then create new API and RSS tokens and update your torrent clients.",
 }
 
 func (a *Auth) renderLogin(w http.ResponseWriter, status int, p ui.LoginPage) {

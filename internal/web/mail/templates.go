@@ -12,7 +12,9 @@ import (
 const consequences = `Completing this link will:
   - sign you out of every browser and device;
   - invalidate ALL of your existing API tokens;
-  - stop ALL of your existing RSS tokens and RSS feed URLs from working.
+  - stop ALL of your existing RSS tokens and RSS feed URLs from working;
+  - cancel any email confirmation link that is still waiting (the email
+    address stored on your account and its confirmation status do not change).
 
 You will have to create new API tokens and new RSS tokens and update your
 torrent clients, feed readers and scripts afterwards.`
@@ -49,6 +51,7 @@ func VerifyMessage(to, link string, ttl time.Duration) Message {
 	b.WriteString("Confirm this email address for your Magnetico account.\n\n")
 	fmt.Fprintf(&b, "Open this link and confirm (valid for %s, usable once):\n\n%s\n\n", hours(ttl), link)
 	b.WriteString("Only a confirmed address can be used to recover your password.\n")
+	b.WriteString("This link stops working if the account password is changed or reset before you use it; request a new one from your account page.\n")
 	b.WriteString("If you did not ask for this, ignore this message.\n")
 	return Message{To: to, Subject: "Confirm your Magnetico email address", Body: b.String()}
 }
