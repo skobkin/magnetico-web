@@ -53,7 +53,7 @@ after `release-forgejo` succeeded (see the recovery section). A tag with a suffi
 |---|---|---|---|---|
 | push to `master` | yes, every step | no | no | no |
 | push to any other branch | no (its pull request verifies it) | no | no | no |
-| pull request | yes, **merged state** (no secrets, no privilege, no registry); without `race`, and `migration-e2e` only when it changes migration paths | no | no | no |
+| pull request | yes, **merged state** (no secrets, no privilege, no registry); without `race`, and the migration end-to-end tests only when it changes migration paths | no | no | no |
 | tag matching the grammar | yes, every step | yes, after `ci` | yes | yes |
 | manual run, cron | yes, every step | no | no | no |
 
@@ -64,10 +64,14 @@ run of the full set on `master`).
 ## Verification: `ci.yaml`
 
 These run in this order of dependency; none needs a secret or a privilege. All of them run for every event except
-two: `migration-e2e` runs for a pull request only when it changes migration paths, and `race` never runs for a pull
-request. Both always run for `master`, tags (a release waits for them), manual and cron runs. The clone is the whole
-history (`depth: 0`, `partial: false`: the plugin's default `partial: true` overrides the depth with 1, and
-`merge-target` then finds no merge base).
+two. `race` never runs for a pull request; it runs for `master`, tags (a release waits for it), manual and cron runs.
+A pull request skips the migration end-to-end tests in `test` and runs them in `migration-e2e` only when it changes
+migration paths; every other event runs them inside `test`, so `master` and a release always have them.
+
+The clone is the plugin's default single commit (`partial: true`, which overrides `depth` with 1): only `merge-target`
+needs history, for a pull request, and fetches it there (`git fetch --unshallow`; without it the merge fails with
+"refusing to merge unrelated histories"). `release.yaml` clones the whole history (`depth: 0`, `partial: false`) for
+GoReleaser's changelog.
 
 | Step | What it checks |
 |---|---|
@@ -76,8 +80,8 @@ history (`depth: 0`, `partial: false`: the plugin's default `partial: true` over
 | `vet`, `build` | `go vet` for both tag sets (`loadtest,diag` must stay compilable), a static build, `--version` |
 | `dockerfile-lint` | `hadolint` |
 | `frontend-selftest` | the Node self-tests of the administrator charts under three time zones; plain Node in an image pinned by version and digest, **only here**, never in a build of the product |
-| `test` | the whole suite except the migration end-to-end tests (unit, PostgreSQL integration, real-binary end-to-end, security regression, fault injection) against a disposable PostgreSQL 17 with `MAGNETICO_TEST_REQUIRE_POSTGRES=1`, `-p 3`, `-timeout 20m`, and the skip census (a test skipped for a reason not on `ci/skip-allowlist.txt` fails the run) |
-| `migration-e2e` | the offline migrator's end-to-end tests (`TestFault*`, the `TestMigrate*BinarySmoke` tests, `TestImportWithReadOnlySourceRole`; the same pattern the `test` step skips): always outside pull requests; for a pull request when it touches `internal/migration`, `internal/app`, `cmd/magnetico`, `opflags`, `persistence`, `codec`, the test harness, `go.mod`/`go.sum` or `ci.yaml` |
+| `test` | the whole suite (unit, PostgreSQL integration, real-binary end-to-end, security regression, fault injection) against a disposable PostgreSQL 17 with `MAGNETICO_TEST_REQUIRE_POSTGRES=1`, `-p 3`, `-timeout 20m`, and the skip census (a test skipped for a reason not on `ci/skip-allowlist.txt` fails the run); a pull request skips the migration end-to-end tests here |
+| `migration-e2e` | pull requests only: the offline migrator's end-to-end tests (`TestFault*`, the `TestMigrate*BinarySmoke` tests, `TestImportWithReadOnlySourceRole`; the pattern `test` skips for a pull request), when the pull request touches `internal/migration`, `internal/app`, `cmd/magnetico`, `opflags`, `persistence`, `codec`, the test harness, `go.mod`/`go.sum` or `ci.yaml` |
 | `race` | the whole suite with `-race`, never for a pull request |
 | `govulncheck` | pinned v1.10.0 on the step's Go 1.27.4 toolchain, both tag sets |
 | `openapi` | the OpenAPI document and the real binary's responses against it |
@@ -85,9 +89,9 @@ history (`depth: 0`, `partial: false`: the plugin's default `partial: true` over
 | `workflow-invariants` | `internal/repocheck` and the CI tools' tests: the workflow files' own security properties (no secret or privilege in `ci.yaml`, tag-only release, no `latest`, the Go floor, ...) |
 
 Timing-sensitive suites run alone: `-p 3` is verified for a quiet agent and failures are never rerun, so `test` waits for
-lint, vet, build and the Dockerfile check, the lighter checks run after `test`, `migration-e2e` after all of them and
-`race` last. No step depends on `migration-e2e` or `race` except `race` itself: Woodpecker does not document what a
-required dependency on a step left out by its `when` does.
+lint, vet, build and the Dockerfile check, the lighter checks run after `test`, and `migration-e2e` (pull requests)
+or `race` (everything else) last. No step depends on either: Woodpecker does not document what a required dependency
+on a step left out by its `when` does.
 
 **Checks that cannot safely run in a pull-request workflow.** Building and running the container image needs a
 privileged Docker daemon (the buildx plugin and a `dind` service), and pull-request code runs in `ci.yaml`. They are

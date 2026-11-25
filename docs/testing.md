@@ -9,7 +9,7 @@ documented, not re-run there (the heavy ones are manual by design).
 | Class | What | Runs | Gate |
 |---|---|---|---|
 | **Regular CI** | unit tests; PostgreSQL integration tests; real-binary end-to-end tests; short regression, security-regression and fault-injection tests; fuzz **seed corpora**; `govulncheck`, the native archive snapshot and its smoke test, the front-end self-tests | every pull request, push to `master`, tag, manual and cron run (`.woodpecker/ci.yaml`) | blocks merge and release |
-| **Migration end-to-end** | the offline migrator's crash-and-resume, fault-injection and binary smoke tests in `internal/e2e/cli` (step `migration-e2e`; the `test` step skips the same pattern) | push to `master`, tag, manual and cron run; a pull request only when it changes migration paths | blocks the release; for a pull request, the merge when it runs |
+| **Migration end-to-end** | the offline migrator's crash-and-resume, fault-injection and binary smoke tests in `internal/e2e/cli` | inside `test` for a push to `master`, tag, manual and cron run; for a pull request skipped there and run by the `migration-e2e` step only when it changes migration paths | blocks the release; for a pull request, the merge when it runs |
 | **Race** | the whole suite under `-race` (step `race`) | push to `master`, tag, manual and cron run; never a pull request (owner decision) | blocks the release |
 | **Explicit manual only** | large synthetic dataset generation; load, capacity and memory-floor benchmarks; long soak and stress tests; extended fuzzing; the diagnostic build; live-DHT acceptance | by an operator, on a disposable database or host | never in CI |
 
@@ -72,12 +72,14 @@ default-parallelism race run too (for example with a bounded connection budget p
 ## Release CI: exact commands
 
 `ci.yaml` adds `-timeout 20m` to every suite (`internal/e2e/cli` alone takes 6 to 10 minutes, close to the default of
-10). The `test` step skips the migration end-to-end tests, which the `migration-e2e` step runs:
+10). For a pull request the `test` step skips the migration end-to-end tests, which the `migration-e2e` step runs when
+the pull request changes migration paths; every other event runs the whole suite in `test`:
 
 ```sh
 P='^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)'
-go test -p 3 -count=1 -timeout 20m -json -skip "$P" ./... > test.json
-go test -p 3 -count=1 -timeout 20m -json -run "$P" ./internal/e2e/cli > migration.json
+go test -p 3 -count=1 -timeout 20m -json ./... > test.json                      # master, tag, manual, cron
+go test -p 3 -count=1 -timeout 20m -json -skip "$P" ./... > test.json           # pull request
+go test -p 3 -count=1 -timeout 20m -json -run "$P" ./internal/e2e/cli > migration.json   # pull request, migration paths
 go test -race -p 3 -count=1 -json ./... > race.json                    (run in Task 08: 66 packages ok)
 go run ./ci/skipcensus --allow ci/skip-allowlist.txt < race.json
 GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...                          (run in Task 08: none found)

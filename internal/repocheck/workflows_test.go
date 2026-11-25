@@ -266,22 +266,27 @@ func TestReleaseWorkflowDependsOnCIAndNeverOptionally(t *testing.T) {
 	}
 }
 
-// TestWorkflowsCloneTheWholeHistory: merge-target needs the merge base with the target
-// branch and GoReleaser the commits since the previous tag. The clone plugin's partial
-// setting defaults to true and then overrides depth with 1: the first pull-request
-// pipeline failed with "refusing to merge unrelated histories" on such a clone.
-func TestWorkflowsCloneTheWholeHistory(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
-		w := load(t, name)
-		clone, _ := w.doc["clone"].(map[string]any)
-		git, _ := clone["git"].(map[string]any)
-		settings, _ := git["settings"].(map[string]any)
-		if d, ok := settings["depth"].(uint64); !ok || d != 0 {
-			t.Errorf("%s: clone depth = %v, want 0 (no shallow clone)", name, settings["depth"])
-		}
-		if p, ok := settings["partial"].(bool); !ok || p {
-			t.Errorf("%s: clone partial = %v, want false (true overrides depth with 1)", name, settings["partial"])
-		}
+// TestHistoryIsThereWhereItIsNeeded: the clone plugin's partial setting defaults to true
+// and then overrides depth with 1, a single commit; the first pull-request pipeline failed
+// with "refusing to merge unrelated histories" on such a clone. Only two places need
+// history: release.yaml (GoReleaser's changelog), which clones it whole, and the
+// pull-request merge in ci.yaml, which fetches it (the other ci.yaml steps keep the fast
+// single-commit clone, owner decision).
+func TestHistoryIsThereWhereItIsNeeded(t *testing.T) {
+	w := load(t, "release.yaml")
+	clone, _ := w.doc["clone"].(map[string]any)
+	git, _ := clone["git"].(map[string]any)
+	settings, _ := git["settings"].(map[string]any)
+	if d, ok := settings["depth"].(uint64); !ok || d != 0 {
+		t.Errorf("release.yaml: clone depth = %v, want 0 (no shallow clone)", settings["depth"])
+	}
+	if p, ok := settings["partial"].(bool); !ok || p {
+		t.Errorf("release.yaml: clone partial = %v, want false (true overrides depth with 1)", settings["partial"])
+	}
+	cmd := strings.Join(toStrings(load(t, "ci.yaml").step(t, "merge-target")["commands"]), "\n")
+	unshallow := strings.Index(cmd, "--unshallow")
+	if !strings.Contains(cmd, "--is-shallow-repository") || unshallow < 0 || unshallow > strings.Index(cmd, "git merge") {
+		t.Error("ci.yaml/merge-target must fetch the history of a shallow clone before it merges")
 	}
 }
 
@@ -532,10 +537,11 @@ func TestNoWorkflowRequestsPrivilegedExecution(t *testing.T) {
 	}
 }
 
-// Every gate of the project is in the verification workflow. All of them run for every
-// pull request except two (owner decision): migration-e2e runs for a pull request only when
-// it changes migration paths, and race never does; both always run for master, tags (so a
-// release waits for them), manual and cron runs.
+// Every gate of the project is in the verification workflow, and all of them run for every
+// event except two (owner decision): race never runs for a pull request (it does for
+// master, tags, so that a release waits for it, manual and cron runs), and a pull request
+// skips the migration end-to-end tests in test and runs them in migration-e2e only when it
+// changes migration paths (every other event runs them inside test).
 func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
 	w := load(t, "ci.yaml")
 	conditional := map[string]bool{"migration-e2e": true, "race": true}
@@ -546,13 +552,14 @@ func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
 			t.Errorf("ci.yaml/%s has a when filter: it must run for every event", name)
 		}
 	}
-	for name := range conditional {
-		ev := events(w.step(t, name)["when"])
-		for _, want := range []string{"push", "tag", "manual", "cron"} {
-			if !ev[want] {
-				t.Errorf("ci.yaml/%s must run on %s", name, want)
-			}
+	ev := events(w.step(t, "race")["when"])
+	for _, want := range []string{"push", "tag", "manual", "cron"} {
+		if !ev[want] {
+			t.Errorf("ci.yaml/race must run on %s", want)
 		}
+	}
+	if ev := events(w.step(t, "migration-e2e")["when"]); len(ev) != 1 || !ev["pull_request"] {
+		t.Errorf("ci.yaml/migration-e2e must run for pull requests only (other events run the tests in test): %v", ev)
 	}
 	// race never runs for a pull request; migration-e2e only behind its path filter, and
 	// then for the migration code at least.
@@ -572,21 +579,23 @@ func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
 			t.Errorf("ci.yaml/migration-e2e's path filter must include internal/migration/**: %v", m["path"])
 		}
 	}
-	// Nothing waits on a step that a when filter can leave out, except a step that is left
-	// out at least as often (race after migration-e2e): Woodpecker does not document what a
-	// required dependency on a filtered-out step does.
+	// Nothing waits on a step that a when filter can leave out: Woodpecker does not document
+	// what a required dependency on a filtered-out step does.
 	for _, s := range w.steps() {
 		deps, _ := dependsOn(s["depends_on"])
 		for _, d := range deps {
-			if conditional[d] && s["name"] != "race" {
+			if conditional[d] {
 				t.Errorf("ci.yaml/%v depends on %s, which does not run for every pull request", s["name"], d)
 			}
 		}
 	}
-	// The migration end-to-end tests are skipped by the main suite and run by their step, with
-	// the same pattern: no test falls between them.
-	if cmd := strings.Join(toStrings(w.step(t, "test")["commands"]), "\n"); !strings.Contains(cmd, "-skip "+migrationE2E) {
-		t.Errorf("ci.yaml/test must skip %s", migrationE2E)
+	// A pull request skips the migration end-to-end tests in test and runs them in their step,
+	// with the same pattern, so no test falls between them; every other event runs the whole
+	// suite in test.
+	cmd := strings.Join(toStrings(w.step(t, "test")["commands"]), "\n")
+	pr := regexp.MustCompile(`if \[ "\$CI_PIPELINE_EVENT" = "pull_request" \]; then\s+go test [^\n]*-skip ` + regexp.QuoteMeta(migrationE2E) + ` \./\.\.\. [^\n]*\n\s*else\s+go test -p 3 -count=1 -timeout 20m -json \./\.\.\. `)
+	if !pr.MatchString(cmd) {
+		t.Errorf("ci.yaml/test must skip %s for a pull request only and run the whole suite otherwise:\n%s", migrationE2E, cmd)
 	}
 	if cmd := strings.Join(toStrings(w.step(t, "migration-e2e")["commands"]), "\n"); !strings.Contains(cmd, "-run "+migrationE2E) {
 		t.Errorf("ci.yaml/migration-e2e must run %s", migrationE2E)
@@ -615,15 +624,15 @@ func TestTimingSensitiveSuitesRunAlone(t *testing.T) {
 			t.Errorf("ci.yaml: %s must run after the test suite, not beside it", after)
 		}
 	}
-	// The migration end-to-end tests run after everything else of a pull request, and the
-	// race suite after them: each heavy suite has the agent to itself.
-	for _, before := range []string{"test", "govulncheck", "openapi", "native-smoke", "workflow-invariants", "frontend-selftest"} {
-		if !transitivelyDependsOn(ci, "migration-e2e", before) {
-			t.Errorf("ci.yaml: migration-e2e must run after %s, not beside it", before)
+	// The migration end-to-end tests (pull requests) and the race suite (everything else)
+	// run after everything else: each heavy suite has the agent to itself. The two never run
+	// in the same pipeline.
+	for _, heavy := range []string{"migration-e2e", "race"} {
+		for _, before := range []string{"test", "govulncheck", "openapi", "native-smoke", "workflow-invariants", "frontend-selftest"} {
+			if !transitivelyDependsOn(ci, heavy, before) {
+				t.Errorf("ci.yaml: %s must run after %s, not beside it", heavy, before)
+			}
 		}
-	}
-	if !transitivelyDependsOn(ci, "race", "migration-e2e") || !transitivelyDependsOn(ci, "race", "test") {
-		t.Error("ci.yaml: the race suite must run last, after the other suites")
 	}
 }
 

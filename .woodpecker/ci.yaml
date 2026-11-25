@@ -23,9 +23,10 @@
 #   every event       merge-target, fmt, lint, vet, build, dockerfile-lint, frontend-selftest,
 #                     test, govulncheck, openapi, native-snapshot, native-smoke,
 #                     workflow-invariants
-#   + migration-e2e   always outside pull requests; for a pull request only when it changes
-#                     the migration code or what it is built on (the step's path filter)
-#   + race            never for a pull request (it repeats the whole suite under -race)
+#   + race            outside pull requests only (it repeats the whole suite under -race)
+# The migration end-to-end tests run inside test outside pull requests; a pull request
+# skips them there and runs them in migration-e2e only when it changes the migration code
+# or what it is built on (the step's path filter).
 when:
   - event: push
     branch: master
@@ -35,16 +36,11 @@ when:
   - event: tag
     evaluate: 'CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+"'
 
+# The plugin's default clone: one commit (partial, which overrides depth with 1). Only
+# merge-target needs history, and only for a pull request: it fetches it there.
 clone:
   git:
     image: woodpeckerci/plugin-git
-    # The whole history: merge-target needs the merge base with the target branch, and
-    # GoReleaser the commits since the previous tag. partial must be off explicitly: it
-    # defaults to true and then overrides depth with 1 (a single-commit clone, in which a
-    # merge fails with "refusing to merge unrelated histories").
-    settings:
-      depth: 0
-      partial: false
 
 services:
   # Disposable server of the integration tests. The test harness derives role DSNs
@@ -70,8 +66,9 @@ steps:
         git config --global --add safe.directory "$CI_WORKSPACE"
         git config user.email ci@woodpecker.invalid
         git config user.name woodpecker
-        # A shallow clone cannot see the merge base: complete it rather than fail.
-        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+        # The clone is a single commit: fetch the history, or the merge finds no merge base
+        # ("refusing to merge unrelated histories").
+        if git rev-parse --is-shallow-repository | grep -qx true; then
           git fetch --no-tags --unshallow origin
         fi
         git fetch --no-tags origin "$CI_COMMIT_TARGET_BRANCH"
@@ -126,9 +123,9 @@ steps:
       - sh ci/wait-postgres.sh postgres 5432 60
 
   # The whole suite (unit, PostgreSQL integration, real-binary end-to-end, security
-  # regression, fault injection, fuzz seed corpora) except the migration end-to-end tests,
-  # which have their own step (migration-e2e; the -skip pattern here and its -run pattern
-  # are the same, so no test falls between them). -p 3 is the verified configuration
+  # regression, fault injection, fuzz seed corpora). A pull request skips the migration
+  # end-to-end tests here; migration-e2e runs them when the pull request needs them (the
+  # -skip pattern here and its -run pattern are the same, so no test falls between them). -p 3 is the verified configuration
   # (docs/engineering-standards.md); at the default parallelism the timing-sensitive tests
   # of issues #52/#53 are unreliable on a busy host. -timeout 20m: one package
   # (internal/e2e/cli) takes 6 to 10 minutes alone, close to go test's default of 10.
@@ -147,7 +144,11 @@ steps:
       MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
     commands:
       - |
-        go test -p 3 -count=1 -timeout 20m -json -skip '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./... > /tmp/test.json || {
+        if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
+          go test -p 3 -count=1 -timeout 20m -json -skip '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./... > /tmp/test.json
+        else
+          go test -p 3 -count=1 -timeout 20m -json ./... > /tmp/test.json
+        fi || {
           echo "go test failed; failures:"
           go run ./ci/skipcensus --failures < /tmp/test.json
           exit 1
@@ -156,16 +157,15 @@ steps:
 
   # The end-to-end tests of the offline migrator (crash and resume, lost commits, source
   # drift, lock exclusion, the binary smoke tests): the slowest tests of the suite, and
-  # only migration code and what it is built on can change their outcome. Outside pull
-  # requests they always run; for a pull request only when such a path changes (master
-  # runs them after the merge either way). They run after everything else of a pull
-  # request, alone on the agent, like the main suite. The -run pattern is the test
-  # step's -skip pattern.
+  # only migration code and what it is built on can change their outcome. A pull request
+  # runs them here, only when such a path changes; every other event runs them inside
+  # test (master runs them after the merge either way). They run after everything else of
+  # the pull request, alone on the agent. Nothing depends on this step. The -run pattern
+  # is the test step's -skip pattern.
   - name: migration-e2e
     image: golang:1.27.4-alpine
     depends_on: [test, govulncheck, openapi, native-smoke, workflow-invariants, frontend-selftest]
     when:
-      - event: [push, tag, manual, cron]
       - event: pull_request
         path:
           include:
@@ -196,14 +196,14 @@ steps:
         }
       - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/migration.json
 
-  # The whole suite (the migration end-to-end tests included) under the race detector:
-  # pushes to master, tags (a release waits for it), manual and cron runs, never a pull
-  # request (owner decision: it doubles the pipeline). It runs last, alone on the agent:
-  # -p 3 is verified for a suite that has the agent to itself. Nothing depends on it, so
-  # leaving it out of a pull request leaves no step waiting. Failures are never rerun.
+  # The whole suite under the race detector: pushes to master, tags (a release waits for
+  # it), manual and cron runs, never a pull request (owner decision: it doubles the
+  # pipeline). It runs last, alone on the agent: -p 3 is verified for a suite that has
+  # the agent to itself. Nothing depends on it, so leaving it out of a pull request
+  # leaves no step waiting. Failures are never rerun.
   - name: race
     image: golang:1.27.4-trixie
-    depends_on: [migration-e2e]
+    depends_on: [test, govulncheck, openapi, native-smoke, workflow-invariants, frontend-selftest]
     when:
       - event: [push, tag, manual, cron]
     environment:
