@@ -264,9 +264,31 @@ func TestClientCancellationReleasesThePermit(t *testing.T) {
 	close(st2.block)
 }
 
+// movingDeadline is a context whose deadline is set by the test: it never fires
+// by itself (its Done channel is the parent's), so what the Reader sees when the
+// statement would start does not depend on any timer or on scheduling.
+type movingDeadline struct {
+	context.Context
+	mu sync.Mutex
+	dl time.Time
+}
+
+func (m *movingDeadline) Deadline() (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.dl, !m.dl.IsZero()
+}
+
+func (m *movingDeadline) set(t time.Time) { m.mu.Lock(); m.dl = t; m.mu.Unlock() }
+
 // Near-exhausted deadlines after waiting for a slot: the real Reader (without
 // a pool, so any statement would panic) must refuse to start the statement and
 // the service must report a timeout, release the permit and stay usable.
+//
+// Deterministic by construction (issue #53): the request is queued behind a held
+// slot; only once it is observably queued is its deadline set to `left` from now
+// and the slot released. Nothing waits on a timer, so a late scheduler can only
+// leave the Reader with less budget than `left`, which is refused all the same.
 func TestNearExhaustedDeadlineAfterGateWaitStartsNoStatement(t *testing.T) {
 	r := persistence.NewReader(nil, codec.DefaultLimits())
 	s := newSvc(t, r, 1, 5*time.Second)
@@ -277,10 +299,16 @@ func TestNearExhaustedDeadlineAfterGateWaitStartsNoStatement(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		const total = 600 * time.Millisecond
-		ctx, cancel := context.WithTimeout(context.Background(), total)
-		time.AfterFunc(total-left, hold) // the slot frees when only `left` remains
-		_, err = s.Search(ctx, p)
+		parent, cancel := context.WithCancel(context.Background())
+		ctx := &movingDeadline{Context: parent, dl: time.Now().Add(time.Hour)}
+		errc := make(chan error, 1)
+		go func() { _, err := s.Search(ctx, p); errc <- err }()
+		for s.gate.Waiting() != 1 { // queued: the permit is held by the test
+			time.Sleep(time.Millisecond)
+		}
+		ctx.set(time.Now().Add(left)) // the budget that is left when the slot frees
+		hold()
+		err = <-errc
 		cancel()
 		if !errors.Is(err, ErrTimeout) || Outcome(err) != "timeout" {
 			t.Fatalf("left %v: got %v, want ErrTimeout", left, err)
@@ -289,7 +317,8 @@ func TestNearExhaustedDeadlineAfterGateWaitStartsNoStatement(t *testing.T) {
 			t.Fatalf("left %v: gate not drained", left)
 		}
 	}
-	// Deadline consumed entirely while queued: also a timeout, not "busy".
+	// Deadline consumed entirely while queued: also a timeout, not "busy". The slot
+	// stays held until Search has returned, so the outcome cannot depend on timing.
 	hold, _ := s.gate.Acquire(context.Background(), 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	_, err := s.Search(ctx, p)

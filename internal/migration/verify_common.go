@@ -211,7 +211,18 @@ func finishVerificationOutcome(
 		Issues:            finalizeIssues,
 	})
 	if err != nil {
-		return nil, false, nil, err
+		// The commit is ambiguous from here: the server may have committed the verdict
+		// although the client never saw the acknowledgement (a cancellation or a lost
+		// connection in that window; issue #52). The durable row decides. A run that
+		// is no longer running was finished by this very call (it holds the run lock,
+		// and its issues and verdict commit in one transaction), so the verdict stands
+		// and is reported; only a run that is still running was not finished.
+		reconciled, rerr := durableVerdict(pool, run.VerificationID)
+		if rerr != nil || reconciled == nil {
+			return nil, false, nil, err
+		}
+		finished = reconciled
+		pass = reconciled.State == state.VerificationCompletedPass
 	}
 	// The reported severity split must match the durable issue table exactly.
 	// A finalize issue that already exists durably (the drift provenance on an
@@ -234,6 +245,22 @@ func finishVerificationOutcome(
 		return nil, false, nil, err
 	}
 	return finished, pass, counts, nil
+}
+
+// durableVerdict reads the run on a context detached from the caller's
+// cancellation: it returns the run when its verdict is durable (completed_pass or
+// completed_fail) and nil when it is still running, absent or unreadable.
+func durableVerdict(pool *pgxpool.Pool, id string) (*state.VerificationRun, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), dbOpTimeout)
+	defer cancel()
+	run, err := state.GetVerification(ctx, pool, id)
+	if err != nil || run == nil {
+		return nil, err
+	}
+	if run.State != state.VerificationCompletedPass && run.State != state.VerificationCompletedFail {
+		return nil, nil
+	}
+	return run, nil
 }
 
 // normalizeVerifyConfig applies the shared verification tunable defaults
