@@ -1,0 +1,33 @@
+ok    anonymous /admin is sent to sign-in — /login?next=%2Fadmin
+setup form submitted: /password/setup/<token> Link unavailable · Magnetico
+ok    administrator reaches /admin — /admin
+ok    the page carries exactly the production CSP — default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+[{"chart":"throughput","plots":1,"canvases":1,"status":"","legend":5,"text":944},{"chart":"outcomes","plots":1,"canvases":1,"status":"","legend":5,"text":868},{"chart":"queue","plots":2,"canvases":2,"status":"","legend":7,"text":849},{"chart":"traffic","plots":6,"canvases":6,"status":"","legend":14,"text":1537},{"chart":"storage","plots":2,"canvases":2,"status":"","legend":10,"text":1067}]
+ok    five chart groups on the overview — throughput,outcomes,queue,traffic,storage
+ok    every chart group draws at least one uPlot canvas — [["throughput",1],["outcomes",1],["queue",2],["traffic",6],["storage",2]]
+ok    no chart is left in a loading or error state — ["","","","",""]
+ok    every chart has its textual summary
+ok    a legend click toggles a series — {"before":[false,true,true,false,false],"after":[false,false,true,false,false]}
+ok    resizing redraws the plot — 556 -> 691
+controls ["Day","Month","Year","‹ Earlier","Later ›"]
+ok    granularity "Day" draws — {"status":"","plots":1,"label":"2026-11-25"}
+ok    granularity "Month" draws — {"status":"","plots":1,"label":"2026-11"}
+ok    granularity "Year" draws — {"status":"","plots":1,"label":"2026"}
+ok    granularity "‹ Earlier" draws — {"status":"","plots":1,"label":"2026"}
+ok    360 px layout has no horizontal page scroll — overflow 0 px
+ok    dark theme paints a dark background — rgb(14, 20, 24)
+ok    360 px: /admin/crawlers has no horizontal page scroll — overflow 0 px
+ok    360 px: /admin/users has no horizontal page scroll — overflow 0 px
+ok    360 px: /admin/invitations has no horizontal page scroll — overflow 0 px
+ok    360 px: /admin/trackers has no horizontal page scroll — overflow 0 px
+ok    360 px: /admin/quarantine has no horizontal page scroll — overflow 0 px
+ok    360 px: /torrents has no horizontal page scroll — overflow 0 px
+ok    /admin/crawlers renders — {"path":"/admin/crawlers","h1":"Crawlers","bad":false}
+ok    /admin/users renders — {"path":"/admin/users","h1":"Users","bad":false}
+ok    /admin/invitations renders — {"path":"/admin/invitations","h1":"Invitations","bad":false}
+ok    /admin/trackers renders — {"path":"/admin/trackers","h1":"Trackers","bad":false}
+ok    /admin/quarantine renders — {"path":"/admin/quarantine","h1":"Quarantine","bad":false}
+ok    no request left the loopback origin — http://127.0.0.1:18081
+ok    no CSP violation
+ok    no console error or exception — {"console":[],"exceptions":[]}
+all checks passed

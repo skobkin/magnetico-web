@@ -1,0 +1,168 @@
+{
+  "checks": [
+    {
+      "name": "anonymous /admin is sent to sign-in",
+      "ok": true,
+      "detail": "/login?next=%2Fadmin"
+    },
+    {
+      "name": "administrator reaches /admin",
+      "ok": true,
+      "detail": "/admin"
+    },
+    {
+      "name": "the page carries exactly the production CSP",
+      "ok": true,
+      "detail": "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+    },
+    {
+      "name": "five chart groups on the overview",
+      "ok": true,
+      "detail": "throughput,outcomes,queue,traffic,storage"
+    },
+    {
+      "name": "every chart group draws at least one uPlot canvas",
+      "ok": true,
+      "detail": "[[\"throughput\",1],[\"outcomes\",1],[\"queue\",2],[\"traffic\",6],[\"storage\",2]]"
+    },
+    {
+      "name": "no chart is left in a loading or error state",
+      "ok": true,
+      "detail": "[\"\",\"\",\"\",\"\",\"\"]"
+    },
+    {
+      "name": "every chart has its textual summary",
+      "ok": true
+    },
+    {
+      "name": "a legend click toggles a series",
+      "ok": true,
+      "detail": "{\"before\":[false,true,true,false,false],\"after\":[false,false,true,false,false]}"
+    },
+    {
+      "name": "resizing redraws the plot",
+      "ok": true,
+      "detail": "556 -> 691"
+    },
+    {
+      "name": "granularity \"Day\" draws",
+      "ok": true,
+      "detail": "{\"status\":\"\",\"plots\":1,\"label\":\"2026-11-25\"}"
+    },
+    {
+      "name": "granularity \"Month\" draws",
+      "ok": true,
+      "detail": "{\"status\":\"\",\"plots\":1,\"label\":\"2026-11\"}"
+    },
+    {
+      "name": "granularity \"Year\" draws",
+      "ok": true,
+      "detail": "{\"status\":\"\",\"plots\":1,\"label\":\"2026\"}"
+    },
+    {
+      "name": "granularity \"‹ Earlier\" draws",
+      "ok": true,
+      "detail": "{\"status\":\"\",\"plots\":1,\"label\":\"2026\"}"
+    },
+    {
+      "name": "360 px layout has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "dark theme paints a dark background",
+      "ok": true,
+      "detail": "rgb(14, 20, 24)"
+    },
+    {
+      "name": "360 px: /admin/crawlers has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "360 px: /admin/users has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "360 px: /admin/invitations has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "360 px: /admin/trackers has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "360 px: /admin/quarantine has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "360 px: /torrents has no horizontal page scroll",
+      "ok": true,
+      "detail": "overflow 0 px"
+    },
+    {
+      "name": "/admin/crawlers renders",
+      "ok": true,
+      "detail": "{\"path\":\"/admin/crawlers\",\"h1\":\"Crawlers\",\"bad\":false}"
+    },
+    {
+      "name": "/admin/users renders",
+      "ok": true,
+      "detail": "{\"path\":\"/admin/users\",\"h1\":\"Users\",\"bad\":false}"
+    },
+    {
+      "name": "/admin/invitations renders",
+      "ok": true,
+      "detail": "{\"path\":\"/admin/invitations\",\"h1\":\"Invitations\",\"bad\":false}"
+    },
+    {
+      "name": "/admin/trackers renders",
+      "ok": true,
+      "detail": "{\"path\":\"/admin/trackers\",\"h1\":\"Trackers\",\"bad\":false}"
+    },
+    {
+      "name": "/admin/quarantine renders",
+      "ok": true,
+      "detail": "{\"path\":\"/admin/quarantine\",\"h1\":\"Quarantine\",\"bad\":false}"
+    },
+    {
+      "name": "no request left the loopback origin",
+      "ok": true,
+      "detail": "http://127.0.0.1:18081"
+    },
+    {
+      "name": "no CSP violation",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "no console error or exception",
+      "ok": true,
+      "detail": "{\"console\":[],\"exceptions\":[]}"
+    }
+  ],
+  "console": [],
+  "exceptions": [],
+  "logs": [
+    {
+      "source": "network",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 400 (Bad Request)",
+      "url": "http://127.0.0.1:18081/password/setup/<token>"
+    }
+  ],
+  "requests": [
+    "http://127.0.0.1:18081"
+  ],
+  "csp": [],
+  "lastDoc": {
+    "url": "http://127.0.0.1:18081/admin/quarantine",
+    "status": 200,
+    "csp": "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+  },
+  "docCsp": "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+}
