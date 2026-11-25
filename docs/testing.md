@@ -28,9 +28,13 @@ with the tag `diag`; no release build contains it (`TestDefaultBinaryCarriesNoBu
 
 A disposable PostgreSQL 17 server with **trust authentication** is required: the harness derives role DSNs without a
 password, so a password-protected server fails the tests. It creates and drops only `magnetico_test_<random>` databases.
-A test that still has connections to its database 10 s after it ended (a pool or worker it did not close) fails in that
-database's cleanup, with each connection's last query; a test that leaves an instance's pools open on purpose declares
-it with `pgtest.AllowLeftoverConnections`. The drop itself is forced, so such connections never block it.
+A test that still has PostgreSQL client connections to its database 10 s after it ended (typically a pool it did not
+close) fails in that database's cleanup, with each connection's last query. A test that leaves an instance's pools open
+on purpose calls `pgtest.AllowConnectionsOpenNow` once they are open; only the connections open at that moment are
+waived. The check sees connections only: a leaked goroutine, worker, timer or file that holds no connection to the test
+database is invisible to it, so a green run does not prove the absence of other background leaks. The inspection and
+the drop have separate connections and time budgets; the drop is forced and is attempted even when the inspection
+fails or times out.
 
 ```sh
 # a throwaway server on loopback (docker; the harness can also start one itself when no DSN is set)
