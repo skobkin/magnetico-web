@@ -13,6 +13,15 @@ function test(name, fn) {
 }
 const script = path.join(__dirname, "..", "static", "admin.js");
 
+// CI runs the suite under several time zones (TZ=...) to show that nothing depends on the
+// browser's zone; EXPECT_TZ_OFFSET (minutes, as Date.getTimezoneOffset reports it on
+// 2026-11-25) makes a run fail when the image does not know the zone, instead of silently
+// running in UTC.
+if (process.env.EXPECT_TZ_OFFSET !== undefined) {
+  assert.strictEqual(new Date(Date.UTC(2026, 10, 25)).getTimezoneOffset(), Number(process.env.EXPECT_TZ_OFFSET),
+    "the requested time zone is not in effect in this image");
+}
+
 // ---- pure functions (no DOM present while loading) ----
 const pure = require(script);
 

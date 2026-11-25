@@ -160,6 +160,18 @@ steps:
       - goreleaser release --snapshot --clean --skip=publish
       - (cd dist && sha256sum -c checksums.txt)
 
+  # The self-tests of the administrator charts' JavaScript (internal/web/ui/jstest): plain
+  # Node, no package and no build; Node is used here only and never in a build of the
+  # product. Run under three browser time zones; EXPECT_TZ_OFFSET fails a run whose image
+  # does not really apply the zone.
+  - name: frontend-selftest
+    image: node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a
+    depends_on: [merge-target]
+    commands:
+      - node internal/web/ui/jstest/admin_test.js
+      - TZ=America/Los_Angeles EXPECT_TZ_OFFSET=480 node internal/web/ui/jstest/admin_test.js
+      - TZ=Pacific/Kiritimati EXPECT_TZ_OFFSET=-840 node internal/web/ui/jstest/admin_test.js
+
   - name: dockerfile-lint
     image: hadolint/hadolint:v2.14.0-alpine
     depends_on: [merge-target]

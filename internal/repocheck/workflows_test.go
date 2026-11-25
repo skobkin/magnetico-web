@@ -641,3 +641,63 @@ func TestTimingSensitiveSuitesRunAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestNativePublicationUploadsTheQualifiedFilesAndNeverRebuilds (Task 09A): the
+// release step publishes the files native-build produced and native-smoke
+// qualified, through ci/publishnative, which refuses anything that is not the
+// qualified checksums; no step after the gates builds the archives again.
+func TestNativePublicationUploadsTheQualifiedFilesAndNeverRebuilds(t *testing.T) {
+	w := load(t, "release.yaml")
+	rel := w.step(t, "release-forgejo")
+	cmd := strings.Join(toStrings(rel["commands"]), "\n")
+	if strings.Contains(cmd, "goreleaser") {
+		t.Errorf("release-forgejo must not run GoReleaser (it would rebuild the archives): %s", cmd)
+	}
+	if !strings.Contains(cmd, "ci/publishnative") || !strings.Contains(cmd, "--qualified .ci/qualified-checksums.txt") || !strings.Contains(cmd, "--dist dist") {
+		t.Errorf("release-forgejo must publish dist/ against the qualified checksums with ci/publishnative: %s", cmd)
+	}
+	if img, _ := rel["image"].(string); strings.HasPrefix(img, "goreleaser/") {
+		t.Errorf("release-forgejo runs the %s image: nothing may rebuild after the gates", img)
+	}
+	build := strings.Join(toStrings(w.step(t, "native-build")["commands"]), "\n")
+	if strings.Count(build, "goreleaser release") != 2 || strings.Count(build, "--skip=publish") != 2 {
+		t.Errorf("native-build must call goreleaser only with --skip=publish: %s", build)
+	}
+	for _, s := range w.steps() {
+		if s["name"] == "native-build" || s["name"] == "release-forgejo" {
+			continue
+		}
+		if c := strings.Join(toStrings(s["commands"]), "\n"); strings.Contains(c, "goreleaser release") {
+			t.Errorf("step %v runs goreleaser release: archives are built once, by native-build", s["name"])
+		}
+	}
+}
+
+// TestFrontendSelfTestsRunInCIWithAPinnedNodeImage (Task 09A): the Node
+// self-tests of the administrator charts are part of the regular verification
+// workflow, in an image pinned by version and digest, under several time zones;
+// Node is never part of a build of the product.
+func TestFrontendSelfTestsRunInCIWithAPinnedNodeImage(t *testing.T) {
+	w := load(t, "ci.yaml")
+	s := w.step(t, "frontend-selftest")
+	img, _ := s["image"].(string)
+	if !regexp.MustCompile(`^node:[0-9]+(\.[0-9]+)*-alpine@sha256:[0-9a-f]{64}$`).MatchString(img) {
+		t.Errorf("the Node image must be pinned by version and digest: %q", img)
+	}
+	cmd := strings.Join(toStrings(s["commands"]), "\n")
+	for _, want := range []string{"internal/web/ui/jstest/admin_test.js", "TZ=America/Los_Angeles", "TZ=Pacific/Kiritimati", "EXPECT_TZ_OFFSET"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("frontend-selftest does not run %q: %s", want, cmd)
+		}
+	}
+	root := testkit.ModuleRoot(t)
+	for _, f := range []string{"Dockerfile", ".goreleaser.yaml", ".woodpecker/release.yaml"} {
+		b, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if regexp.MustCompile(`(?i)\bnode(js)?\b|\bnpm\b`).Match(b) {
+			t.Errorf("%s mentions Node: Node must not be part of a build or a release", f)
+		}
+	}
+}
