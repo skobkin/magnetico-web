@@ -42,9 +42,11 @@ docker run -d --rm --name m-pg -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:5
 export MAGNETICO_TEST_POSTGRES_DSN='postgres://postgres@127.0.0.1:55432/postgres?sslmode=disable'
 export MAGNETICO_TEST_REQUIRE_POSTGRES=1      # an unreachable database fails instead of skipping
 
-# the whole suite, verified configuration -p 3 (see below)            (run in Task 08)
-go test -p 3 -count=1 -json ./... > test.json || go run ./ci/skipcensus --failures < test.json
-go run ./ci/skipcensus --allow ci/skip-allowlist.txt < test.json
+# the whole suite, verified configuration -p 3 (see below), as CI runs it: a line per package
+# as it finishes, a failed test's output as soon as it fails, the JSON stream in /tmp/test.json,
+# a summary of the failures and go test's exit status (ci/go-test.sh)
+sh ci/go-test.sh test -p 3 -count=1 -timeout 20m ./...
+go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/test.json
 
 golangci-lint fmt --diff ./... && golangci-lint run ./...              (run in Task 08: 0 issues)
 go vet ./... && go vet -tags loadtest,diag ./...                       (run in Task 08)

@@ -144,16 +144,14 @@ steps:
       MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
       MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
     commands:
+      # ci/go-test.sh: live per-package progress in the log, the whole JSON stream kept
+      # in /tmp/test.json for the census, a summary of every failure, go test's status.
       - |
         if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
-          go test -p 3 -count=1 -timeout 20m -json -skip '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./... > /tmp/test.json
+          sh ci/go-test.sh test -p 3 -count=1 -timeout 20m -skip '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./...
         else
-          go test -p 3 -count=1 -timeout 20m -json ./... > /tmp/test.json
-        fi || {
-          echo "go test failed; failures:"
-          go run ./ci/skipcensus --failures < /tmp/test.json
-          exit 1
-        }
+          sh ci/go-test.sh test -p 3 -count=1 -timeout 20m ./...
+        fi
       - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/test.json
 
   # The end-to-end tests of the offline migrator (crash and resume, lost commits, source
@@ -189,12 +187,7 @@ steps:
       MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
       MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
     commands:
-      - |
-        go test -p 3 -count=1 -timeout 20m -json -run '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./internal/e2e/cli > /tmp/migration.json || {
-          echo "go test (migration end-to-end) failed; failures:"
-          go run ./ci/skipcensus --failures < /tmp/migration.json
-          exit 1
-        }
+      - sh ci/go-test.sh migration -p 3 -count=1 -timeout 20m -run '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./internal/e2e/cli
       - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/migration.json
 
   # The whole suite under the race detector: pushes to master, tags (a release waits for
@@ -213,12 +206,7 @@ steps:
       MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
       MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
     commands:
-      - |
-        go test -race -p 3 -count=1 -timeout 20m -json ./... > /tmp/race.json || {
-          echo "go test -race failed; failures:"
-          go run ./ci/skipcensus --failures < /tmp/race.json
-          exit 1
-        }
+      - sh ci/go-test.sh race -race -p 3 -count=1 -timeout 20m ./...
       - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/race.json
 
   # Known vulnerabilities of the code and its dependencies (the pinned checker is run by

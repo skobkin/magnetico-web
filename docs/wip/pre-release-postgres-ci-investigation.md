@@ -29,10 +29,9 @@ state stayed running: the API records it as `killed` with no exit code, and the 
 way for its 7 minutes.
 
 - **Project defect:** none found in the lifecycle. Every `go test` step has `-timeout 20m`, the repository timeout is
-  60 min, so a hung test cannot hold the service indefinitely. **Observability gap (not changed, owner's call):** the
-  `test` and `race` steps are silent while they run. Teeing the JSON stream to a per-package progress line
-  (for example `go test … -json | tee /tmp/race.json | <a filter printing each package's pass/fail>`) would show
-  that the step is alive.
+  60 min, so a hung test cannot hold the service indefinitely. **Observability gap, addressed afterwards** (commit "ci: live per-package progress…", owner's request): `test`, `race` and
+  `migration-e2e` now run through `ci/go-test.sh`. It prints a line per package as it finishes and a failed test's output
+  at once, keeps the JSON for the census, and keeps go test's exit status through the pipe.
 - **Woodpecker defect:** none found; services end with the workflow as designed.
 - **Interference between pipelines:** none through shared state. Each workflow has its own `postgres` service container
   and network, and every test database is `magnetico_test_<random>`. #123, #125 and #126 did run **at the same time on

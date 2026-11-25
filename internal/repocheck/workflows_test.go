@@ -599,7 +599,7 @@ func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
 	// with the same pattern, so no test falls between them; every other event runs the whole
 	// suite in test.
 	cmd := strings.Join(toStrings(w.step(t, "test")["commands"]), "\n")
-	pr := regexp.MustCompile(`if \[ "\$CI_PIPELINE_EVENT" = "pull_request" \]; then\s+go test [^\n]*-skip ` + regexp.QuoteMeta(migrationE2E) + ` \./\.\.\. [^\n]*\n\s*else\s+go test -p 3 -count=1 -timeout 20m -json \./\.\.\. `)
+	pr := regexp.MustCompile(`if \[ "\$CI_PIPELINE_EVENT" = "pull_request" \]; then\s+sh ci/go-test\.sh test [^\n]*-skip ` + regexp.QuoteMeta(migrationE2E) + ` \./\.\.\.\s*\n\s*else\s+sh ci/go-test\.sh test -p 3 -count=1 -timeout 20m \./\.\.\.\s*\n`)
 	if !pr.MatchString(cmd) {
 		t.Errorf("ci.yaml/test must skip %s for a pull request only and run the whole suite otherwise:\n%s", migrationE2E, cmd)
 	}
@@ -659,6 +659,20 @@ func TestTestStepsRequirePostgresRunTheCensusAndUseVerifiedParallelism(t *testin
 			if !strings.Contains(cmds, want) {
 				t.Errorf("ci.yaml/%s lacks %q", step, want)
 			}
+		}
+		// ci/go-test.sh shows live progress, keeps the JSON stream and keeps go test's exit
+		// status through its pipe; the census then reads the stream that very run kept.
+		m := regexp.MustCompile(`sh ci/go-test\.sh (\w+) `).FindAllStringSubmatch(cmds, -1)
+		if len(m) == 0 {
+			t.Errorf("ci.yaml/%s must run its suite through ci/go-test.sh", step)
+		}
+		for _, run := range m {
+			if !strings.Contains(cmds, "skipcensus --allow ci/skip-allowlist.txt < /tmp/"+run[1]+".json") {
+				t.Errorf("ci.yaml/%s: the census must read /tmp/%s.json, the stream ci/go-test.sh kept", step, run[1])
+			}
+		}
+		if strings.Contains(cmds, "go test ") {
+			t.Errorf("ci.yaml/%s runs go test directly: its log would be silent until the end", step)
 		}
 		if deps, _ := dependsOn(s["depends_on"]); !contains(deps, "wait-postgres") && !transitivelyDependsOn(w, step, "wait-postgres") {
 			t.Errorf("ci.yaml/%s must (transitively) wait for wait-postgres", step)
