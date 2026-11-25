@@ -117,13 +117,12 @@ func TestSealedBatchIsNeverMutatedAfterTheFirstAttemptAndNewBatchWaitsForIt(t *t
 			e.w.carry.Hours[0].Counters[opstats.CRecordsEnqueued], e.w.nextSeq)
 	}
 	p.setMode("")
-	e.mustFlush() // seq 2 resolves
-	if e.seq() != 2 || e.total("records_enqueued") != 6 {
-		t.Fatalf("after resolving seq 2: seq %d total %d", e.seq(), e.total("records_enqueued"))
-	}
-	e.mustFlush() // now the carry is sealed as seq 3
-	if e.seq() != 3 || e.total("records_enqueued") != 27 {
-		t.Fatalf("after seq 3: seq %d total %d, want 27 (1+5+21)", e.seq(), e.total("records_enqueued"))
+	// One recovery flush resolves seq 2 FIRST (the arbiter's answer comes before anything
+	// newer is sealed) and then seals the carry as seq 3 and applies it: the order is the
+	// protocol's invariant, the number of flushes it takes is not.
+	e.mustFlush()
+	if e.seq() != 3 || e.total("records_enqueued") != 27 || e.w.nextSeq != 4 {
+		t.Fatalf("after recovery: seq %d total %d nextSeq %d, want seq 3, 27 (1+5+21) and nextSeq 4", e.seq(), e.total("records_enqueued"), e.w.nextSeq)
 	}
 }
 
@@ -305,11 +304,10 @@ func TestAbandonedBatchKeepsItsSequenceAsATombstoneAndTheNextBatchHasNoGap(t *te
 		t.Fatalf("the loss was counted (%d) before the outcome was known", e.w.counters.HoursDropped)
 	}
 	p.setMode("")
-	e.mustFlush() // the tombstone resolves first: skipped
-	if e.seq() != 2 || e.w.counters.HoursDropped != 1 || e.w.sealed != nil {
-		t.Fatalf("tombstone: db seq %d dropped hours %d", e.seq(), e.w.counters.HoursDropped)
+	e.mustFlush() // the tombstone resolves first (skipped), seq 3 follows in the same flush without a gap
+	if e.w.counters.HoursDropped != 1 || e.w.sealed != nil {
+		t.Fatalf("tombstone: dropped hours %d, sealed %+v", e.w.counters.HoursDropped, e.w.sealed)
 	}
-	e.mustFlush() // seq 3 follows without a gap
 	if e.seq() != 3 || e.total("records_enqueued") != 4 {
 		t.Fatalf("after the tombstone: seq %d total %d (1 + 3; the 5 are lost, never double counted)", e.seq(), e.total("records_enqueued"))
 	}
@@ -631,5 +629,30 @@ func TestRetryDelayNeverSkipsTheNextTick(t *testing.T) {
 	}
 	if retryDelay(1, time.Minute) >= retryDelay(3, time.Minute) {
 		t.Fatal("the delay does not grow with repeated failures")
+	}
+}
+
+// TestRecoveryAppliesTheSealedBatchAndTheCarryInOneFlush (production-rate sabotage run,
+// Task 09A): after an outage the first flush applied only the sealed batch and the
+// events that had piled up behind it waited for the NEXT tick, so the persisted
+// statistics needed two ticks (89 s measured) to catch up. One successful attempt now
+// seals and applies what is waiting, within a bound.
+func TestRecoveryAppliesTheSealedBatchAndTheCarryInOneFlush(t *testing.T) {
+	e, p := proxied(t)
+	e.ev(1)
+	e.mustFlush()
+	p.setMode("down")
+	e.ev(5)
+	if err := e.flush(); err == nil {
+		t.Fatal("a flush through a dead proxy succeeded")
+	}
+	e.ev(7) // behind the sealed batch
+	e.clock.Advance(time.Minute)
+	e.ev(11) // and more, a minute later
+	p.setMode("")
+	e.clock.Advance(time.Minute) // past any retry pause
+	e.mustFlush()
+	if got := e.total("records_enqueued"); got != 24 {
+		t.Fatalf("persisted %d after ONE recovery flush, want 24 (1 + 5 sealed + 7 + 11 carried)", got)
 	}
 }

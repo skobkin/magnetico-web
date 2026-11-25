@@ -376,30 +376,38 @@ func (w *Writer) flushOnce(ctx context.Context, final bool) error {
 		}
 		w.failures, w.nextAttemptAt = 0, time.Time{} // a recovered schema is used at once, not after the old back-off
 	}
-	if w.sealed == nil && !w.carry.IsEmpty() {
-		w.sealed = &batch{seq: w.nextSeq, prev: w.dbSeq, delta: w.carry, sealedAt: w.now()}
-		w.nextSeq++
-		w.carry = opstats.Delta{}
+	// One attempt applies the sealed batch; what piled up behind it during an outage (the
+	// carry) is sealed and applied right after, so a recovered database is caught up by the
+	// first successful tick and not one batch per tick. Bounded: a long outage buffers at
+	// most 26 hourly deltas, and a failure stops the loop at once.
+	for applied := 0; applied < maxBatchesPerFlush; applied++ {
+		if w.sealed == nil && !w.carry.IsEmpty() {
+			w.sealed = &batch{seq: w.nextSeq, prev: w.dbSeq, delta: w.carry, sealedAt: w.now()}
+			w.nextSeq++
+			w.carry = opstats.Delta{}
+		}
+		if w.sealed == nil {
+			break
+		}
+		if !w.sealed.abandoned && w.now().Sub(w.sealed.sealedAt) > w.opt.BatchMaxAge {
+			w.abandon(w.sealed)
+		}
+		if !final && w.now().Before(w.nextAttemptAt) {
+			return nil
+		}
+		if err := w.attempt(ctx); err != nil {
+			w.bumpFailure(err)
+			return err
+		}
+		w.failures = 0
 	}
-	if w.sealed == nil {
-		w.markOK()
-		return nil
-	}
-	if !w.sealed.abandoned && w.now().Sub(w.sealed.sealedAt) > w.opt.BatchMaxAge {
-		w.abandon(w.sealed)
-	}
-	if !final && w.now().Before(w.nextAttemptAt) {
-		return nil
-	}
-	err := w.attempt(ctx)
-	if err != nil {
-		w.bumpFailure(err)
-		return err
-	}
-	w.failures = 0
 	w.markOK()
 	return nil
 }
+
+// maxBatchesPerFlush bounds the batches one flush applies in a row (the sealed batch, then
+// what waited behind it).
+const maxBatchesPerFlush = 4
 
 func (w *Writer) markOK() {
 	w.mu.Lock()

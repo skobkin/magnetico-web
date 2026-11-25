@@ -165,6 +165,8 @@ The process owns three one-connection pools. A stalled flush shares no connectio
 
 A graceful shutdown makes a **final flush** bounded by 5 s, plus at most 2 s to close the statistics connections (the shutdown budget of `crawler-ingest-delivery-v1.md` §8 grows from 28 s to 35 s), that drains the sealed batch and the carry behind it. Counters lost on `SIGKILL` are bounded by the flush interval **only while persistence succeeds**; during a statistics-database outage up to 24 h of buffered hours are lost on a crash, and anything beyond the bound is dropped and counted.
 
+**Retry cadence and recovery.** The flush runs on a 60 s tick. After a failed attempt the pause before the next one is 5 s, 10 s, then 15 s at most (a quarter of the flush interval): an attempt has its own 30 s deadline and the pause counts from its end, so the next tick is never skipped (before Task 09A the pause went up to a minute and every second tick was skipped under a sustained failure). The first successful attempt applies the sealed batch and then, in the same flush, whatever piled up behind it (sealed as the next batch only after the sealed one is resolved; at most four batches per flush), so a recovered database is caught up by the first successful tick instead of one batch per tick. Measured with the statistics tables locked for five minutes while 200 records/s were admitted: admission was unaffected throughout (`docs/wip/09A-pre-rc-qualification-report.md`, section 8).
+
 ## 8. Failure behaviour
 
 | Event | Behaviour |
