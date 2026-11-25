@@ -200,6 +200,8 @@ if docker run -d --name "$RUN_ID-pg" --network "$NET" -e POSTGRES_HOST_AUTH_METH
 			*"token: mgc_"*) pass "ingest crawler add registers a crawler and prints its token once" ;;
 			*) fail "ingest crawler add failed: $CRAWLER_OUT" ;;
 			esac
+			# The optional statistics schema, initialised by the image's own command.
+			if svc migrate stats-schema-init >/dev/null 2>&1; then pass "migrate stats-schema-init succeeded in the container"; else fail "migrate stats-schema-init failed in the container"; fi
 			# shellcheck disable=SC2086
 			docker run -d --name "$RUN_ID-ingest" $PLAT_FLAG --network "$NET" --read-only --cap-drop ALL --security-opt no-new-privileges \
 				-e "MAGNETICO_INGEST_DATABASE=$DSN" -e MAGNETICO_INGEST_LISTEN=0.0.0.0:8080 "$IMAGE" ingest >/dev/null
@@ -209,6 +211,9 @@ if docker run -d --name "$RUN_ID-pg" --network "$NET" -e POSTGRES_HOST_AUTH_METH
 			else
 				fail "ingest did not stay up: $(docker logs "$RUN_ID-ingest" 2>&1 | tail -2)"
 			fi
+			# The writer of this image publishes its first heartbeat as soon as it is ready.
+			HEARTBEATS="$(docker exec "$RUN_ID-pg" psql -U postgres -Atc 'SELECT count(*) FROM magnetico_stats.snapshot' 2>/dev/null || echo 0)"
+			[ "${HEARTBEATS:-0}" -ge 1 ] 2>/dev/null && pass "the ingest of the image published its statistics heartbeat (magnetico_stats.snapshot)" || fail "the ingest of the image published no heartbeat into magnetico_stats.snapshot"
 			docker stop -t 20 "$RUN_ID-ingest" >/dev/null 2>&1
 			[ "$(docker inspect --format '{{.State.ExitCode}}' "$RUN_ID-ingest" 2>/dev/null)" = "0" ] && pass "SIGTERM: ingest exits 0 (graceful shutdown)" || fail "ingest exited $(docker inspect --format '{{.State.ExitCode}}' "$RUN_ID-ingest" 2>/dev/null) after docker stop"
 		else

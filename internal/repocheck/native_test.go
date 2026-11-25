@@ -248,3 +248,20 @@ func TestSmokeTestsCheckThatTheUPlotScriptIsEmbeddedInTheExecutable(t *testing.T
 		}
 	}
 }
+
+// TestImageSmokeInitialisesTheStatisticsAndSeesTheHeartbeat (Task 09A): the image
+// smoke test runs `migrate stats-schema-init` in the real image and checks that the
+// ingest service of that image publishes its heartbeat into magnetico_stats: the
+// statistics initialisation and the writer are exercised in the artifact that is
+// published, not only in the repository's tests.
+func TestImageSmokeInitialisesTheStatisticsAndSeesTheHeartbeat(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(testkit.ModuleRoot(t), "ci", "image-smoke.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"migrate stats-schema-init", "magnetico_stats.snapshot"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("ci/image-smoke.sh does not contain %q", want)
+		}
+	}
+}
