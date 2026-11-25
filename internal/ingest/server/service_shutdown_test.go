@@ -132,9 +132,6 @@ func TestShutdownInterruptsStalledAddTorrent(t *testing.T) {
 // the pools under the stuck goroutine (which would block forever).
 func TestShutdownAbandonsUninterruptibleAddTorrent(t *testing.T) {
 	dsn := prepareDB(t, true)
-	// The abandoned instance keeps its pools open by design (the point of this
-	// test); the forced database drop ends those connections.
-	pgtest.AllowLeftoverConnections(t, dsn)
 	var st *stallStore
 	r := startService(t, dsn, shutdownOptions(&st, false))
 	t.Cleanup(func() { st.unblock() })
@@ -164,6 +161,10 @@ func TestShutdownAbandonsUninterruptibleAddTorrent(t *testing.T) {
 	// row is still queued for the next start.
 	st.unblock()
 	time.Sleep(300 * time.Millisecond)
+	// The abandoned instance keeps its pools open by design (the point of this
+	// test): its connections, all open by now, may outlive the test. The
+	// replacement instance below is not covered and must close its own.
+	t.Logf("abandoned instance: %d connections left open by design", pgtest.AllowConnectionsOpenNow(t, dsn))
 	if n := countRows(t, dsn, `SELECT count(*) FROM magnetico_ingest.queue`); n != 1 {
 		t.Fatalf("queue rows = %d, want the record kept", n)
 	}
@@ -174,5 +175,9 @@ func TestShutdownAbandonsUninterruptibleAddTorrent(t *testing.T) {
 		return countRows(t, dsn, `SELECT count(*) FROM magneticod.torrents`) == 1
 	})
 	r2.cancel()
-	_, _ = r2.wait(30 * time.Second)
+	if err, ok := r2.wait(30 * time.Second); !ok {
+		t.Fatal("the replacement instance did not shut down")
+	} else if err != nil {
+		t.Fatalf("the replacement instance's Run = %v, want a clean shutdown", err)
+	}
 }

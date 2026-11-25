@@ -305,28 +305,11 @@ func (c *Cluster) TestDatabase(t *testing.T) string {
 		t.Fatalf("create test database: %v", err)
 	}
 	t.Cleanup(func() {
-		dropCtx, dropCancel := context.WithTimeout(context.Background(), DBOpTimeout)
-		defer dropCancel()
-		dropConn, err := pgx.Connect(dropCtx, c.AdminDSN)
-		if err != nil {
-			t.Errorf("drop test database %s: connect: %v", name, err)
-			return
-		}
-		defer dropConn.Close(context.Background())
-		if _, allowed := leftoverAllowed.Load(name); !allowed {
-			left, err := leftoverBackends(dropCtx, dropConn, name, leftoverGrace)
-			if err != nil {
-				t.Errorf("drop test database %s: list its connections: %v", name, err)
-			}
-			for _, b := range left {
-				t.Errorf("test database %s: a connection was left open after the test (pool or worker not closed): %s", name, b)
-			}
-		}
-		leftoverAllowed.Delete(name)
-		if _, err := dropConn.Exec(dropCtx,
-			fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, QuoteIdent(name))); err != nil {
-			t.Errorf("drop test database %s: %v", name, err)
-		}
+		// Two independent budgets, each with its own connection: inspecting the
+		// leftover connections may fail or use up its whole budget, and the
+		// drop is still attempted with a fresh one.
+		c.reportLeftoverConnections(t, name)
+		c.dropTestDatabase(t, name)
 	})
 
 	parsed, err := url.Parse(c.AdminDSN)
@@ -337,35 +320,122 @@ func (c *Cluster) TestDatabase(t *testing.T) string {
 	return parsed.String()
 }
 
+// dropTestDatabase drops the test database with its own connection and
+// budget. The drop is forced: connections still open never block it.
+func (c *Cluster) dropTestDatabase(t *testing.T, name string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), DBOpTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, c.AdminDSN)
+	if err != nil {
+		t.Errorf("drop test database %s: connect: %v", name, err)
+		return
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx,
+		fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, QuoteIdent(name))); err != nil {
+		t.Errorf("drop test database %s: %v", name, err)
+	}
+}
+
 // leftoverGrace bounds how long the cleanup waits for the server to retire the
 // connections of a test that closed its pools (a backend exits shortly after
 // its client's Terminate) before it reports the rest as left open.
-const leftoverGrace = 10 * time.Second
+// leftoverInspectTimeout bounds the whole inspection, connecting included.
+// Variables only so the harness's own tests can shorten them.
+var (
+	leftoverGrace          = 10 * time.Second
+	leftoverInspectTimeout = leftoverGrace + 10*time.Second
+)
 
-// leftoverAllowed holds the databases whose tests leave connections open on
-// purpose (AllowLeftoverConnections).
-var leftoverAllowed sync.Map
+// inspectLeftovers is leftoverBackends; the harness's own tests replace it to
+// make the inspection fail or hang.
+var inspectLeftovers = leftoverBackends
 
-// AllowLeftoverConnections declares that the test deliberately leaves
-// connections to its database open, typically an instance the test proves is
-// abandoned with its pools left open. The forced drop still terminates them;
-// only the leftover-connection failure is waived for that database.
-func AllowLeftoverConnections(t *testing.T, dsn string) {
+// leftoverWaived holds, per test database, the backend pids a test declared
+// with AllowConnectionsOpenNow.
+var leftoverWaived sync.Map // database name -> map[int32]bool
+
+// reportLeftoverConnections fails the test for every PostgreSQL client
+// connection still open to its database once the test has ended, except the
+// declared ones. It sees connections only: a goroutine or worker that holds
+// none is invisible to it.
+func (c *Cluster) reportLeftoverConnections(t *testing.T, name string) {
+	t.Helper()
+	waivedAny, _ := leftoverWaived.LoadAndDelete(name)
+	waived, _ := waivedAny.(map[int32]bool)
+
+	ctx, cancel := context.WithTimeout(context.Background(), leftoverInspectTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, c.AdminDSN)
+	if err != nil {
+		t.Errorf("test database %s: inspect its connections: connect: %v", name, err)
+		return
+	}
+	defer conn.Close(context.Background())
+	left, err := inspectLeftovers(ctx, conn, name, leftoverGrace, waived)
+	if err != nil {
+		t.Errorf("test database %s: inspect its connections: %v", name, err)
+		return
+	}
+	for _, b := range left {
+		t.Errorf("test database %s: a PostgreSQL connection was left open after the test (a pool or connection not closed): %s", name, b.desc)
+	}
+}
+
+// AllowConnectionsOpenNow declares that the PostgreSQL connections open to the
+// test database at this moment may outlive the test: typically the pools of
+// an instance the test proves is abandoned with its pools left open. Only
+// those connections are waived; one opened later and left open still fails
+// the test. The forced drop ends them all. It returns how many it waived.
+func AllowConnectionsOpenNow(t *testing.T, dsn string) int {
 	t.Helper()
 	parsed, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatalf("parse test database DSN: %v", err)
 	}
-	leftoverAllowed.Store(strings.TrimPrefix(parsed.Path, "/"), true)
+	name := strings.TrimPrefix(parsed.Path, "/")
+	ctx, cancel := context.WithTimeout(context.Background(), DBOpTimeout)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, IntegrationCluster(t).AdminDSN)
+	if err != nil {
+		t.Fatalf("waive connections: connect admin: %v", err)
+	}
+	defer conn.Close(context.Background())
+	rows, err := conn.Query(ctx, `SELECT pid FROM pg_stat_activity
+        WHERE datname = $1 AND pid <> pg_backend_pid() AND backend_type = 'client backend'`, name)
+	if err != nil {
+		t.Fatalf("waive connections: %v", err)
+	}
+	pids, err := pgx.CollectRows(rows, pgx.RowTo[int32])
+	if err != nil {
+		t.Fatalf("waive connections: %v", err)
+	}
+	waived := map[int32]bool{}
+	if prev, ok := leftoverWaived.Load(name); ok {
+		for pid := range prev.(map[int32]bool) {
+			waived[pid] = true
+		}
+	}
+	for _, pid := range pids {
+		waived[pid] = true
+	}
+	leftoverWaived.Store(name, waived)
+	return len(pids)
 }
 
-// leftoverBackends lists, after up to grace for them to disappear, the
-// backends still connected to the database: pid, state, application name
-// and their last statement.
-func leftoverBackends(ctx context.Context, conn *pgx.Conn, db string, grace time.Duration) ([]string, error) {
+// leftoverBackend is one client connection still open to a test database.
+type leftoverBackend struct {
+	pid  int32
+	desc string // pid, state, application name and last statement
+}
+
+// leftoverBackends lists the client connections still open to the database
+// and not waived, after waiting up to grace for them to disappear.
+func leftoverBackends(ctx context.Context, conn *pgx.Conn, db string, grace time.Duration, waived map[int32]bool) ([]leftoverBackend, error) {
 	deadline := time.Now().Add(grace)
 	for {
-		rows, err := conn.Query(ctx, `SELECT format('pid %s, %s, application %L, last query: %s',
+		rows, err := conn.Query(ctx, `SELECT pid, format('pid %s, %s, application %L, last query: %s',
                 pid, COALESCE(state, '?'), application_name,
                 left(regexp_replace(COALESCE(query, ''), '\s+', ' ', 'g'), 200))
             FROM pg_stat_activity
@@ -374,16 +444,26 @@ func leftoverBackends(ctx context.Context, conn *pgx.Conn, db string, grace time
 		if err != nil {
 			return nil, err
 		}
-		left, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		all, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (leftoverBackend, error) {
+			var b leftoverBackend
+			err := r.Scan(&b.pid, &b.desc)
+			return b, err
+		})
 		if err != nil {
 			return nil, err
+		}
+		var left []leftoverBackend
+		for _, b := range all {
+			if !waived[b.pid] {
+				left = append(left, b)
+			}
 		}
 		if len(left) == 0 || time.Now().After(deadline) {
 			return left, nil
 		}
 		select {
 		case <-ctx.Done():
-			return left, nil
+			return nil, fmt.Errorf("still waiting for %d connection(s) to close: %w", len(left), ctx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
