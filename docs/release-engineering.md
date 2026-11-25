@@ -1,22 +1,25 @@
 # Release engineering
 
-How a tag becomes native binaries on Forgejo and a multi-platform image on Docker Hub and GHCR, what guards that path,
-and what an operator must configure. Written for Task 08; read [`container.md`](container.md) for using the image and
+How a tag becomes native binaries on Forgejo and a multi-platform image on Docker Hub and GHCR, what runs for every
+pull request, and what an operator must configure. Read [`container.md`](container.md) for using the image and
 [`testing.md`](testing.md) for the test classes.
+
+The shape is deliberately the conventional one of the owner's other repositories: one verification workflow for every
+pull request, one tag-only release workflow in which **GoReleaser** creates the Forgejo release and the **Woodpecker
+buildx plugin** pushes the image. (Task 08 and Task 09A had built a custom qualification and promotion system around
+it; Task 09B removed it: byte-for-byte identity between what a pull request verified and what a tag publishes is not a
+requirement.)
 
 ## Configured versus verified
 
-Nothing below has been published. This table is the honest state after Task 08.
-
 | Item | State |
 |---|---|
-| `Dockerfile`, `.dockerignore`, `.goreleaser.yaml`, `.woodpecker/ci.yaml`, `.woodpecker/release.yaml`, the `ci/` tools | **configured and committed** |
-| Image build (amd64 and arm64 in one invocation, SBOM + provenance), smoke test, image scan, promotion by digest | **verified locally**: built with `docker buildx`, `ci/image-smoke.sh` passed on the amd64 image (loaded from the layout and pulled back from a registry), Trivy reported 0 HIGH/CRITICAL findings for both platforms, `ci/promote-image.sh` with the real `crane` pushed the layout to two local registries with the same digest and both passed `ci/verify-published.sh` (`docs/wip/08-measurements/`) |
-| arm64 image | **built, scanned, digest-verified; never executed** (no emulation or arm64 host was available) |
-| Native archives | **verified locally**: a snapshot build and a build for a local, never-pushed tag in a scratch clone, `ci/native-smoke.sh`, reproducible checksums; also built inside the pinned `goreleaser/goreleaser:v2.20.1` image |
-| Both Woodpecker workflows | **linted** with Woodpecker's own `woodpecker-cli lint` (v3.20.1: valid) and pinned by `internal/repocheck`; **never run on a Woodpecker server** |
-| Pushes to Docker Hub, GHCR, Forgejo releases | **never performed** (no tag exists, no credentials were used) |
-| `ci/ciguard` against a real Forgejo, the exact status-context name Woodpecker posts and that it records the pipeline URL as the status `target_url` (the guard fails closed if it does not), `docker load` into the `dind` service, the privileged plugin build on a real agent | **unverified**: they depend on the operator's Woodpecker/Forgejo/Docker versions; the first manual pre-flight run is the check |
+| `Dockerfile`, `.dockerignore`, `.goreleaser.yaml`, `.woodpecker/ci.yaml`, `.woodpecker/release.yaml` | **configured and committed** |
+| Both workflow files | **linted** with `woodpecker-cli lint` (v3.20.1; `--plugins-privileged woodpeckerci/plugin-docker-buildx`, see below) and pinned by `internal/repocheck`; **never run on a Woodpecker server** |
+| `goreleaser check` and a snapshot build of both archives, `ci/native-smoke.sh` | **verified locally** (also inside the pinned `goreleaser/goreleaser:v2.20.1` image) |
+| The image (amd64 and arm64 in one `docker buildx` invocation), `ci/image-smoke.sh` on amd64, Trivy for both platforms | **verified locally** during Task 08 and Task 09A; not part of any workflow |
+| arm64 image | **built and scanned; never executed** |
+| Real Woodpecker build, GoReleaser publication to Forgejo, the plugin's push to Docker Hub and GHCR | **never performed** (no tag exists, no credentials were used here): the owner verifies them with the `0.8.0-rc.0` tag |
 
 ## Roles
 
@@ -26,188 +29,151 @@ publication target. Images go to `docker.io/skobkin/magnetico-web` and `ghcr.io/
 
 ## Tags
 
-Existing tags are `0.2.0-symfony6-rc1` … `0.7.1` (PHP era; `0.7.0-rc1`, `0.7.0-rc2`, `0.7.1` are the latest). The Go line
-continues the same numbering. New tags must match
+Existing tags are `0.2.0-symfony6-rc1` … `0.7.1` (PHP era). The Go line continues the same numbering. New tags must match
 
 ```
 ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$        e.g. 0.8.0-rc.0, 0.8.0-rc.1, 0.8.0, 0.8.1
 ```
 
-(release candidates are spelled `-rc.N` with a dot, as in the task and as SemVer orders them; the historical `-rc1`
-spelling is not accepted for new tags). A tag outside the grammar triggers **neither** workflow, so it can never publish.
-A release-candidate tag publishes exactly its version tag (`0.8.0-rc.0`) and a GitHub-style **prerelease** on Forgejo;
-a stable tag publishes the stable version and a stable release. **No floating alias is ever applied.**
+(release candidates are spelled `-rc.N` with a dot, as SemVer orders them; the historical `-rc1` spelling is not
+accepted for new tags). A tag outside the grammar triggers **neither** workflow, so it can never publish. A
+release-candidate tag publishes exactly its version tag (`0.8.0-rc.0`) and a **prerelease** on Forgejo (GoReleaser's
+`prerelease: auto`); a stable tag publishes the stable version and a stable release. **No floating alias is applied**
+(`latest` is the owner's later, deliberate decision: add it to the `tags` of `release-docker` and update
+`internal/repocheck` on purpose).
 
 ## What runs when
 
-| Event | `ci.yaml` (verification) | release gates (`release.yaml`) | Forgejo release | OCI publication |
+| Event | `ci.yaml` (verification) | `release.yaml` | Forgejo release | OCI publication |
 |---|---|---|---|---|
 | push to `master` or the 0.8.0 branch | yes | no | no | no |
 | push to any other branch | no (its pull request verifies it) | no | no | no |
 | pull request | yes, **merged state** (no secrets, no privilege, no registry) | no | no | no |
-| tag matching the grammar | yes | yes, after `ci` | yes, after the gates | yes, after the gates |
-| manual run | yes | yes (pre-flight) | **no** | **no** |
+| tag matching the grammar | yes | yes, after `ci` | yes | yes |
+| manual run | yes | no | no | no |
 
 While a pull request from the 0.8.0 branch is open, that branch has both a push and a pull-request pipeline (the one
 accepted duplication; remove `refactor/0.8.0-unify-and-new-storage` from the `push` list of `ci.yaml` after the merge).
 
-## The release path: build once, qualify, publish exactly that
+## Verification: `ci.yaml`, for every pull request
+
+All of these run for every pull request, in this order of dependency; none needs a secret or a privilege.
+
+| Step | What it checks |
+|---|---|
+| `merge-target` | a pull request is tested **merged** into its target branch (a conflict fails) |
+| `fmt`, `lint` | `golangci-lint fmt --diff` and `golangci-lint run` (0 issues) |
+| `vet`, `build` | `go vet` for both tag sets (`loadtest,diag` must stay compilable), a static build, `--version` |
+| `dockerfile-lint` | `hadolint` |
+| `frontend-selftest` | the Node self-tests of the administrator charts under three time zones; plain Node in an image pinned by version and digest, **only here**, never in a build of the product |
+| `test` | the whole suite (unit, PostgreSQL integration, real-binary end-to-end, security regression, fault injection) against a disposable PostgreSQL 17 with `MAGNETICO_TEST_REQUIRE_POSTGRES=1`, `-p 3`, and the skip census (a test skipped for a reason not on `ci/skip-allowlist.txt` fails the run) |
+| `race` | the same suite with `-race` |
+| `govulncheck` | pinned v1.10.0 on the step's Go 1.27.4 toolchain, both tag sets |
+| `openapi` | the OpenAPI document and the real binary's responses against it |
+| `native-snapshot`, `native-smoke` | `goreleaser check`, a snapshot build of both archives and `ci/native-smoke.sh`: checksums, licence files, the uPlot script embedded in the executable, `CGO_ENABLED=0`, the right `GOARCH`, no build tags, the Go floor |
+| `workflow-invariants` | `internal/repocheck` and the CI tools' tests: the workflow files' own security properties (no secret or privilege in `ci.yaml`, tag-only release, no `latest`, the Go floor, ...) |
+
+Timing-sensitive suites run alone: `-p 3` is verified for a quiet agent and failures are never rerun, so `test` waits for
+lint, vet, build and the Dockerfile check, `race` runs after `test`, and everything heavier runs after `race`.
+
+**Checks that cannot safely run in a pull-request workflow.** Building and running the container image needs a
+privileged Docker daemon (the buildx plugin and a `dind` service), and pull-request code runs in `ci.yaml`. They are
+therefore **not** part of it; they run on a developer machine before a tag:
+
+```sh
+docker buildx build --platform linux/amd64,linux/arm64 \
+  --output type=oci,tar=false,dest=.ci/image,name=staged.invalid/magnetico-web:staged .
+tar -C .ci/image -cf - . | docker load
+sh ci/image-smoke.sh --platform linux/amd64 staged.invalid/magnetico-web:staged   # run, credentials, schemas, SIGTERM, assets, non-root
+trivy image --input .ci/image --platform linux/amd64 --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1   # and linux/arm64
+```
+
+`hadolint` (in `ci.yaml`) and the Dockerfile's own comments cover the static part; the runtime part of the image is
+otherwise first exercised by the real release build.
+
+## Release: `release.yaml`, tags only
 
 ```
-tag ─► ci.yaml (verification, same commit)
-   └─► release.yaml
-         require-verification   ci/ciguard: the ci workflow's status of THIS pipeline for CI_COMMIT_SHA (tag only)
-         ├─ race                go test -race -p 3 + skip census          ┐
-         ├─ govulncheck         pinned v1.10.0, both tag sets             │
-         ├─ image-build         plugin-docker-buildx, dry_run, OCI layout │ gates
-         │    ├─ image-smoke    docker load + ci/image-smoke.sh (amd64)   │
-         │    └─ image-scan     Trivy HIGH/CRITICAL, amd64 and arm64      │
-         └─ native-build ─► native-smoke   dist/ qualified               ┘
-         promote-image          crane push of the SAME layout ► docker.io + ghcr.io (tag only)
-         release-forgejo        ci/publishnative: the qualified files ► Forgejo (tag only)
-         verify-published       both digests == the qualified digest, 2 platforms, 2 attestations
-         verify-published-smoke ci/image-smoke.sh on docker.io/…@digest
-         verify-native          prerelease flag, assets, checksums.txt and the downloaded archives == qualified
+tag ─► ci.yaml (every gate above, same commit)
+   └─► release.yaml   (depends_on: [ci])
+         release-forgejo   goreleaser release --clean   ► Forgejo release (+ both archives and checksums.txt)
+         release-docker    plugin-docker-buildx          ► docker.io/skobkin/magnetico-web:<tag> and ghcr.io/…:<tag>
 ```
 
-Guarantees, and how each is enforced:
-
-* **The published image is the qualified image.** `image-build` is the only build. Its output is an OCI layout
-  (`.ci/image`, relative to the workspace: `CI_WORKSPACE` is runtime-only and cannot be substituted into a setting): one
-  index holding `linux/amd64`, `linux/arm64` and two attestation manifests (SBOM and provenance, `mode=max`).
-  `ci/check-attestations.sh` (in `image-scan`) requires an SPDX **and** a SLSA predicate in each attestation manifest —
-  counting manifests cannot show an SBOM, provenance alone also yields two. The smoke test and the scanner read that layout; `promote-image` pushes it unchanged, so each registry
-  reports exactly the qualified digest (the script fails otherwise, and `verify-published` checks again). The image
-  digest differs between builds (provenance embeds timestamps), which is why nothing is rebuilt. `ci/promote-image.sh`
-  never overwrites a release tag that already resolves to other bytes (checked for both repositories before anything
-  is pushed) and is idempotent for the same digest; `ci/image-smoke.sh` judges the identity of `--version` (the tag
-  and the commit the pipeline builds), not only its format. The plugin runs with
-  `dry_run: true` against a non-routable `staged.invalid` repository: it cannot push anywhere.
-* **The published archives are the qualified archives, byte for byte.** GoReleaser's OSS edition has no `publish`
-  command and would rebuild, so `release-forgejo` runs `ci/publishnative` instead: it uploads the files `native-build`
-  produced and `native-smoke` qualified, after checking that `dist/checksums.txt` equals the qualified checksums and
-  that both archives hash to the qualified values (it refuses before any request otherwise). The release is created as
-  a **draft**, the three assets are uploaded, and only then is it published, so a failure leaves an invisible draft
-  and never a visible release with missing files; the metadata is what GoReleaser produced (name and tag are the release
-  tag, the body is the generated `CHANGELOG.md`, a release candidate is a prerelease, a stable tag is not). The release notes it was given (`--notes`) must be readable, and `ci/native-smoke.sh` requires `dist/CHANGELOG.md` for a tag build, so a build without notes stops before anything is published (GoReleaser skips the changelog in a snapshot build; its behaviour for a tag build is **not verified** here because no tag may be created: RC0 checklist). The bytes uploaded are the bytes that were hashed, and a lost reply to the publishing request is checked against the forge before any recovery advice is printed. It never
-  overwrites a release that exists for the tag and never deletes anything. `verify-native` then **downloads the
-  published archives** and compares their SHA-256 with the qualified checksums (comparing only the two `checksums.txt`
-  files, as before, would not have noticed a different archive behind an honest list). The tool and the verifier were
-  rehearsed against each other on a local fixture of the release API (`internal/repocheck`); the API calls follow the
-  Gitea 1.22-compatible API of Forgejo and are **not verified against a real Forgejo server** (RC0 checklist).
-* **Publication needs verification of the same commit.** Workflow `depends_on: [ci]` (never optional: Woodpecker
-  documents that a dependency that was not built blocks the dependent) and `ci/ciguard`, which reads the forge's commit
-  statuses for exactly `CI_COMMIT_SHA` and succeeds only when the newest `ci/woodpecker/tag/ci` status **that belongs to
-  the current pipeline** is `success`. A status belongs to it when its `target_url` is `CI_PIPELINE_URL` (or below it on a
-  path-segment boundary, so a workflow id may follow; pipeline 1 is not 12). A green status of an **earlier pipeline for
-  the same commit** (a tag re-run, two tags on one commit) therefore never substitutes, and the pipeline-level aggregate
-  status, which may stay pending while the release workflow itself runs, is a different context and never counts.
-  Failure, error, a missing or pending status, a status of another commit or pipeline, an empty or unusable
-  `CI_PIPELINE_URL`, an API error, a non-tag event, a malformed tag or SHA all refuse. Every publication step depends on the guard and on all five gates.
+* **Publication waits for verification.** `depends_on: [ci]` is a standard Woodpecker workflow dependency: a failed
+  `ci` workflow (tests, race suite, lint, vulnerability check, ...) means `release.yaml` does not run.
+* **`release-forgejo`** is a plain `goreleaser release --clean` in the pinned `goreleaser/goreleaser:v2.20.1` image: the
+  archives for `linux/amd64` and `linux/arm64` (reproducible: commit-dated entries, `-trimpath`, no tags), the SHA-256
+  `checksums.txt`, the generated changelog as the release notes, `prerelease: auto`. The image ships Go 1.27.3 with
+  `GOTOOLCHAIN=local`, which silently ignores `go.mod`'s `toolchain go1.27.4`: the step sets `GOTOOLCHAIN=go1.27.4+auto`.
+  The Forgejo API URL is derived from `CI_FORGE_URL` (set by Woodpecker).
+* **`release-docker`** is `woodpeckerci/plugin-docker-buildx:6` with `linux/amd64,linux/arm64`, SBOM and provenance
+  attestations, `pull_image: true`, the release tag as the only tag, build arguments `VERSION` and `COMMIT`, and logins
+  for both registries. Its automatic labels are off (they would replace the Dockerfile's
+  `org.opencontainers.image.source`, the GitHub mirror that links the GHCR package to the repository, with the Forgejo
+  URL). **No registry cache** is configured (a cache is a poisoning surface; BuildKit cache mounts suffice).
 * **Untrusted code never sees credentials.** `ci.yaml` (the only workflow pull requests reach) has no `from_secret`, no
-  registry login, no cache, no privileged step and no Docker daemon; `release.yaml` is tag/manual only. Secrets are used
-  by `promote-image` (registry credentials) and `release-forgejo` (Forgejo token) and nowhere else.
-* **No registry cache exists.** A cache export was tried and failed locally (concurrent layer writes with two
-  platforms), could not be rehearsed against the CI daemon, and every cache is a poisoning surface. Builds use BuildKit
-  cache mounts only (effective on a persistent builder). A cache can be added later in tag-only steps.
-* **The Go security floor is 1.27.4 everywhere.** The `golang:1.27.4-*` step images and the image's compiler stage use
-  `GOTOOLCHAIN=local`; **the pinned GoReleaser image ships Go 1.27.3 with `GOTOOLCHAIN=local`**, which silently ignored
-  `go.mod`'s `toolchain go1.27.4` (a release built there reported `go1.27.3`), so its steps set
-  `GOTOOLCHAIN=go1.27.4+auto`; `native-smoke` and `image-smoke` assert the built Go version and
-  `internal/repocheck` pins all of it.
-* **`latest` is a deliberate owner switch.** It stays commented out (`# - latest` in `promote-image`) for every release
-  and `ci/promote-image.sh` refuses it, `0.8`, `stable`, `edge` and every tag outside the grammar. Enabling it means
-  promoting the same layout under that tag and updating `internal/repocheck` on purpose.
-
-* **Timing-sensitive suites run alone.** `-p 3` is verified for a quiet agent, and failures are never rerun, so in
-  `ci.yaml` the `test` step waits for lint, vet, build and the Dockerfile check and the heavier steps (OpenAPI,
-  the GoReleaser snapshot, the invariants) run after it; in `release.yaml` the image build, the native build and
-  `govulncheck` wait for the race suite. The pipeline is slower than a fully parallel one by design.
+  registry login, no cache and no privileged step; `release.yaml` runs for tags only. Secrets are used by
+  `release-forgejo` (Forgejo token) and `release-docker` (registry credentials) and nowhere else.
+* **The Go security floor is 1.27.4 everywhere** (`golang:1.27.4-*` step images, the Dockerfile's compiler stage, the
+  GoReleaser steps as above); `native-smoke` and `image-smoke` assert the built Go version.
 
 ## Recovery after a partial publication
 
-`promote-image` (registries) and `release-forgejo` (Forgejo) are independent, so one can succeed while the other fails,
-and a pipeline re-run **rebuilds** the image with a different digest (the archives are built again too; `ci/publishnative` refuses a tag that already has a release and never replaces one, and a failed run leaves a **draft** that is deleted in the forge before the step is run again). Therefore:
-
-* a re-run whose `promote-image` finds a tag that already resolves to other bytes **stops** ("refusing to overwrite a
-  published tag"); it never replaces a published image;
-* to recover, either delete the incomplete artifacts deliberately (the image tag in both registries, and the Forgejo
-  release for that tag) and re-run, or cut the next tag (`0.8.0-rc.1`): a tag is cheap, an overwritten image is not;
-* what GoReleaser does when the Forgejo release already exists is **not verified** here: expect to delete that release
-  before a re-run.
-
-**First release and GHCR.** `verify-published` pulls anonymously. If the first push creates the GHCR package private
-(not verified here), that step fails right after a successful publication: set the package public (and linked to the
-repository) and re-run, or run `ci/verify-published.sh` by hand. The artifacts themselves are fine in that case.
+`release-forgejo` and `release-docker` are independent, so one can succeed while the other fails. A pipeline re-run
+**rebuilds** both. To recover, either delete the incomplete artifacts deliberately (the image tag in both registries,
+and the Forgejo release for that tag, which GoReleaser will not replace; its behaviour on an existing release is
+**not verified** here) and re-run, or cut the next tag (`0.8.0-rc.1`): a tag is cheap, an overwritten image is not.
+The plugin pushes tags without a check, so never re-run a release for a tag whose image was already used.
 
 ## Operator configuration (not in the repository)
 
 **Woodpecker server**
 
-* `WOODPECKER_PLUGINS_PRIVILEGED` must include `woodpeckerci/plugin-docker-buildx:6` (the build step needs a Docker
-  daemon of its own).
-* The repository must be **trusted** for privileged execution (the plugin step and the `dind` service of `release.yaml`).
-  Privileged execution exists only in `release.yaml`; keep the repository's *"require approval for pull requests from
-  forks"* (or *all* pull requests) setting on, because `ci.yaml` runs pull-request code.
-* Keep the default commit-status format (`WOODPECKER_STATUS_CONTEXT_FORMAT` = `{{ .context }}/{{ .event }}/{{ .workflow }}`,
-  context `ci/woodpecker`): `require-verification` waits for the status `ci/woodpecker/tag/ci`. A different format makes
-  the guard refuse everything (it fails closed); update `--context` in `release.yaml` together with it.
-* Agents need outbound access to: the forge, Docker Hub and GHCR (pulls and pushes), `proxy.golang.org` and `sum.golang.org`
-  (module downloads, the Go toolchain download of the GoReleaser steps, `crane`, `govulncheck`), `mirror.gcr.io`
-  (the Trivy vulnerability database) and the Alpine mirrors used by the base images.
-* A private Forgejo repository additionally needs read credentials for `merge-target` and for `ci/ciguard`
-  (`GUARD_TOKEN`); the repository is assumed public (it is mirrored publicly).
+* `WOODPECKER_PLUGINS_PRIVILEGED` must include `woodpeckerci/plugin-docker-buildx:6` (the plugin needs a Docker daemon of
+  its own). The step does not ask for privilege itself. Without the server setting the plugin step fails, and a local
+  `woodpecker-cli lint` reports exactly that finding unless it is given `--plugins-privileged woodpeckerci/plugin-docker-buildx`.
+* Keep the repository's *"require approval for pull requests from forks"* (or *all* pull requests) setting on, because
+  `ci.yaml` runs pull-request code.
+* Agents need outbound access to: the forge, Docker Hub and GHCR, `proxy.golang.org` and `sum.golang.org` (module
+  downloads, the Go toolchain download of the GoReleaser step, `govulncheck`), and the Alpine mirrors used by the base images.
 
 **Woodpecker secrets** (repository secrets, each restricted to the **`tag`** event; none may be available to
 `pull_request`, `push` or `manual`):
 
 | Secret | Used by | Content / permission |
 |---|---|---|
-| `DOCKER_LOGIN`, `DOCKER_TOKEN` | `promote-image` | Docker Hub user and an access token with **read & write** on `skobkin/magnetico-web` only |
-| `GHCR_LOGIN`, `GHCR_TOKEN` | `promote-image` | GitHub user and a token with `write:packages` for `ghcr.io/skobkin/magnetico-web`; link the package to the `skobkin/magnetico-web` repository (the image's `org.opencontainers.image.source` label already points there) |
-| `GITEA_TOKEN` | `release-forgejo` | a Forgejo token that may create and edit releases and upload assets in `skobkin/magnetico-web` (`write:repository`); sent only to the forge API in the `Authorization` header |
+| `DOCKER_LOGIN`, `DOCKER_TOKEN` | `release-docker` | Docker Hub user and an access token with **read & write** on `skobkin/magnetico-web` only |
+| `GHCR_LOGIN`, `GHCR_TOKEN` | `release-docker` | GitHub user and a token with `write:packages` for `ghcr.io/skobkin/magnetico-web`; link the package to the `skobkin/magnetico-web` repository (the image's `org.opencontainers.image.source` label already points there) |
+| `GITEA_TOKEN` | `release-forgejo` | a Forgejo token that may create and edit releases and upload assets in `skobkin/magnetico-web` (`write:repository`) |
 
 **Registries.** Create `skobkin/magnetico-web` on Docker Hub (public) and let the first push create the GHCR package
 (then set it public and link it to the repository).
 
-## First run and local rehearsal
+## First release
 
-1. Run `release.yaml` **manually** (no tag): it executes `ci.yaml` and every gate, builds a snapshot of the archives and
-   the image, and publishes nothing. Fix anything that depends on your Woodpecker, then
-2. push the first release-candidate tag (`0.8.0-rc.0`) and watch the publication steps; check
-   `docker buildx imagetools inspect docker.io/skobkin/magnetico-web:0.8.0-rc.0` and the Forgejo release page.
-
-Everything except the Woodpecker-specific parts can be rehearsed locally with throwaway registries (this is how the
-promotion was verified; the override exists for rehearsals only and no workflow sets it):
-
-```sh
-docker run -d --name reg-a -p 127.0.0.1:55001:5000 registry:2 && docker run -d --name reg-b -p 127.0.0.1:55002:5000 registry:2
-docker buildx build --platform linux/amd64,linux/arm64 --sbom=true --provenance=mode=max \
-  --output type=oci,tar=false,dest=.ci/image,name=staged.invalid/magnetico-web:staged .
-export GOTOOLCHAIN=go1.27.4 MAGNETICO_PROMOTE_REHEARSAL=1 \
-  MAGNETICO_PROMOTE_REPOS="127.0.0.1:55001/magnetico-web 127.0.0.1:55002/magnetico-web"
-sh ci/promote-image.sh .ci/image 0.8.0-rc.0
-sh ci/verify-published.sh "$(grep -Eo 'sha256:[0-9a-f]{64}' .ci/image/index.json | head -n 1)" 0.8.0-rc.0
-tar -C .ci/image -cf - . | docker load && sh ci/image-smoke.sh --platform linux/amd64 staged.invalid/magnetico-web:staged
-```
+Push the first release-candidate tag (`0.8.0-rc.0`) and watch the pipeline: `ci` first, then `release-forgejo` and
+`release-docker`. Check `docker buildx imagetools inspect docker.io/skobkin/magnetico-web:0.8.0-rc.0` (and the same on
+GHCR: both should show two platforms and the attestations), the Forgejo release page (a **prerelease** with both
+archives, `checksums.txt` and the changelog), and run `ci/image-smoke.sh --platform linux/amd64` against the pushed image.
 
 ## Native artifacts
 
-`goreleaser release --clean --skip=publish` (run once by `native-build`, uploaded unchanged by `release-forgejo`) produces `magnetico-web_<version>_linux_{amd64,arm64}.tar.gz`
-and `checksums.txt` (SHA-256), attached to the Forgejo release; each archive holds the `magnetico` executable,
-`COPYING`, `README.md`, `UPGRADE.md` and the licence files of the vendored front-end libraries under `licenses/` (the Swagger UI files and `uplot-LICENSE`; the image carries the same under `/usr/share/licenses/magnetico/`). A missing licence file fails `ci/native-smoke.sh`, `ci/image-smoke.sh` and `internal/repocheck`. The executables are static
-(`CGO_ENABLED=0`), built with `-trimpath` and no build tags, with the version, commit, Go version and platform printed by
-`magnetico --version` (the same linker values as the image). **Only Linux amd64 and arm64** are built: the crawler's
-queue lock has Unix and "other" implementations, and no behaviour of the UDP crawler, queue locking or the cgroup-based
-tests has been demonstrated on any other platform, so none was added. The licences of the Go module dependencies are not
-bundled; generating a notice file for them is an open owner decision.
+`goreleaser release --clean` produces `magnetico-web_<version>_linux_{amd64,arm64}.tar.gz` and `checksums.txt` (SHA-256),
+attached to the Forgejo release; each archive holds the `magnetico` executable, `COPYING`, `README.md`, `UPGRADE.md` and
+the licence files of the vendored front-end libraries under `licenses/` (the Swagger UI files and `uplot-LICENSE`; the
+image carries the same under `/usr/share/licenses/magnetico/`). A missing licence file fails `ci/native-smoke.sh`,
+`ci/image-smoke.sh` and `internal/repocheck`. The executables are static (`CGO_ENABLED=0`), built with `-trimpath` and
+no build tags, with the version, commit, Go version and platform printed by `magnetico --version` (the same linker
+values as the image). **Only Linux amd64 and arm64** are built: the crawler's queue lock has Unix and "other"
+implementations, and no behaviour of the UDP crawler, queue locking or the cgroup-based tests has been demonstrated on
+any other platform. The licences of the Go module dependencies are not bundled; generating a notice file for them is
+an open owner decision.
 
 ## Known limitations
 
-* No pipeline has run on Woodpecker; the unverified items above are verified by the first manual run.
-* `docker load` of the multi-platform layout into the `dind` daemon assumes Docker 29's containerd image store (the
-  `docker:29-dind` default); with the classic store only the host platform is loaded, which is all the smoke test needs.
-* The amd64 image is executed by the smoke test; arm64 is built, scanned and digest-verified, **not executed**.
+* No pipeline has run on Woodpecker; the first real run is the owner's `0.8.0-rc.0` tag.
+* The container image is not built or run by any workflow before a tag (see above): its smoke test and scan are local.
+* The amd64 image is executed by the smoke test; arm64 is built and scanned, **not executed**.
 * The skip census allow-list contains two known gaps of the external-PostgreSQL mode (see `testing.md`).
-* `-p 3` is a workaround for timing-sensitive tests (issues #52, #53), not a fix.
-* The image scanner and the vulnerability database are downloaded at run time; a scanner or database outage fails the gate.
+* `-p 3` is a workaround for timing-sensitive tests (issue #53), not a fix.

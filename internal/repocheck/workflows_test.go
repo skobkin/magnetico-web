@@ -14,18 +14,16 @@ import (
 
 // The Woodpecker workflows carry the release's security properties. These tests
 // parse them and fail the build when an edit would, for example, give pull
-// request code a registry credential, publish without the verification gates,
-// apply an alias tag, or build the toolchain below the security floor.
+// request code a registry credential, publish without the verification workflow,
+// apply an alias tag, or build the toolchain below the security floor. They check the
+// shape of two ordinary workflows (ci.yaml for every pull request, release.yaml for
+// release tags); they are not a release system.
 
 const (
 	tagGrammar = `CI_COMMIT_TAG matches "^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?$"`
 
 	branch080 = "refactor/0.8.0-unify-and-new-storage"
 )
-
-var gates = []string{"race", "govulncheck", "image-smoke", "image-scan", "native-smoke"}
-
-var publication = []string{"promote-image", "release-forgejo"}
 
 type workflowFile struct {
 	name string
@@ -209,7 +207,7 @@ func TestMergedStateIsVerifiedForPullRequests(t *testing.T) {
 			t.Errorf("merge-target lacks %q", want)
 		}
 	}
-	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "openapi", "release-dry-run"} {
+	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "race", "govulncheck", "openapi", "native-snapshot", "native-smoke"} {
 		deps, _ := dependsOn(w.step(t, name)["depends_on"])
 		if !contains(deps, "merge-target") && !transitivelyDependsOn(w, name, "merge-target") {
 			t.Errorf("step %s does not (transitively) wait for merge-target", name)
@@ -252,18 +250,6 @@ func toStrings(v any) []string {
 	return out
 }
 
-func TestReleaseWorkflowIsNeverTriggeredByPullRequestsOrPushes(t *testing.T) {
-	w := load(t, "release.yaml")
-	for ev := range events(w.doc["when"]) {
-		if ev != "tag" && ev != "manual" {
-			t.Errorf("release.yaml must run on tag and manual only, it also runs on %q", ev)
-		}
-	}
-	if !events(w.doc["when"])["tag"] || !events(w.doc["when"])["manual"] {
-		t.Error("release.yaml must run on tag events and manual pre-flight runs")
-	}
-}
-
 func TestReleaseWorkflowDependsOnCIAndNeverOptionally(t *testing.T) {
 	w := load(t, "release.yaml")
 	deps, optional := dependsOn(w.doc["depends_on"])
@@ -295,187 +281,6 @@ func TestTagGrammarIsIdenticalInBothWorkflows(t *testing.T) {
 	}
 }
 
-func TestEveryPublicationStepIsTagOnlyAndDependsOnTheGuardAndAllGates(t *testing.T) {
-	w := load(t, "release.yaml")
-	for _, name := range publication {
-		s := w.step(t, name)
-		ev := events(s["when"])
-		if len(ev) != 1 || !ev["tag"] {
-			t.Errorf("publication step %s must run on tag events only, runs on %v", name, ev)
-		}
-		deps, optional := dependsOn(s["depends_on"])
-		if optional {
-			t.Errorf("%s: no dependency of a publication step may be optional", name)
-		}
-		for _, need := range append([]string{"require-verification"}, gates...) {
-			if !contains(deps, need) {
-				t.Errorf("publication step %s does not depend on %s", name, need)
-			}
-		}
-	}
-	// And every step that holds a credential is one of them (see the secrets test).
-}
-
-func TestRequireVerificationIsTagOnlyAndGatesDoNotWaitForIt(t *testing.T) {
-	w := load(t, "release.yaml")
-	g := w.step(t, "require-verification")
-	if ev := events(g["when"]); len(ev) != 1 || !ev["tag"] {
-		t.Errorf("require-verification runs on tag events only, got %v", ev)
-	}
-	if !strings.Contains(strings.Join(toStrings(g["commands"]), "\n"), "ci/ciguard") {
-		t.Error("require-verification must run ci/ciguard")
-	}
-	// The guard must name the verification WORKFLOW's own status context (the
-	// workflow file is ci.yaml; the pipeline-level aggregate has no workflow suffix
-	// and stays pending while the release workflow runs).
-	cmd := strings.Join(toStrings(g["commands"]), "\n")
-	if !strings.Contains(cmd, "--context ci/woodpecker/tag/ci\n") && !strings.HasSuffix(cmd, "--context ci/woodpecker/tag/ci") {
-		t.Errorf("require-verification must pass --context ci/woodpecker/tag/ci (the ci workflow's context), got %q", cmd)
-	}
-	if _, err := os.Stat("../../.woodpecker/ci.yaml"); err != nil {
-		t.Errorf("the context names the workflow ci.yaml, which must exist: %v", err)
-	}
-	// A manual pre-flight has no tag: the gates must not wait for a step that is
-	// filtered out there.
-	for _, name := range gates {
-		deps, _ := dependsOn(w.step(t, name)["depends_on"])
-		if contains(deps, "require-verification") {
-			t.Errorf("gate %s must not depend on require-verification (it would block manual pre-flight runs)", name)
-		}
-	}
-}
-
-func TestOnlyTheReleaseTagIsEverApplied(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
-		w := load(t, name)
-		for _, l := range strings.Split(commentFree(w.raw), "\n") {
-			if regexp.MustCompile(`\blatest\b`).MatchString(l) && !strings.Contains(l, "image:") {
-				t.Errorf("%s: an active line mentions latest: %q", name, strings.TrimSpace(l))
-			}
-		}
-	}
-	w := load(t, "release.yaml")
-	// The commented-out latest entry must exist as the owner's switch.
-	if !strings.Contains(w.raw, "# - latest") {
-		t.Error("release.yaml must keep the commented-out `# - latest` entry (the owner enables it explicitly)")
-	}
-	p := w.step(t, "promote-image")
-	if !strings.Contains(strings.Join(toStrings(p["commands"]), "\n"), `ci/promote-image.sh .ci/image "$CI_COMMIT_TAG"`) {
-		t.Errorf("promote-image must promote the qualified layout with exactly the release tag: %v", p["commands"])
-	}
-	script, err := os.ReadFile(filepath.Join(testkit.ModuleRoot(t), "ci", "promote-image.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, l := range strings.Split(string(script), "\n") {
-		if strings.Contains(l, "latest") && !strings.HasPrefix(strings.TrimSpace(l), "#") && !strings.Contains(l, "refusing") && !strings.Contains(l, "never") {
-			t.Errorf("promote-image.sh mentions latest outside a refusal: %q", l)
-		}
-	}
-}
-
-func TestImageIsBuiltOnceByTheBuildxPluginWithoutPushingOrCaching(t *testing.T) {
-	w := load(t, "release.yaml")
-	builds := 0
-	for _, s := range w.steps() {
-		img, _ := s["image"].(string)
-		cmds := strings.Join(toStrings(s["commands"]), "\n")
-		if strings.Contains(img, "plugin-docker-buildx") {
-			builds++
-			if s["name"] != "image-build" {
-				t.Errorf("only image-build may use the buildx plugin, %v does", s["name"])
-			}
-		}
-		if regexp.MustCompile(`docker (buildx )?build`).MatchString(cmds) {
-			t.Errorf("step %v builds an image itself: the published image must be the one image-build produced", s["name"])
-		}
-	}
-	if builds != 1 {
-		t.Fatalf("%d steps use the buildx plugin, want exactly one", builds)
-	}
-	s := w.step(t, "image-build")
-	set, _ := s["settings"].(map[string]any)
-	if set["dry_run"] != true {
-		t.Error("image-build must run with dry_run: true (it must never push)")
-	}
-	if !strings.HasSuffix(strings.SplitN(set["repo"].(string), "/", 2)[0], ".invalid") {
-		t.Errorf("image-build's repo %q must be on a non-routable .invalid host: the build is staged, never published", set["repo"])
-	}
-	out, _ := set["output"].(string)
-	// Relative to the workspace (the step's working directory). CI_WORKSPACE is a
-	// runtime-only variable: Woodpecker cannot substitute it into a setting, so an
-	// absolute ${CI_WORKSPACE}/... path would silently become /.ci/image.
-	if !strings.HasPrefix(out, "type=oci,tar=false,dest=.ci/image,") {
-		t.Errorf("image-build must write the OCI layout directory .ci/image (relative), output = %q", out)
-	}
-	if set["pull_image"] != true {
-		t.Error("image-build must resolve fresh base images (pull_image: true)")
-	}
-	if set["default_labels"] != false {
-		t.Error("image-build must disable the plugin's automatic labels (they override the Dockerfile's source label with the Forgejo URL)")
-	}
-	if set["sbom"] == nil || set["provenance"] == nil {
-		t.Error("image-build must request SBOM and provenance attestations")
-	}
-	pl, _ := set["platforms"].([]any)
-	if len(pl) != 2 || pl[0] != "linux/amd64" || pl[1] != "linux/arm64" {
-		t.Errorf("platforms = %v, want exactly linux/amd64 and linux/arm64", pl)
-	}
-}
-
-func TestSmokeScanAndPromotionUseTheQualifiedLayoutOnly(t *testing.T) {
-	w := load(t, "release.yaml")
-	for _, name := range []string{"image-smoke", "image-scan", "promote-image"} {
-		s := w.step(t, name)
-		if !strings.Contains(text(s), ".ci/image") {
-			t.Errorf("%s must read the layout image-build wrote (.ci/image)", name)
-		}
-		deps, _ := dependsOn(s["depends_on"])
-		if name != "promote-image" && !contains(deps, "image-build") {
-			t.Errorf("%s must depend on image-build", name)
-		}
-	}
-	scan := text(w.step(t, "image-scan"))
-	for _, want := range []string{"linux/amd64", "linux/arm64", "HIGH,CRITICAL", "--exit-code 1"} {
-		if !strings.Contains(scan, want) {
-			t.Errorf("image-scan lacks %q", want)
-		}
-	}
-	// Scanner pinned by version and digest.
-	if !regexp.MustCompile(`aquasec/trivy:[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}`).MatchString(scan) {
-		t.Error("the image scanner must be pinned by version and digest")
-	}
-}
-
-func TestCredentialsAreOnlyInTheirPublicationStepsAndTagEvents(t *testing.T) {
-	allowed := map[string]string{
-		"DOCKER_LOGIN": "promote-image", "DOCKER_TOKEN": "promote-image",
-		"GHCR_LOGIN": "promote-image", "GHCR_TOKEN": "promote-image",
-		"GITEA_TOKEN": "release-forgejo",
-	}
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
-		w := load(t, name)
-		for _, s := range w.steps() {
-			env, _ := s["environment"].(map[string]any)
-			for k, v := range env {
-				m, ok := v.(map[string]any)
-				if !ok || m["from_secret"] == nil {
-					continue
-				}
-				step := allowed[k]
-				if step == "" {
-					t.Errorf("%s step %v uses an unexpected secret %s", name, s["name"], k)
-				} else if name != "release.yaml" || s["name"] != step {
-					t.Errorf("secret %s may only be used by release.yaml step %s, found in %s step %v", k, step, name, s["name"])
-				}
-				if ev := events(s["when"]); len(ev) != 1 || !ev["tag"] {
-					t.Errorf("step %v holds a secret but is not tag-only", s["name"])
-				}
-			}
-		}
-	}
-}
-
 func TestNoRegistryCacheIsConfigured(t *testing.T) {
 	for _, name := range []string{"ci.yaml", "release.yaml"} {
 		body := commentFree(load(t, name).raw)
@@ -483,24 +288,6 @@ func TestNoRegistryCacheIsConfigured(t *testing.T) {
 			if strings.Contains(body, k) {
 				t.Errorf("%s configures a registry cache (%s): none is configured so no unreviewed workflow can poison one", name, k)
 			}
-		}
-	}
-}
-
-func TestPrivilegedExecutionIsLimitedToTheBuildAndTheDaemon(t *testing.T) {
-	ci := load(t, "ci.yaml")
-	if strings.Contains(commentFree(ci.raw), "privileged") {
-		t.Error("ci.yaml must not use privileged execution")
-	}
-	rel := load(t, "release.yaml")
-	for _, s := range rel.steps() {
-		if s["privileged"] == true && s["name"] != "image-build" {
-			t.Errorf("step %v is privileged: only image-build (the buildx plugin) may be", s["name"])
-		}
-	}
-	for _, svc := range rel.services() {
-		if svc["privileged"] == true && svc["name"] != "dind" {
-			t.Errorf("service %v is privileged: only dind may be", svc["name"])
 		}
 	}
 }
@@ -535,45 +322,6 @@ func atoi(s string) int {
 	return n
 }
 
-func TestTestStepsRequirePostgresRunTheCensusAndUseVerifiedParallelism(t *testing.T) {
-	for _, tc := range []struct{ file, step string }{{"ci.yaml", "test"}, {"release.yaml", "race"}} {
-		w := load(t, tc.file)
-		s := w.step(t, tc.step)
-		env, _ := s["environment"].(map[string]any)
-		if env["MAGNETICO_TEST_REQUIRE_POSTGRES"] != "1" {
-			t.Errorf("%s/%s must set MAGNETICO_TEST_REQUIRE_POSTGRES=1", tc.file, tc.step)
-		}
-		dsn, _ := env["MAGNETICO_TEST_POSTGRES_DSN"].(string)
-		if dsn != "postgres://postgres@postgres:5432/postgres?sslmode=disable" {
-			t.Errorf("%s/%s DSN = %q: the harness derives role DSNs without a password, so the service uses trust authentication", tc.file, tc.step, dsn)
-		}
-		cmds := strings.Join(toStrings(s["commands"]), "\n")
-		for _, want := range []string{"-p 3", "-count=1", "skipcensus"} {
-			if !strings.Contains(cmds, want) {
-				t.Errorf("%s/%s lacks %q", tc.file, tc.step, want)
-			}
-		}
-		if tc.step == "race" && !strings.Contains(cmds, "-race") {
-			t.Error("the release test step must run with -race")
-		}
-		deps, _ := dependsOn(s["depends_on"])
-		if !contains(deps, "wait-postgres") {
-			t.Errorf("%s/%s must wait for wait-postgres", tc.file, tc.step)
-		}
-		for _, svc := range w.services() {
-			if svc["name"] == "postgres" {
-				env, _ := svc["environment"].(map[string]any)
-				if env["POSTGRES_HOST_AUTH_METHOD"] != "trust" {
-					t.Errorf("%s: the disposable postgres service must use trust authentication", tc.file)
-				}
-				if img, _ := svc["image"].(string); !strings.HasPrefix(img, "postgres:17") {
-					t.Errorf("%s: postgres service image %q must be PostgreSQL 17", tc.file, img)
-				}
-			}
-		}
-	}
-}
-
 func TestNoAutomaticRerunsAndNoIgnoredFailures(t *testing.T) {
 	for _, name := range []string{"ci.yaml", "release.yaml"} {
 		body := commentFree(load(t, name).raw)
@@ -582,26 +330,6 @@ func TestNoAutomaticRerunsAndNoIgnoredFailures(t *testing.T) {
 				t.Errorf("%s must not contain %q: failing tests are never hidden", name, k)
 			}
 		}
-	}
-}
-
-func TestRehearsalOverridesAreNeverSetByAWorkflow(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
-		body := load(t, name).raw
-		for _, k := range []string{"MAGNETICO_PROMOTE_REHEARSAL", "MAGNETICO_PROMOTE_REPOS"} {
-			if strings.Contains(body, k) {
-				t.Errorf("%s sets %s: that override exists for local rehearsals only", name, k)
-			}
-		}
-	}
-}
-
-func TestReleaseWorkflowPinsCraneAndLimitsItsToolchain(t *testing.T) {
-	rel := load(t, "release.yaml")
-	p := rel.step(t, "promote-image")
-	img, _ := p["image"].(string)
-	if !goImage.MatchString(img) {
-		t.Errorf("promote-image runs crane through go run and needs a Go image, got %q", img)
 	}
 }
 
@@ -619,9 +347,151 @@ func TestNoRuntimeOnlyVariableIsSubstitutedIntoAWorkflow(t *testing.T) {
 	}
 }
 
-// -p 3 is the verified configuration because the suite has timing-sensitive
-// tests (issues #52, #53) and failures are never rerun: the suites run with
-// nothing heavy beside them on the agent.
+func TestReleaseWorkflowRunsOnReleaseTagsOnly(t *testing.T) {
+	w := load(t, "release.yaml")
+	ev := events(w.doc["when"])
+	if len(ev) != 1 || !ev["tag"] {
+		t.Errorf("release.yaml must run on tag events only, runs on %v", ev)
+	}
+	for _, s := range w.steps() {
+		if e := events(s["when"]); len(e) > 0 && !(len(e) == 1 && e["tag"]) {
+			t.Errorf("step %v of release.yaml filters on %v", s["name"], e)
+		}
+	}
+}
+
+// The release workflow is the conventional pair of the project's other repositories:
+// GoReleaser creates the Forgejo release, the buildx plugin pushes the image.
+func TestReleaseWorkflowIsGoReleaserAndTheBuildxPluginOnly(t *testing.T) {
+	w := load(t, "release.yaml")
+	names := []string{}
+	for _, s := range w.steps() {
+		names = append(names, s["name"].(string))
+	}
+	sort.Strings(names)
+	if strings.Join(names, ",") != "release-docker,release-forgejo" {
+		t.Fatalf("release.yaml steps = %v, want release-docker and release-forgejo", names)
+	}
+	if len(w.services()) != 0 {
+		t.Errorf("release.yaml needs no services: %v", w.services())
+	}
+	rel := w.step(t, "release-forgejo")
+	if img, _ := rel["image"].(string); !regexp.MustCompile(`^goreleaser/goreleaser:v[0-9]+\.[0-9]+\.[0-9]+$`).MatchString(img) {
+		t.Errorf("release-forgejo image %q must be the pinned GoReleaser image", img)
+	}
+	if cmd := strings.Join(toStrings(rel["commands"]), "\n"); !strings.Contains(cmd, "goreleaser release --clean") || strings.Contains(cmd, "--skip") || strings.Contains(cmd, "--snapshot") {
+		t.Errorf("release-forgejo must run a plain `goreleaser release --clean`: %s", cmd)
+	}
+}
+
+func TestDockerReleaseKeepsTheAgreedRepositoriesPlatformsAndTag(t *testing.T) {
+	s := load(t, "release.yaml").step(t, "release-docker")
+	if img, _ := s["image"].(string); !strings.HasPrefix(img, "woodpeckerci/plugin-docker-buildx:") {
+		t.Fatalf("release-docker must use the Woodpecker buildx plugin, got %q", img)
+	}
+	set, _ := s["settings"].(map[string]any)
+	if set["dry_run"] != nil {
+		t.Error("release-docker must push (no dry_run)")
+	}
+	repos := toStrings(set["repo"])
+	sort.Strings(repos)
+	if strings.Join(repos, ",") != "ghcr.io/skobkin/magnetico-web,skobkin/magnetico-web" {
+		t.Errorf("repositories = %v, want docker.io (skobkin/magnetico-web) and ghcr.io/skobkin/magnetico-web", repos)
+	}
+	if got := toStrings(set["platforms"]); strings.Join(got, ",") != "linux/amd64,linux/arm64" {
+		t.Errorf("platforms = %v, want linux/amd64 and linux/arm64", got)
+	}
+	// Only the release tag is applied. `latest` is the owner's later, deliberate decision.
+	if got := toStrings(set["tags"]); len(got) != 1 || got[0] != "${CI_COMMIT_TAG}" {
+		t.Errorf("tags = %v, want exactly ${CI_COMMIT_TAG}", got)
+	}
+	if set["default_labels"] != false {
+		t.Error("the plugin's automatic labels must stay off (they override the Dockerfile's source label with the Forgejo URL)")
+	}
+	if set["dockerfile"] != "Dockerfile" {
+		t.Errorf("dockerfile = %v", set["dockerfile"])
+	}
+	for _, a := range toStrings(set["build_args"]) {
+		if !strings.HasPrefix(a, "VERSION=${CI_COMMIT_TAG}") && !strings.HasPrefix(a, "COMMIT=${CI_COMMIT_SHA}") {
+			t.Errorf("unexpected build argument %q", a)
+		}
+	}
+	for _, l := range strings.Split(commentFree(load(t, "release.yaml").raw), "\n") {
+		if regexp.MustCompile(`\blatest\b`).MatchString(l) {
+			t.Errorf("release.yaml applies latest: %q", strings.TrimSpace(l))
+		}
+	}
+}
+
+func TestCredentialsAreOnlyInTheirPublicationSteps(t *testing.T) {
+	allowed := map[string]string{
+		"GITEA_TOKEN": "release-forgejo",
+	}
+	login := map[string]bool{"DOCKER_LOGIN": true, "DOCKER_TOKEN": true, "GHCR_LOGIN": true, "GHCR_TOKEN": true}
+	ci := load(t, "ci.yaml")
+	if strings.Contains(commentFree(ci.raw), "from_secret") {
+		t.Error("ci.yaml (pull-request code) must not reference any secret")
+	}
+	rel := load(t, "release.yaml")
+	for _, s := range rel.steps() {
+		env, _ := s["environment"].(map[string]any)
+		for k, v := range env {
+			if m, ok := v.(map[string]any); ok && m["from_secret"] != nil {
+				if allowed[k] != s["name"] {
+					t.Errorf("release.yaml step %v uses the secret %s", s["name"], k)
+				}
+			}
+		}
+	}
+	set, _ := rel.step(t, "release-docker")["settings"].(map[string]any)
+	used := map[string]bool{}
+	for _, l := range set["logins"].([]any) {
+		for _, f := range []string{"username", "password"} {
+			if m, _ := l.(map[string]any)[f].(map[string]any); m != nil {
+				used[m["from_secret"].(string)] = true
+			}
+		}
+	}
+	if len(used) != len(login) {
+		t.Errorf("release-docker logins use %v, want exactly %v", used, login)
+	}
+	for k := range used {
+		if !login[k] {
+			t.Errorf("release-docker uses an unexpected secret %s", k)
+		}
+	}
+}
+
+// Privileged execution is a server-side decision for the buildx plugin (it must be listed in
+// WOODPECKER_PLUGINS_PRIVILEGED); no workflow asks for it.
+func TestNoWorkflowRequestsPrivilegedExecution(t *testing.T) {
+	for _, name := range []string{"ci.yaml", "release.yaml"} {
+		w := load(t, name)
+		if strings.Contains(commentFree(w.raw), "privileged") {
+			t.Errorf("%s must not request privileged execution", name)
+		}
+	}
+}
+
+// Every gate of the project runs for every pull request.
+func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
+	w := load(t, "ci.yaml")
+	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "race", "govulncheck", "openapi",
+		"native-snapshot", "native-smoke", "frontend-selftest", "dockerfile-lint", "workflow-invariants"} {
+		w.step(t, name)
+	}
+	if cmd := strings.Join(toStrings(w.step(t, "race")["commands"]), "\n"); !strings.Contains(cmd, "-race") {
+		t.Error("the race step must run with -race")
+	}
+	vc := strings.Join(toStrings(w.step(t, "govulncheck")["commands"]), "\n")
+	if !regexp.MustCompile(`govulncheck@v[0-9]+\.[0-9]+\.[0-9]+`).MatchString(vc) || !strings.Contains(vc, "-tags loadtest,diag") {
+		t.Errorf("govulncheck must be pinned and cover both tag sets: %s", vc)
+	}
+}
+
+// -p 3 is the verified configuration because the suite has timing-sensitive tests
+// (issues #52, #53) and failures are never rerun: the suites run with nothing heavy beside
+// them on the agent, one after the other.
 func TestTimingSensitiveSuitesRunAlone(t *testing.T) {
 	ci := load(t, "ci.yaml")
 	for _, light := range []string{"fmt", "lint", "vet", "build", "dockerfile-lint"} {
@@ -629,46 +499,46 @@ func TestTimingSensitiveSuitesRunAlone(t *testing.T) {
 			t.Errorf("ci.yaml: the test step must wait for %s (it must not share the agent with it)", light)
 		}
 	}
-	for _, after := range []string{"openapi", "release-dry-run", "workflow-invariants"} {
-		if !transitivelyDependsOn(ci, after, "test") {
-			t.Errorf("ci.yaml: %s must run after the test step, not beside it", after)
-		}
+	if !transitivelyDependsOn(ci, "race", "test") {
+		t.Error("ci.yaml: the race suite must run after the ordinary suite, not beside it")
 	}
-	rel := load(t, "release.yaml")
-	for _, after := range []string{"image-build", "native-build", "govulncheck"} {
-		if !transitivelyDependsOn(rel, after, "race") {
-			t.Errorf("release.yaml: %s must run after the race suite, not beside it", after)
+	for _, after := range []string{"govulncheck", "openapi", "native-snapshot", "workflow-invariants"} {
+		if !transitivelyDependsOn(ci, after, "race") {
+			t.Errorf("ci.yaml: %s must run after the race suite, not beside it", after)
 		}
 	}
 }
 
-// TestNativePublicationUploadsTheQualifiedFilesAndNeverRebuilds (Task 09A): the
-// release step publishes the files native-build produced and native-smoke
-// qualified, through ci/publishnative, which refuses anything that is not the
-// qualified checksums; no step after the gates builds the archives again.
-func TestNativePublicationUploadsTheQualifiedFilesAndNeverRebuilds(t *testing.T) {
-	w := load(t, "release.yaml")
-	rel := w.step(t, "release-forgejo")
-	cmd := strings.Join(toStrings(rel["commands"]), "\n")
-	if strings.Contains(cmd, "goreleaser") {
-		t.Errorf("release-forgejo must not run GoReleaser (it would rebuild the archives): %s", cmd)
-	}
-	if !strings.Contains(cmd, "ci/publishnative") || !strings.Contains(cmd, "--qualified .ci/qualified-checksums.txt") || !strings.Contains(cmd, "--dist dist") {
-		t.Errorf("release-forgejo must publish dist/ against the qualified checksums with ci/publishnative: %s", cmd)
-	}
-	if img, _ := rel["image"].(string); strings.HasPrefix(img, "goreleaser/") {
-		t.Errorf("release-forgejo runs the %s image: nothing may rebuild after the gates", img)
-	}
-	build := strings.Join(toStrings(w.step(t, "native-build")["commands"]), "\n")
-	if strings.Count(build, "goreleaser release") != 2 || strings.Count(build, "--skip=publish") != 2 {
-		t.Errorf("native-build must call goreleaser only with --skip=publish: %s", build)
-	}
-	for _, s := range w.steps() {
-		if s["name"] == "native-build" || s["name"] == "release-forgejo" {
-			continue
+func TestTestStepsRequirePostgresRunTheCensusAndUseVerifiedParallelism(t *testing.T) {
+	w := load(t, "ci.yaml")
+	for _, step := range []string{"test", "race"} {
+		s := w.step(t, step)
+		env, _ := s["environment"].(map[string]any)
+		if env["MAGNETICO_TEST_REQUIRE_POSTGRES"] != "1" {
+			t.Errorf("ci.yaml/%s must set MAGNETICO_TEST_REQUIRE_POSTGRES=1", step)
 		}
-		if c := strings.Join(toStrings(s["commands"]), "\n"); strings.Contains(c, "goreleaser release") {
-			t.Errorf("step %v runs goreleaser release: archives are built once, by native-build", s["name"])
+		if dsn, _ := env["MAGNETICO_TEST_POSTGRES_DSN"].(string); dsn != "postgres://postgres@postgres:5432/postgres?sslmode=disable" {
+			t.Errorf("ci.yaml/%s DSN = %q: the harness derives role DSNs without a password, so the service uses trust authentication", step, dsn)
+		}
+		cmds := strings.Join(toStrings(s["commands"]), "\n")
+		for _, want := range []string{"-p 3", "-count=1", "skipcensus"} {
+			if !strings.Contains(cmds, want) {
+				t.Errorf("ci.yaml/%s lacks %q", step, want)
+			}
+		}
+		if deps, _ := dependsOn(s["depends_on"]); !contains(deps, "wait-postgres") && !transitivelyDependsOn(w, step, "wait-postgres") {
+			t.Errorf("ci.yaml/%s must (transitively) wait for wait-postgres", step)
+		}
+	}
+	for _, svc := range w.services() {
+		if svc["name"] == "postgres" {
+			env, _ := svc["environment"].(map[string]any)
+			if env["POSTGRES_HOST_AUTH_METHOD"] != "trust" {
+				t.Error("the disposable postgres service must use trust authentication")
+			}
+			if img, _ := svc["image"].(string); !strings.HasPrefix(img, "postgres:17") {
+				t.Errorf("postgres service image %q must be PostgreSQL 17", img)
+			}
 		}
 	}
 }

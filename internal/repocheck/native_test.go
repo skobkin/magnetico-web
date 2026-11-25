@@ -75,7 +75,6 @@ type distOpts struct {
 	amd64, arm64     string // fixture names
 	omitLicence      string
 	omitArm64Archive bool
-	omitChangelog    bool // no dist/CHANGELOG.md (GoReleaser writes it for a tag build)
 	tamper           bool
 }
 
@@ -131,11 +130,6 @@ func makeDist(t *testing.T, version string, o distOpts) string {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "checksums.txt"), []byte(sums.String()), 0o644); err != nil {
 		t.Fatal(err)
-	}
-	if !o.omitChangelog {
-		if err := os.WriteFile(filepath.Join(dir, "CHANGELOG.md"), []byte("## Features\n* a change\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
 	}
 	if o.tamper {
 		// A perfectly readable archive whose recorded digest is wrong: only the
@@ -219,19 +213,6 @@ func TestNativeSmokeFailsForABuildWithTags(t *testing.T) {
 func TestNativeSmokeFailsWhenTheUPlotScriptIsNotEmbedded(t *testing.T) {
 	if out, code := nativeSmoke(t, makeDist(t, "0.8.0-rc.0", distOpts{amd64: "amd64-nouplot"}), "0.8.0-rc.0"); code == 0 || !strings.Contains(out, "uPlot") {
 		t.Fatalf("an executable without the uPlot script must fail (exit %d):\n%s", code, out)
-	}
-}
-
-// A tag build must have produced the release notes that ci/publishnative publishes as the
-// body; without them the release workflow must stop BEFORE anything is published (the
-// native smoke test is a dependency of both publication steps). A snapshot has none.
-func TestNativeSmokeFailsWhenATagBuildHasNoChangelog(t *testing.T) {
-	out, code := nativeSmoke(t, makeDist(t, "0.8.0-rc.0", distOpts{omitChangelog: true}), "0.8.0-rc.0")
-	if code == 0 || !strings.Contains(out, "CHANGELOG.md") {
-		t.Fatalf("a tag build without CHANGELOG.md must fail (exit %d):\n%s", code, out)
-	}
-	if out, code := nativeSmoke(t, makeDist(t, "0.8.0-rc.0", distOpts{omitChangelog: true}), ""); code != 0 {
-		t.Fatalf("a snapshot build has no changelog and must still pass (exit %d):\n%s", code, out)
 	}
 }
 

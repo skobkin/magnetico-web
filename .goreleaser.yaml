@@ -3,13 +3,12 @@ version: 2
 
 project_name: magnetico-web
 
-# Native artifacts go to Forgejo releases only. The release gate builds them ONCE with
-# `goreleaser release --clean --skip=publish` and qualifies them; `release-forgejo`
-# uploads those very files (ci/publishnative; GoReleaser OSS has no `publish` command
-# and would rebuild). verify-native downloads the published archives and hashes them
-# against the qualified checksums; see .woodpecker/release.yaml. The `release:` block
-# below therefore only documents the metadata ci/publishnative reproduces (release
-# name = tag, body = the generated changelog, prerelease for MAJOR.MINOR.PATCH-rc.N).
+# Native artifacts go to Forgejo releases only, built and published by one conventional
+# `goreleaser release --clean` in the release workflow (.woodpecker/release.yaml); the
+# verification workflow builds the same archives as a snapshot without publishing
+# (`--snapshot --skip=publish`) and smoke-tests them (ci/native-smoke.sh). The release name
+# is the tag, the body the generated changelog, and a tag with a prerelease part
+# (MAJOR.MINOR.PATCH-rc.N) is published as a prerelease.
 builds:
   - id: magnetico
     main: ./cmd/magnetico

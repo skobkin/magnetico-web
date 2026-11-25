@@ -9,7 +9,7 @@ documented, not re-run there (the heavy ones are manual by design).
 | Class | What | Runs | Gate |
 |---|---|---|---|
 | **Regular CI** | unit tests; PostgreSQL integration tests; real-binary end-to-end tests; short regression, security-regression and fault-injection tests; fuzz **seed corpora** | every pull request, push to `master` / the 0.8.0 branch, tag and manual run (`.woodpecker/ci.yaml`) | blocks merge and release |
-| **Release CI** | everything above, plus the race-enabled suite, the container smoke test, dependency and image vulnerability checks, the native archive smoke test | tags and manual pre-flight runs (`.woodpecker/release.yaml`) | blocks publication |
+| **Pull-request CI** | everything above, plus the race-enabled suite, `govulncheck`, the native archive snapshot and its smoke test, the front-end self-tests | every pull request and push to a verified branch (`.woodpecker/ci.yaml`) | blocks the merge and, for a tag, the release |
 | **Explicit manual only** | large synthetic dataset generation; load, capacity and memory-floor benchmarks; long soak and stress tests; extended fuzzing; the diagnostic build; live-DHT acceptance | by an operator, on a disposable database or host | never in CI |
 
 Security regression tests and ordinary PostgreSQL integration tests are **not** opt-in: they are in the regular class. A
@@ -69,9 +69,10 @@ GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...     
 GOTOOLCHAIN=go1.27.4 go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags loadtest,diag ./...      (run in Task 08: none found)
 ```
 
-The container smoke test, the image scan, the native archive smoke test and the publication steps are described in
-[`release-engineering.md`](release-engineering.md); their scripts are `ci/image-smoke.sh`, `ci/native-smoke.sh`,
-`ci/promote-image.sh`, `ci/verify-published.sh` and `ci/verify-native.sh`, each tested in `internal/repocheck`.
+The native archive smoke test runs in `ci.yaml` (`ci/native-smoke.sh`, tested in `internal/repocheck`). The container
+smoke test (`ci/image-smoke.sh`) and the image scan need a privileged Docker daemon and are run locally before a tag;
+the publication steps are `release.yaml` (GoReleaser and the buildx plugin). See
+[`release-engineering.md`](release-engineering.md).
 
 ## Explicit manual execution only
 

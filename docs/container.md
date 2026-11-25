@@ -4,7 +4,7 @@ One universal image holds the single `magnetico` executable and supports every s
 `migrate`, `dev`). You choose the service by the command you pass.
 
 > **Status.** The image and its publication are **configured** (`Dockerfile`, `.woodpecker/release.yaml`) and were
-> verified locally (build, smoke test, vulnerability scan, promotion rehearsal), but **no image has been published yet**
+> verified locally (build, smoke test, vulnerability scan), but **no image has been published yet**
 > and the pipeline has not run on Woodpecker. See [`release-engineering.md`](release-engineering.md) for what is verified
 > and what is not. The examples below use `0.8.0` as a placeholder for the release you pin.
 

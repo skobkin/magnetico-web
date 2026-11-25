@@ -1,10 +1,13 @@
-# Verification workflow: lint, vet, build, the whole test suite against a disposable
-# PostgreSQL 17, OpenAPI consistency, GoReleaser and Dockerfile checks.
+# Verification workflow: every gate of the project runs here, for every pull request: format,
+# lint, vet, build, the whole test suite and the race-enabled suite against a disposable
+# PostgreSQL 17, govulncheck, OpenAPI consistency, the Dockerfile lint, a snapshot build of
+# the native archives with their smoke test, and the frontend self-tests.
 #
-# It runs for pull requests, pushes to the default branch and to the active 0.8.0
-# development branch, release tags and manual runs. It holds NO secrets, uses NO
-# privileged execution and never touches a registry: pull-request code runs here.
-# Publication lives in release.yaml, which depends on this workflow.
+# It holds NO secrets, uses NO privileged execution and never touches a registry:
+# pull-request code runs here. Publication lives in release.yaml (tags only), which
+# depends on this workflow. What cannot run here safely (building and running the
+# container image needs a privileged Docker daemon) is listed in
+# docs/release-engineering.md.
 #
 # Events:
 #   push          master and the 0.8.0 branch only (remove the branch after the 0.8.0
@@ -14,8 +17,8 @@
 #                 merge-target step). While a pull request from the 0.8.0 branch is
 #                 open that branch has a push and a pull-request pipeline: the one
 #                 accepted duplication.
-#   tag           release tags only (MAJOR.MINOR.PATCH[-rc.N]).
-#   manual        on demand (also the base of a manual release pre-flight).
+#   tag           release tags only (MAJOR.MINOR.PATCH[-rc.N]): release.yaml waits for it.
+#   manual        on demand.
 when:
   - event: push
     branch:
@@ -133,11 +136,44 @@ steps:
         }
       - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/test.json
 
+  # The same suite under the race detector. It runs after (never beside) the ordinary
+  # suite: both are timing-sensitive and -p 3 is verified for a suite that has the agent
+  # to itself. Failures are never rerun.
+  - name: race
+    image: golang:1.27.4-trixie
+    depends_on: [test]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
+    commands:
+      - |
+        go test -race -p 3 -count=1 -json ./... > /tmp/race.json || {
+          echo "go test -race failed; failures:"
+          go run ./ci/skipcensus --failures < /tmp/race.json
+          exit 1
+        }
+      - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/race.json
+
+  # Known vulnerabilities of the code and its dependencies (the pinned checker is run by
+  # the toolchain of the step: a checker built by an older Go cannot analyse this code).
+  - name: govulncheck
+    image: golang:1.27.4-alpine
+    depends_on: [race]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      GOTOOLCHAIN: local
+    commands:
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags loadtest,diag ./...
+
   # The OpenAPI documents are validated by the existing tests (the document itself,
   # and the real binary's responses against it); named separately for visibility.
   - name: openapi
     image: golang:1.27.4-alpine
-    depends_on: [test]
+    depends_on: [race]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -147,18 +183,27 @@ steps:
       - go test -count=1 ./internal/web/apidocs/...
       - go test -count=1 -run OpenAPI ./internal/e2e/cli
 
-  # A snapshot build of the native archives (no tag, no upload, no secrets). The
-  # GoReleaser image ships Go 1.27.3 with GOTOOLCHAIN=local, which would silently
-  # ignore go.mod's toolchain line: the floor is enforced explicitly.
-  - name: release-dry-run
+  # A snapshot build of the native archives (no tag, no upload, no secrets) and its smoke
+  # test: checksums, licences, the embedded assets, the build settings. The GoReleaser image
+  # ships Go 1.27.3 with GOTOOLCHAIN=local, which would silently ignore go.mod's toolchain
+  # line: the floor is enforced explicitly.
+  - name: native-snapshot
     image: goreleaser/goreleaser:v2.20.1
-    depends_on: [test]
+    depends_on: [race]
     environment:
       GOTOOLCHAIN: go1.27.4+auto
     commands:
       - goreleaser check
       - goreleaser release --snapshot --clean --skip=publish
       - (cd dist && sha256sum -c checksums.txt)
+
+  - name: native-smoke
+    image: golang:1.27.4-alpine
+    depends_on: [native-snapshot]
+    environment:
+      GOFLAGS: -buildvcs=false
+    commands:
+      - sh ci/native-smoke.sh dist
 
   # The self-tests of the administrator charts' JavaScript (internal/web/ui/jstest): plain
   # Node, no package and no build; Node is used here only and never in a build of the
@@ -181,7 +226,7 @@ steps:
   # The workflow files' own security invariants and the CI tools' tests.
   - name: workflow-invariants
     image: golang:1.27.4-alpine
-    depends_on: [test]
+    depends_on: [race]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
