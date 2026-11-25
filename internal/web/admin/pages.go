@@ -171,10 +171,19 @@ func buildCrawlersPage(c chrome, page stats.CrawlerPage, f stats.Freshness) craw
 		return pg
 	}
 	for _, c := range page.Items {
-		v := crawlerView{ID: c.ID, Name: c.Name, Created: ts(c.CreatedAt), Rotated: optTS(c.TokenRotatedAt), Disabled: optTS(c.DisabledAt),
-			State: "enabled", StateClass: "ok"}
-		if !c.Enabled {
-			v.State, v.StateClass = "disabled", "warning"
+		v := crawlerView{ID: c.ID, Name: c.Name, Created: ts(c.CreatedAt), Rotated: optTS(c.TokenRotatedAt), Disabled: optTS(c.DisabledAt)}
+		// Four different things: disabled, inactive, never connected and unknown.
+		switch c.ActivityClass(page.StatsAvailable) {
+		case stats.ActivityActive:
+			v.State, v.StateClass = "active", "ok"
+		case stats.ActivityInactive:
+			v.State, v.StateClass = "inactive", "warning"
+		case stats.ActivityNever:
+			v.State, v.StateClass = "never connected", "pending"
+		case stats.ActivityDisabled:
+			v.State, v.StateClass = "disabled", "error"
+		default:
+			v.State, v.StateClass = "activity unavailable", "pending"
 		}
 		if a := c.Activity; a != nil {
 			v.Connected = true

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -225,5 +226,141 @@ func TestCrawlersPageShowsWhenItWasReadAndWarnsWhenItIsCached(t *testing.T) {
 	stale := render(true)
 	if !strings.Contains(stale, "last known state from 2026-11-25 10:00:00 UTC") {
 		t.Error("a cached page after a failed refresh must say so, with the time it was read")
+	}
+}
+
+func overviewForPage() stats.Overview {
+	var o stats.Overview
+	o.Schema = stats.StateUp
+	o.Crawlers = stats.CrawlerCounts{Registered: stats.Measured[int64]{Value: 7, Valid: true}, Enabled: stats.Measured[int64]{Value: 5, Valid: true}, Active: stats.Measured[int64]{Value: 3, Valid: true}}
+	o.Users = stats.Users{Total: stats.Measured[int64]{Value: 12, Valid: true}, Active: stats.Measured[int64]{Value: 9, Valid: true},
+		Disabled: stats.Measured[int64]{Value: 3, Valid: true}, Admins: stats.Measured[int64]{Value: 2, Valid: true}}
+	rate := func(name string, v float64) {
+		o.Rates.Windows[0].Values[opstatsIndex(name)] = stats.Measured[float64]{Value: v, Valid: true}
+	}
+	o.Rates.Windows[0].Seconds, o.Rates.Windows[0].Unit, o.Rates.Windows[0].Included = 60, "per second", 1
+	rate("submit_requests", 1.25)
+	rate("exists_requests", 2.5)
+	rate("torrents_created", 0.75)
+	rate("auth_db_lookups", 0.5)
+	rate("auth_cache_hits", 90)
+	rate("auth_cache_misses", 10)
+	rate("auth_busy", 0.125)
+	rate("auth_storage_failures", 0.0625)
+	return o
+}
+
+func opstatsIndex(name string) int {
+	for i, n := range stats.MetricNames {
+		if n == name {
+			return i
+		}
+	}
+	panic("no metric " + name)
+}
+
+func renderOverview(t *testing.T, o stats.Overview) string {
+	t.Helper()
+	srv := newServer(t)
+	rec := httptest.NewRecorder()
+	pg := buildOverview(chrome{Tab: "overview", IsAdmin: true, Tabs: tabs("overview")}, o, stats.Freshness{FetchedAt: time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)})
+	if err := srv.Renderer().Render(rec, http.StatusOK, "admin_overview", pg); err != nil {
+		t.Fatal(err)
+	}
+	return rec.Body.String()
+}
+
+// TestOverviewShowsTheAgreedCrawlerRateAndAuthenticationFigures (Task 09A): the
+// approved dashboard has registered, enabled and recently active crawlers, the
+// submit and existence request rates, newly created torrents, the authentication
+// lookups, cache efficiency, busy refusals and storage failures, and the disabled
+// user count.
+func TestOverviewShowsTheAgreedCrawlerRateAndAuthenticationFigures(t *testing.T) {
+	body := renderOverview(t, overviewForPage())
+	for _, want := range []string{
+		"Registered crawlers", ">7<", "Crawlers enabled", ">5<", "Recently active", ">3<",
+		"Submit requests", "1.25", "Existence requests", "2.5", "New torrents", "0.75",
+		"Authentication database lookups", "0.5", "90 %", "Authentication busy refusals", "0.125", "Authentication storage failures", "0.0625",
+		"Users disabled", ">3<",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the overview page lacks %q", want)
+		}
+	}
+	if !strings.Contains(body, "15 minutes") {
+		t.Error("the page must state the definition of recently active (15 minutes)")
+	}
+}
+
+func TestUnavailableCrawlerCountsAreDashesNotZero(t *testing.T) {
+	o := overviewForPage()
+	o.Crawlers = stats.CrawlerCounts{}
+	body := renderOverview(t, o)
+	i := strings.Index(body, "Registered crawlers")
+	if i < 0 || !strings.Contains(body[i:i+200], "—") {
+		t.Fatalf("an unavailable count must read as a dash:\n%s", body[max(i, 0):min(i+200, len(body))])
+	}
+}
+
+func TestCrawlersPageDistinguishesDisabledInactiveNeverConnectedAndUnavailable(t *testing.T) {
+	srv := newServer(t)
+	read := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	mk := func(name string, enabled bool, a *stats.Activity) stats.CrawlerRow {
+		return stats.CrawlerRow{ID: "11111111-1111-4111-8111-111111111111", Name: name, Enabled: enabled, CreatedAt: read, Activity: a}
+	}
+	act := func(ago time.Duration) *stats.Activity {
+		return &stats.Activity{FirstSeen: read.Add(-48 * time.Hour), LastSeen: read.Add(-ago), SeenAgo: ago, ExistsHashes: 4242, Received: 7}
+	}
+	page := stats.CrawlerPage{Ingest: stats.IngestStatus{State: stats.IngestOK}, StatsAvailable: true, Items: []stats.CrawlerRow{
+		mk("on", true, act(time.Minute)), mk("idle", true, act(3*time.Hour)), mk("new", true, nil), mk("off", false, act(time.Minute)),
+	}}
+	render := func(p stats.CrawlerPage) string {
+		rec := httptest.NewRecorder()
+		if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, p, stats.Freshness{FetchedAt: read})); err != nil {
+			t.Fatal(err)
+		}
+		return rec.Body.String()
+	}
+	body := render(page)
+	for _, want := range []string{">active<", ">inactive<", ">never connected<", ">disabled<", "First seen", "2026-11-23 10:00", "Existence hashes", "4,242"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the crawlers page lacks %q", want)
+		}
+	}
+	page.StatsAvailable = false
+	page.Items = page.Items[:3]
+	for i := range page.Items {
+		page.Items[i].Activity = nil
+	}
+	body = render(page)
+	if !strings.Contains(body, ">activity unavailable<") || strings.Contains(body, ">never connected<") {
+		t.Error("with the statistics unreadable an enabled crawler's activity is unavailable, not 'never connected'")
+	}
+}
+
+func TestSeriesJSONCarriesNotesAndFreshness(t *testing.T) {
+	b := []time.Time{time.Date(2026, 11, 24, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 24, 1, 0, 0, 0, time.UTC)}
+	s := stats.Series{Query: stats.Query{Chart: "queue", Granularity: "day", Period: "2026-11-24"}, Buckets: b, Partial: []bool{false, true},
+		Notes: [][]string{nil, {stats.NoteApproximateCounts}}}
+	j := buildSeriesJSON(s, stats.Freshness{FetchedAt: time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC), Stale: true})
+	raw, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back struct {
+		Notes     [][]string `json:"notes"`
+		Freshness struct {
+			FetchedAt string `json:"fetched_at"`
+			Stale     bool   `json:"stale"`
+		} `json:"freshness"`
+	}
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if len(back.Notes) != 2 || back.Notes[0] != nil || len(back.Notes[1]) != 1 || back.Notes[1][0] != "approximate_counts" {
+		t.Fatalf("notes = %v in %s", back.Notes, raw)
+	}
+	if !back.Freshness.Stale || back.Freshness.FetchedAt != "2026-11-25T10:00:00Z" {
+		t.Fatalf("freshness = %+v", back.Freshness)
 	}
 }

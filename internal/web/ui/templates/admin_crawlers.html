@@ -10,14 +10,14 @@
 <section class="section-card"><div class="section-card-body">
 {{if .Items}}
 <div class="table-wrap"><table class="data-table">
-<thead><tr><th>Name</th><th>State</th><th>Id</th><th>Registered</th><th>Token rotated</th><th>Last seen</th><th>Last address</th><th>Last submit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Duplicates</th><th class="num">Request bytes</th><th class="num">Existence requests</th><th class="num">Rejected requests</th></tr></thead>
+<thead><tr><th>Name</th><th>State</th><th>Id</th><th>Registered</th><th>Token rotated</th><th>First seen</th><th>Last seen</th><th>Last address</th><th>Last submit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Duplicates</th><th class="num">Request bytes</th><th class="num">Existence requests</th><th class="num">Existence hashes</th><th class="num">Rejected requests</th></tr></thead>
 <tbody>{{range .Items}}<tr><td>{{.Name}}</td><td><span class="status {{.StateClass}}">{{.State}}</span>{{if .Disabled}}{{if ne .Disabled "—"}} <span class="subtext">since {{.Disabled}}</span>{{end}}{{end}}</td><td><code>{{.ID}}</code></td><td>{{.Created}}</td><td>{{.Rotated}}</td>
-{{if .Connected}}<td>{{.LastSeen}}</td><td>{{.LastIP}}</td><td>{{.LastSubmit}}</td><td class="num">{{.Received}}</td><td class="num">{{.Enqueued}}</td><td class="num">{{.Duplicate}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.ExistsRequests}}</td><td class="num">{{.Rejected}}</td>
-{{else}}<td colspan="9" class="subtext">never connected</td>{{end}}</tr>{{end}}</tbody>
+{{if .Connected}}<td>{{.FirstSeen}}</td><td>{{.LastSeen}}</td><td>{{.LastIP}}</td><td>{{.LastSubmit}}</td><td class="num">{{.Received}}</td><td class="num">{{.Enqueued}}</td><td class="num">{{.Duplicate}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.ExistsRequests}}</td><td class="num">{{.ExistsHashes}}</td><td class="num">{{.Rejected}}</td>
+{{else}}<td colspan="11" class="subtext">{{if eq .State "disabled"}}no activity recorded{{else if eq .State "activity unavailable"}}activity unavailable{{else}}never connected{{end}}</td>{{end}}</tr>{{end}}</tbody>
 </table></div>
 {{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Next page</a></p>{{end}}
 {{else}}<p class="subtext">No crawler is registered. Add one with <code>magnetico ingest crawler add &lt;name&gt;</code>.</p>{{end}}
 </div></section>
-<p class="subtext">Read at {{.FetchedAt}} · credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
+<p class="subtext">Active: enabled and an authenticated request seen within the last 15 minutes; inactive: connected before, not recently; never connected: no request ever recorded; disabled: refused with 401; activity unavailable: the statistics cannot be read. Read at {{.FetchedAt}} · credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
 {{end}}
 {{end}}

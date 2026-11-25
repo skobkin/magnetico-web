@@ -8,7 +8,7 @@ The `ingest` service counts what it does (requests, records, bytes, outcomes, ex
 
 | Page | Shows |
 |---|---|
-| Overview (`/admin`) | ingest instances, rolling rates, queue and quota, storage, the charts (throughput, outcomes, queue, traffic and efficiency, storage) by day, month and year |
+| Overview (`/admin`) | ingest instances; registered, enabled and recently active crawlers; rolling rates (records, new torrents, submit and existence requests, authentication lookups, cache hit rate, busy refusals and storage failures); queue and quota; storage; account counts including disabled users; the charts (throughput as grouped bars, outcomes as stacked bars, queue, traffic and efficiency, storage) by day, month and year |
 | Crawlers | every registered crawler, including those that never connected and disabled ones, with last seen, last address, last submit and its totals |
 | Quarantine | what the ingest queue set aside as permanently invalid: reason, attempts, size, age (never the payload or the hash) |
 | Users, Invitations, Trackers | read-only listings; no password, no invitation code |
@@ -48,6 +48,10 @@ The queue, the storage figures and the instances have separate ages: a failed qu
 **Approximate counts.** The indexed-torrent count is the planner's estimate and lags after bulk imports until autovacuum or `ANALYZE`; it is always labelled approximate. If counting a very large queue exceeds its budget, the queue row count falls back to an estimate and the oldest age to the lowest-id row, both flagged; queue **bytes** are never estimated, and **quota use** (exact, kept by the database) stays available.
 
 **Quota.** Quota use is the queue plus the quarantine, because quarantined payloads count toward the queue limit until an operator acts; a full quarantine is a reason for `queue full` refusals.
+
+**Crawler activity.** *Recently active* means: the crawler is enabled and the statistics last saw an authenticated request from it within the last **15 minutes**. The statistics are persisted once a minute, so the figure can lag by about that much, and the cached page adds up to ten seconds. The Crawlers page tells four situations apart: **active**, **inactive** (connected before, not recently), **never connected** (no request recorded) and **disabled** (refused with 401, whatever its history); when the statistics cannot be read the activity of an enabled crawler is **activity unavailable**, never "never connected". The registry counts are capped at 10,000 (shown as "10,000+") so their cost does not depend on the registered count.
+
+**Charts.** Every chart axis, tick and legend time is UTC whatever the browser's time zone is. The throughput chart draws grouped bars and opens with *enqueued* and *settled* visible (they show a backlog growing); *received* and *acknowledged* are one click away in the legend. The outcome chart stacks the mutually exclusive settlements. Under each chart a caption says when the data was read, and that it is the last known state when a refresh failed. Buckets that rest on estimated queue counts, on an incomplete storage breakdown (a measure was unavailable: no stack is drawn), on a mismatch of the storage categories, or on a reconciliation that could not run are listed under the chart and marked in its text. Quota use in history is the utilisation recorded with the quota in force when each sample was taken, so changing the configured quota never rewrites old buckets.
 
 **Several `ingest` instances.** Event counts are summed. Queue, quota and storage figures describe the one database and are shown once, never summed. The dashboard lists any instance left out of a rate (not fresh, or too young for the window).
 

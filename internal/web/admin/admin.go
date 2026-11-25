@@ -110,14 +110,12 @@ type instanceView struct {
 	Received, Acknowledged, Settled string
 }
 
+// rateRow is one rolling window. V holds the formatted rate of every metric by
+// its name (stats.MetricNames) plus "auth_hit_rate", the cache efficiency of
+// the same window.
 type rateRow struct {
 	Window, Unit   string
-	Received       string
-	Enqueued       string
-	Acknowledged   string
-	Settled        string
-	ExistsHashes   string
-	BodyBytes      string
+	V              map[string]string
 	Included       int
 	ExcludedNotice []string
 }
@@ -153,6 +151,10 @@ type overviewPage struct {
 	HourReceived, HourEnqueued           string
 	HourAcknowledged, HourSettled        string
 	UsersTotal, UsersActive, UsersAdmins string
+	UsersDisabled                        string
+	CrawlersRegistered                   string
+	CrawlersEnabled, CrawlersActive      string
+	ActiveWindow                         string
 }
 
 func (h *Handlers) overview(w http.ResponseWriter, r *http.Request) {
@@ -210,9 +212,15 @@ func buildOverview(c chrome, o stats.Overview, f stats.Freshness) overviewPage {
 	}
 	labels := []string{"last minute", "last 15 minutes", "last hour"}
 	for i, w := range o.Rates.Windows {
-		row := rateRow{Window: labels[i], Unit: w.Unit, Included: w.Included,
-			Received: fmtFloat(w.Values[0], ""), Enqueued: fmtFloat(w.Values[1], ""), Acknowledged: fmtFloat(w.Values[2], ""),
-			Settled: fmtFloat(w.Values[3], ""), ExistsHashes: fmtFloat(w.Values[4], ""), BodyBytes: bytesRate(w.Values[5])}
+		row := rateRow{Window: labels[i], Unit: w.Unit, Included: w.Included, V: map[string]string{}}
+		for k, name := range stats.MetricNames {
+			if name == "bytes_body" {
+				row.V[name] = bytesRate(w.Values[k])
+			} else {
+				row.V[name] = fmtFloat(w.Values[k], "")
+			}
+		}
+		row.V["auth_hit_rate"] = authHitRate(w)
 		for _, e := range w.Excluded {
 			row.ExcludedNotice = append(row.ExcludedNotice, shortID(e.InstanceID)+": "+e.Reason)
 		}
@@ -246,6 +254,9 @@ func buildOverview(c chrome, o stats.Overview, f stats.Freshness) overviewPage {
 		pg.HourAcknowledged, pg.HourSettled = groupDigits(o.ThisHour[2]), groupDigits(o.ThisHour[3])
 	}
 	pg.UsersTotal, pg.UsersActive, pg.UsersAdmins = fmtInt(o.Users.Total), fmtInt(o.Users.Active), fmtInt(o.Users.Admins)
+	pg.UsersDisabled = fmtInt(o.Users.Disabled)
+	pg.CrawlersRegistered, pg.CrawlersEnabled, pg.CrawlersActive = fmtCount(o.Crawlers.Registered, o.Crawlers.Capped), fmtCount(o.Crawlers.Enabled, o.Crawlers.Capped), fmtCount(o.Crawlers.Active, o.Crawlers.Capped)
+	pg.ActiveWindow = fmtDuration(stats.ActiveWindow)
 	return pg
 }
 
@@ -341,10 +352,21 @@ type overviewJSON struct {
 		PerTorrent measured[float64] `json:"bytes_per_torrent"`
 	} `json:"storage"`
 	Users struct {
-		Total  measured[int64] `json:"total"`
-		Active measured[int64] `json:"active"`
-		Admins measured[int64] `json:"admins"`
+		Total    measured[int64] `json:"total"`
+		Active   measured[int64] `json:"active"`
+		Disabled measured[int64] `json:"disabled"`
+		Admins   measured[int64] `json:"admins"`
 	} `json:"users"`
+	// Crawlers are the registry counts; "recently active" means the statistics
+	// saw an authenticated request within ActiveWindowSeconds. Capped: the counts
+	// are lower bounds.
+	Crawlers struct {
+		Registered          measured[int64] `json:"registered"`
+		Enabled             measured[int64] `json:"enabled"`
+		Active              measured[int64] `json:"recently_active"`
+		Capped              bool            `json:"capped"`
+		ActiveWindowSeconds int             `json:"active_window_seconds"`
+	} `json:"crawlers"`
 }
 
 func buildOverviewJSON(o stats.Overview, f stats.Freshness) overviewJSON {
@@ -382,6 +404,9 @@ func buildOverviewJSON(o stats.Overview, f stats.Freshness) overviewJSON {
 	j.Storage.State, j.Storage.Torrents, j.Storage.Blobs, j.Storage.Indexes, j.Storage.Other = s.State.String(), mj(s.Torrents), mj(s.Blobs), mj(s.Indexes), mj(s.Other)
 	j.Storage.Magneticod, j.Storage.Ingest, j.Storage.Database, j.Storage.Indexed, j.Storage.PerTorrent = mj(s.Magneticod), mj(s.Ingest), mj(s.Database), mj(s.IndexedCount), mj(s.BytesPerItem)
 	j.Users.Total, j.Users.Active, j.Users.Admins = mj(o.Users.Total), mj(o.Users.Active), mj(o.Users.Admins)
+	j.Users.Disabled = mj(o.Users.Disabled)
+	j.Crawlers.Registered, j.Crawlers.Enabled, j.Crawlers.Active, j.Crawlers.Capped = mj(o.Crawlers.Registered), mj(o.Crawlers.Enabled), mj(o.Crawlers.Active), o.Crawlers.Capped
+	j.Crawlers.ActiveWindowSeconds = int(stats.ActiveWindow / time.Second)
 	return j
 }
 
@@ -427,7 +452,11 @@ type seriesJSON struct {
 	Next        string   `json:"next,omitempty"`
 	Buckets     []string `json:"buckets"`
 	Partial     []bool   `json:"partial"`
-	Lines       []struct {
+	// Notes lists, per bucket, what a reader must know about its values
+	// (approximate_counts, incomplete_breakdown, reconciliation_mismatch,
+	// reconciliation_not_evaluated); an entry is null when there is nothing to say.
+	Notes [][]string `json:"notes"`
+	Lines []struct {
 		Key    string     `json:"key"`
 		Label  string     `json:"label"`
 		Unit   string     `json:"unit"`
@@ -479,6 +508,11 @@ func (h *Handlers) seriesJSON(w http.ResponseWriter, r *http.Request) {
 		h.unavailableJSON(w, r, err)
 		return
 	}
+	writeJSON(w, buildSeriesJSON(s, f))
+}
+
+// buildSeriesJSON is the answer of the series endpoint.
+func buildSeriesJSON(s stats.Series, f stats.Freshness) seriesJSON {
 	var out seriesJSON
 	out.Chart, out.Granularity, out.Period, out.Previous, out.Next = s.Query.Chart, s.Query.Granularity, s.Query.Period, s.Previous, s.Next
 	for _, b := range s.Buckets {
@@ -495,6 +529,7 @@ func (h *Handlers) seriesJSON(w http.ResponseWriter, r *http.Request) {
 			Values []*float64 `json:"values"`
 		}{l.Key, l.Label, l.Unit, l.Group, l.Stack, l.Values})
 	}
+	out.Notes = s.Notes
 	out.Freshness = freshJSON(f)
-	writeJSON(w, out)
+	return out
 }

@@ -128,3 +128,25 @@ func stateClass(s stats.State) string {
 	}
 	return "error"
 }
+
+// fmtCount formats a registry count; a capped count is a lower bound ("10,000+").
+func fmtCount(m stats.Measured[int64], capped bool) string {
+	if !m.Valid {
+		return dash
+	}
+	if capped {
+		return groupDigits(m.Value) + "+"
+	}
+	return groupDigits(m.Value)
+}
+
+// authHitRate is the authentication cache efficiency of one window: hits over
+// hits plus misses, both taken from the same window (a ratio of sums), or a
+// dash when the window saw no credential.
+func authHitRate(w stats.RateWindow) string {
+	hits, miss := w.Values[stats.MetricIndex("auth_cache_hits")], w.Values[stats.MetricIndex("auth_cache_misses")]
+	if !hits.Valid || !miss.Valid || hits.Value+miss.Value <= 0 {
+		return dash
+	}
+	return fmt.Sprintf("%.0f %%", 100*hits.Value/(hits.Value+miss.Value))
+}

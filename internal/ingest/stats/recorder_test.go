@@ -706,3 +706,40 @@ func TestAClockThatStaysBehindHealsThePinnedHour(t *testing.T) {
 		t.Fatalf("pinned hour holds %d events, want the excursion event plus the four within the grace period", byHour[pinned])
 	}
 }
+
+// TestWindowsCarryTheRequestTorrentAndAuthenticationMetrics (Task 09A): the
+// dashboard's rolling rates include submit and existence requests, newly
+// created torrents and the authentication figures, each from its own counter.
+func TestWindowsCarryTheRequestTorrentAndAuthenticationMetrics(t *testing.T) {
+	c := newClock(time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC))
+	r := New(c.Now)
+	c.Advance(2 * time.Second)
+	r.SubmitAuthenticated(cidA)
+	r.ExistsRequest(cidA)
+	r.TorrentCreated()
+	r.AuthHit()
+	r.AuthMiss()
+	r.AuthDBLookup()
+	r.AuthBusy()
+	r.AuthStorageFailure()
+	c.Advance(time.Second)
+	ws := r.Windows()
+	for _, name := range []string{"submit_requests", "exists_requests", "torrents_created", "auth_cache_hits", "auth_cache_misses", "auth_db_lookups", "auth_busy", "auth_storage_failures"} {
+		i := opstats.WindowMetricIndex(name)
+		if i < 0 {
+			t.Fatalf("no window metric %q", name)
+		}
+		if ws.Counts[0][i] != 1 || ws.Counts[2][i] != 1 {
+			t.Errorf("%s: 60 s window %d, 60 min window %d, want 1 in both", name, ws.Counts[0][i], ws.Counts[2][i])
+		}
+	}
+	if opstats.NumWindowMetrics != len(opstats.WindowMetricNames) || numWindowMetrics != opstats.NumWindowMetrics {
+		t.Fatalf("the metric lists disagree: %d / %d / %d", opstats.NumWindowMetrics, len(opstats.WindowMetricNames), numWindowMetrics)
+	}
+}
+
+// The window metrics the tests above refer to by name.
+var (
+	wmEnqueued     = opstats.WindowMetricIndex("records_enqueued")
+	wmAcknowledged = opstats.WindowMetricIndex("records_acknowledged")
+)

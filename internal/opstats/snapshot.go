@@ -17,12 +17,52 @@ var SnapshotTotalCounters = [NumSnapshotTotals]Counter{
 }
 
 // NumWindowMetrics is the number of metrics published per rolling window.
-const NumWindowMetrics = 6
+const NumWindowMetrics = 14
+
+// WindowMetric is one rolling-rate metric: the snapshot column stem and the
+// counters whose events it sums. This is the one definition; the ingest ring,
+// the heartbeat, the schema and the dashboard are all derived from it.
+type WindowMetric struct {
+	Name     string
+	Counters []Counter
+}
+
+// WindowMetrics are the rolling-rate metrics, in the order of
+// Snapshot.WindowCounts and of the dashboard's rate table.
+var WindowMetrics = [NumWindowMetrics]WindowMetric{
+	{"records_received", []Counter{CRecordsReceived}},
+	{"records_enqueued", []Counter{CRecordsEnqueued}},
+	{"records_acknowledged", []Counter{CRecordsAcknowledged}},
+	{"settled", []Counter{CSettledStoredNew, CSettledStoredExisting, CSettledQuarantined}},
+	{"torrents_created", []Counter{CTorrentsCreated}},
+	{"submit_requests", []Counter{CSubmitRequests}},
+	{"exists_requests", []Counter{CExistsRequests}},
+	{"exists_hashes", []Counter{CExistsHashes}},
+	{"bytes_body", []Counter{CBytesBody}},
+	{"auth_cache_hits", []Counter{CAuthCacheHits}},
+	{"auth_cache_misses", []Counter{CAuthCacheMisses}},
+	{"auth_db_lookups", []Counter{CAuthDBLookups}},
+	{"auth_busy", []Counter{CAuthBusy}},
+	{"auth_storage_failures", []Counter{CAuthStorageFailures}},
+}
 
 // WindowMetricNames are the snapshot column stems of the window metrics, in
-// the order of Snapshot.WindowCounts.
-var WindowMetricNames = [NumWindowMetrics]string{
-	"records_received", "records_enqueued", "records_acknowledged", "settled", "exists_hashes", "bytes_body",
+// the order of WindowMetrics.
+var WindowMetricNames = func() (n [NumWindowMetrics]string) {
+	for i, m := range WindowMetrics {
+		n[i] = m.Name
+	}
+	return
+}()
+
+// WindowMetricIndex is the position of the named metric, or -1.
+func WindowMetricIndex(name string) int {
+	for i, m := range WindowMetrics {
+		if m.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // Snapshot is the heartbeat state of one ingest instance: cumulative totals

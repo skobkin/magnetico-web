@@ -156,10 +156,17 @@ func (r *Reader) shared(ctx context.Context) (QueueView, StorageView, error) {
 }
 
 func (r *Reader) thisHour(ctx context.Context) (t time.Time, v [metricCount]int64, err error) {
-	var sel = `bucket_start, records_received, records_enqueued, records_acknowledged,
-settled_stored_new + settled_stored_existing + settled_quarantined, exists_hashes, bytes_body`
-	err = r.db.QueryRow(ctx, `SELECT `+sel+` FROM magnetico_stats.agg_hour WHERE bucket_start = date_trunc('hour', now(), 'UTC')`).
-		Scan(&t, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5])
+	sel := []string{"bucket_start"}
+	dest := []any{&t}
+	for i, m := range opstats.WindowMetrics {
+		parts := make([]string, len(m.Counters))
+		for j, c := range m.Counters {
+			parts[j] = c.Name()
+		}
+		sel = append(sel, strings.Join(parts, " + "))
+		dest = append(dest, &v[i])
+	}
+	err = r.db.QueryRow(ctx, `SELECT `+strings.Join(sel, ", ")+` FROM magnetico_stats.agg_hour WHERE bucket_start = date_trunc('hour', now(), 'UTC')`).Scan(dest...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return time.Time{}, v, nil
 	}
@@ -172,7 +179,7 @@ func (r *Reader) users(ctx context.Context) Users {
 		Scan(&total, &active, &admins); err != nil {
 		return Users{} // optional: unavailable, never zero
 	}
-	return Users{Total: known(total), Active: known(active), Admins: known(admins)}
+	return Users{Total: known(total), Active: known(active), Disabled: known(total - active), Admins: known(admins)}
 }
 
 // overview assembles the dashboard state from one set of queries.
@@ -182,6 +189,7 @@ func (r *Reader) overview(ctx context.Context) (Overview, error) {
 		return Overview{}, err
 	}
 	o := Overview{Schema: state, Problem: problem, Users: r.users(ctx)}
+	o.Crawlers = r.crawlerCounts(ctx, state == StateUp)
 	if state != StateUp {
 		return o, nil
 	}
@@ -303,4 +311,31 @@ func (r *Reader) bounds(ctx context.Context, gran string) (first, last time.Time
 		return time.Time{}, time.Time{}, false, nil
 	}
 	return f.UTC(), l.UTC(), true, nil
+}
+
+// crawlerCounts reads the registry counts. Each count is capped (CrawlerCountCap)
+// so the cost does not depend on the registered count; a count that cannot be
+// read is unavailable, never zero.
+func (r *Reader) crawlerCounts(ctx context.Context, statsUp bool) CrawlerCounts {
+	var c CrawlerCounts
+	var reg, enabled int64
+	if err := r.db.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE enabled)
+FROM (SELECT enabled FROM magnetico_ingest.crawlers LIMIT $1) x`, CrawlerCountCap+1).Scan(&reg, &enabled); err != nil {
+		return c
+	}
+	if reg > CrawlerCountCap {
+		reg, c.Capped = CrawlerCountCap, true
+		enabled = min(enabled, CrawlerCountCap)
+	}
+	c.Registered, c.Enabled = known(reg), known(enabled)
+	if !statsUp {
+		return c
+	}
+	var active int64
+	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM (
+SELECT 1 FROM magnetico_ingest.crawlers c JOIN magnetico_stats.crawler_activity a ON a.crawler_id = c.crawler_id
+WHERE c.enabled AND a.last_seen_at > now() - make_interval(secs => $1) LIMIT $2) x`, ActiveWindow.Seconds(), CrawlerCountCap).Scan(&active); err == nil {
+		c.Active = known(active)
+	}
+	return c
 }

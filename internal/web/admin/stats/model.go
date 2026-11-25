@@ -6,6 +6,7 @@ package stats
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/skobkin/magnetico-web/internal/opstats"
@@ -107,10 +108,26 @@ type Instance struct {
 }
 
 // Rolling-rate metrics, in the order of opstats.WindowMetricNames.
-const metricCount = 6
+const metricCount = opstats.NumWindowMetrics
 
-// MetricNames are the display keys of the rate metrics.
-var MetricNames = [metricCount]string{"received", "enqueued", "acknowledged", "settled", "exists_hashes", "bytes_body"}
+// MetricNames are the display keys of the rate metrics (also the keys of the
+// JSON answer): the snapshot column stems without the "records_" prefix.
+var MetricNames = func() (n [metricCount]string) {
+	for i, s := range opstats.WindowMetricNames {
+		n[i] = strings.TrimPrefix(s, "records_")
+	}
+	return
+}()
+
+// MetricIndex is the position of a named rate metric.
+func MetricIndex(name string) int {
+	for i, n := range MetricNames {
+		if n == name {
+			return i
+		}
+	}
+	return -1
+}
 
 // RateWindow is one rolling window summed over the fresh, compatible instances.
 type RateWindow struct {
@@ -160,7 +177,23 @@ type StorageView struct {
 }
 
 // Users counts accounts (optional: unavailable when the web schema cannot be read).
-type Users struct{ Total, Active, Admins Measured[int64] }
+type Users struct{ Total, Active, Disabled, Admins Measured[int64] }
+
+// ActiveWindow is how recent a crawler's last authenticated request, as seen by
+// the statistics, must be for the crawler to count as recently active. The
+// statistics persist once a minute, so the figure can lag by about that much.
+const ActiveWindow = 15 * time.Minute
+
+// CrawlerCountCap bounds the registry counts: a larger registry is reported as
+// "at least" the cap, so the cost never depends on the registered count.
+const CrawlerCountCap = 10000
+
+// CrawlerCounts are the registry counts of the dashboard (optional: unavailable
+// when the ingest schema cannot be read; Active also needs the statistics).
+type CrawlerCounts struct {
+	Registered, Enabled, Active Measured[int64]
+	Capped                      bool // the registry holds more than CrawlerCountCap rows: the counts are lower bounds
+}
 
 // Overview is the dashboard's current state.
 type Overview struct {
@@ -173,6 +206,7 @@ type Overview struct {
 	ThisHour   [metricCount]int64 // counts so far in the open UTC hour (partial)
 	ThisHourAt time.Time
 	Users      Users
+	Crawlers   CrawlerCounts
 }
 
 var (

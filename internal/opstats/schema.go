@@ -109,7 +109,7 @@ func storageChecks(unit string) []string {
 
 // snapshotWindowMetrics are the metrics for which a heartbeat publishes
 // completed-slot window counts (rates are derived from them).
-var snapshotWindowMetrics = []string{"records_received", "records_enqueued", "records_acknowledged", "settled", "exists_hashes", "bytes_body"}
+var snapshotWindowMetrics = WindowMetricNames[:]
 
 // WindowSeconds are the rolling windows of the heartbeat.
 var WindowSeconds = []int{60, 900, 3600}

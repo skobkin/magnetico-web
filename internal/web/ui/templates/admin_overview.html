@@ -25,12 +25,25 @@
 {{else}}<p class="subtext">No ingest instance has reported in the last 24 hours.</p>{{end}}
 </div></section>
 
-<section class="section-card" id="rates"><div class="section-card-head"><div><h2>Current rates</h2><p class="subtext">Records per second (last minute), per minute (last 15 minutes) and per hour (last hour), summed over the instances that reported recently and observed at least half of the window.</p></div></div><div class="section-card-body">
+<section class="section-card" id="rates"><div class="section-card-head"><div><h2>Current rates</h2><p class="subtext">Per second (last minute), per minute (last 15 minutes) and per hour (last hour), summed over the instances that reported recently and observed at least half of the window.</p></div></div><div class="section-card-body">
 <div class="table-wrap"><table class="data-table">
-<thead><tr><th>Window</th><th>Unit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Acknowledged</th><th class="num">Settled</th><th class="num">Existence hashes</th><th class="num">Request bytes</th><th class="num">Instances</th></tr></thead>
-<tbody>{{range .Rates}}<tr><td>{{.Window}}</td><td>{{.Unit}}</td><td class="num">{{.Received}}</td><td class="num">{{.Enqueued}}</td><td class="num">{{.Acknowledged}}</td><td class="num">{{.Settled}}</td><td class="num">{{.ExistsHashes}}</td><td class="num">{{.BodyBytes}}</td><td class="num">{{.Included}}</td></tr>{{range .ExcludedNotice}}<tr><td colspan="9" class="subtext">Not included: {{.}}</td></tr>{{end}}{{end}}</tbody>
+<caption class="subtext">Records</caption>
+<thead><tr><th>Window</th><th>Unit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Acknowledged</th><th class="num">Settled</th><th class="num">New torrents</th><th class="num">Instances</th></tr></thead>
+<tbody>{{range .Rates}}<tr><td>{{.Window}}</td><td>{{.Unit}}</td><td class="num">{{index .V "received"}}</td><td class="num">{{index .V "enqueued"}}</td><td class="num">{{index .V "acknowledged"}}</td><td class="num">{{index .V "settled"}}</td><td class="num">{{index .V "torrents_created"}}</td><td class="num">{{.Included}}</td></tr>{{range .ExcludedNotice}}<tr><td colspan="8" class="subtext">Not included: {{.}}</td></tr>{{end}}{{end}}</tbody>
+</table></div>
+<div class="table-wrap"><table class="data-table">
+<caption class="subtext">Requests and authentication</caption>
+<thead><tr><th>Window</th><th>Unit</th><th class="num">Submit requests</th><th class="num">Existence requests</th><th class="num">Existence hashes</th><th class="num">Request bytes</th><th class="num">Authentication database lookups</th><th class="num">Authentication cache hit rate</th><th class="num">Authentication busy refusals</th><th class="num">Authentication storage failures</th></tr></thead>
+<tbody>{{range .Rates}}<tr><td>{{.Window}}</td><td>{{.Unit}}</td><td class="num">{{index .V "submit_requests"}}</td><td class="num">{{index .V "exists_requests"}}</td><td class="num">{{index .V "exists_hashes"}}</td><td class="num">{{index .V "bytes_body"}}</td><td class="num">{{index .V "auth_db_lookups"}}</td><td class="num">{{index .V "auth_hit_rate"}}</td><td class="num">{{index .V "auth_busy"}}</td><td class="num">{{index .V "auth_storage_failures"}}</td></tr>{{end}}</tbody>
 </table></div>
 <p class="subtext">So far this hour (partial): received {{.HourReceived}}, enqueued {{.HourEnqueued}}, acknowledged {{.HourAcknowledged}}, settled {{.HourSettled}}.</p>
+</div></section>
+
+<section class="section-card" id="crawlers"><div class="section-card-head"><div><h2>Crawlers</h2></div></div><div class="section-card-body">
+<div class="kv"><span class="kv-label">Registered crawlers</span><span>{{.CrawlersRegistered}}</span></div>
+<div class="kv"><span class="kv-label">Crawlers enabled</span><span>{{.CrawlersEnabled}}</span></div>
+<div class="kv"><span class="kv-label">Recently active</span><span>{{.CrawlersActive}}</span></div>
+<p class="subtext">Recently active: enabled, and the statistics saw an authenticated request from it within the last {{.ActiveWindow}} (they are persisted once a minute, so this can lag by about that much). A crawler that is switched off, or that never connected, is not active. A dash means the value is unavailable, not zero.</p>
 </div></section>
 
 <div class="profile-grid">
@@ -64,6 +77,8 @@
 <header><h3 id="chart-{{.Key}}-title">{{.Title}}</h3><div class="chart-controls" role="group" aria-label="Period of {{.Title}}"></div></header>
 <p class="chart-status" role="status" aria-live="polite">Loading…</p>
 <div class="chart-plots"></div>
+<p class="chart-asof" hidden></p>
+<p class="chart-notes" hidden></p>
 <noscript><p class="subtext">Charts need JavaScript. The tables above show the current values.</p></noscript>
 <details class="chart-summary"><summary>Data as text</summary><pre class="chart-text" tabindex="0"></pre></details>
 </article>{{end}}
@@ -71,6 +86,7 @@
 
 <section class="section-card" id="library"><div class="section-card-head"><div><h2>Accounts</h2></div></div><div class="section-card-body">
 <div class="kv"><span class="kv-label">Accounts</span><span>{{.UsersTotal}} ({{.UsersActive}} active, {{.UsersAdmins}} administrators)</span></div>
+<div class="kv"><span class="kv-label">Users disabled</span><span>{{.UsersDisabled}}</span></div>
 </div></section>
 <script src="{{asset "uPlot.iife.min.js"}}" defer></script><script src="{{asset "admin.js"}}" defer></script>
 {{end}}

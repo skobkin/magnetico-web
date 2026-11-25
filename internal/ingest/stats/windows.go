@@ -2,22 +2,12 @@ package stats
 
 import "github.com/skobkin/magnetico-web/internal/opstats"
 
-// Window metrics: the quantities whose rolling rates the heartbeat publishes.
-// The order matches the snapshot columns (opstats.snapshotWindowMetrics).
-const (
-	wmReceived = iota
-	wmEnqueued
-	wmAcknowledged
-	wmSettled
-	wmExistsHashes
-	wmBytesBody
-	numWindowMetrics
-)
+// numWindowMetrics is the number of rolling-rate metrics; their definition is
+// opstats.WindowMetrics, in the order of the snapshot columns.
+const numWindowMetrics = opstats.NumWindowMetrics
 
 // WindowMetricNames are the snapshot column stems of the window metrics.
-var WindowMetricNames = [numWindowMetrics]string{
-	"records_received", "records_enqueued", "records_acknowledged", "settled", "exists_hashes", "bytes_body",
-}
+var WindowMetricNames = opstats.WindowMetricNames
 
 const ringSeconds = 3600
 
@@ -27,14 +17,11 @@ var windowMetricOf = func() [opstats.NumCounters]int8 {
 	for i := range m {
 		m[i] = -1
 	}
-	m[opstats.CRecordsReceived] = wmReceived
-	m[opstats.CRecordsEnqueued] = wmEnqueued
-	m[opstats.CRecordsAcknowledged] = wmAcknowledged
-	m[opstats.CSettledStoredNew] = wmSettled
-	m[opstats.CSettledStoredExisting] = wmSettled
-	m[opstats.CSettledQuarantined] = wmSettled
-	m[opstats.CExistsHashes] = wmExistsHashes
-	m[opstats.CBytesBody] = wmBytesBody
+	for i, wm := range opstats.WindowMetrics {
+		for _, c := range wm.Counters {
+			m[c] = int8(i)
+		}
+	}
 	return m
 }()
 

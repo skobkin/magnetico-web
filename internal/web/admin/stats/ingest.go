@@ -108,14 +108,74 @@ type Cursor struct{ Name string }
 // Activity is what the statistics know about a crawler that has connected.
 type Activity struct {
 	FirstSeen, LastSeen time.Time
-	LastIP              string
-	LastSubmit          *time.Time
-	Received, Enqueued  int64
-	Duplicate           int64
-	BytesBody           int64
-	ExistsRequests      int64
-	ExistsHashes        int64
-	Rejected            int64
+	// SeenAgo is how long before the read the last authenticated request was
+	// seen, by the database clock (so host skew cannot matter); a cached page
+	// adds the time since the read.
+	SeenAgo            time.Duration
+	LastIP             string
+	LastSubmit         *time.Time
+	Received, Enqueued int64
+	Duplicate          int64
+	BytesBody          int64
+	ExistsRequests     int64
+	ExistsHashes       int64
+	Rejected           int64
+}
+
+// Recent reports whether the crawler was seen within ActiveWindow.
+func (a *Activity) Recent() bool { return a.SeenAgo < ActiveWindow }
+
+// ActivityClass is what a crawler's row says about its activity: four
+// different things that must never look alike.
+type ActivityClass int
+
+const (
+	// ActivityActive: enabled and seen within ActiveWindow.
+	ActivityActive ActivityClass = iota
+	// ActivityInactive: enabled, connected before, but not recently.
+	ActivityInactive
+	// ActivityNever: enabled and never connected.
+	ActivityNever
+	// ActivityDisabled: disabled, whatever its history.
+	ActivityDisabled
+	// ActivityUnavailable: enabled, but the statistics cannot be read, so its activity is unknown.
+	ActivityUnavailable
+)
+
+// ActivityClass classifies the row; statsAvailable is whether the statistics
+// could be read for this page.
+func (c CrawlerRow) ActivityClass(statsAvailable bool) ActivityClass {
+	switch {
+	case !c.Enabled:
+		return ActivityDisabled
+	case !statsAvailable:
+		return ActivityUnavailable
+	case c.Activity == nil:
+		return ActivityNever
+	case c.Activity.Recent():
+		return ActivityActive
+	}
+	return ActivityInactive
+}
+
+// aged returns a copy of the page as it stands now: SeenAgo grows by the time
+// since the read. The receiver is shared through the cache and not modified.
+func (p CrawlerPage) aged(fetchedAt, now time.Time) CrawlerPage {
+	elapsed := now.Sub(fetchedAt)
+	if elapsed <= 0 || len(p.Items) == 0 {
+		return p
+	}
+	out := p
+	out.Items = make([]CrawlerRow, len(p.Items))
+	for i, it := range p.Items {
+		if it.Activity != nil {
+			a := *it.Activity
+			a.SeenAgo += elapsed
+			it.Activity = &a
+		}
+		out.Items[i] = it
+	}
+	return out
 }
 
 // CrawlerRow is one registered crawler. Activity is nil for a crawler that
@@ -146,7 +206,7 @@ func crawlersSQL(statsUp bool) string {
 	sel := `c.crawler_id::text, c.name, c.enabled, c.created_at, c.token_rotated_at, c.disabled_at`
 	from := ` FROM magnetico_ingest.crawlers c`
 	if statsUp {
-		sel += `, a.first_seen_at, a.last_seen_at, host(a.last_ip), a.last_submit_at, a.records_received, a.records_enqueued,
+		sel += `, a.first_seen_at, a.last_seen_at, EXTRACT(EPOCH FROM now() - a.last_seen_at), host(a.last_ip), a.last_submit_at, a.records_received, a.records_enqueued,
  a.records_duplicate, a.bytes_body, a.exists_requests, a.exists_hashes, a.rejected_requests`
 		from += ` LEFT JOIN magnetico_stats.crawler_activity a ON a.crawler_id = c.crawler_id`
 	}
@@ -164,10 +224,11 @@ func (r *Reader) crawlers(ctx context.Context, after Cursor, statsUp bool) (Craw
 		var c CrawlerRow
 		dest := []any{&c.ID, &c.Name, &c.Enabled, &c.CreatedAt, &c.TokenRotatedAt, &c.DisabledAt}
 		var first, last, submit *time.Time
+		var seenAgo *float64
 		var ip *string
 		var v [7]*int64
 		if statsUp {
-			dest = append(dest, &first, &last, &ip, &submit)
+			dest = append(dest, &first, &last, &seenAgo, &ip, &submit)
 			for i := range v {
 				dest = append(dest, &v[i])
 			}
@@ -177,6 +238,9 @@ func (r *Reader) crawlers(ctx context.Context, after Cursor, statsUp bool) (Craw
 		}
 		if statsUp && first != nil && last != nil {
 			a := &Activity{FirstSeen: first.UTC(), LastSeen: last.UTC(), LastSubmit: submit}
+			if seenAgo != nil {
+				a.SeenAgo = secs(*seenAgo)
+			}
 			if ip != nil {
 				if addr, err := netip.ParseAddr(*ip); err == nil {
 					a.LastIP = addr.String()

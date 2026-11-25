@@ -223,5 +223,5 @@ func (s *Service) Crawlers(ctx context.Context, p access.Principal, after Cursor
 	if err != nil {
 		return CrawlerPage{}, Freshness{}, err
 	}
-	return page, Freshness{FetchedAt: at, Stale: stale}, nil
+	return page.aged(at, s.now()), Freshness{FetchedAt: at, Stale: stale}, nil
 }
