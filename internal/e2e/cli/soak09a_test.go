@@ -198,17 +198,10 @@ func (s *soak) waitStatus(token string, want int, limit time.Duration) (time.Dur
 
 func (s *soak) setupAdmin() {
 	e := s.e
-	const name, pw = "soakadmin", harnessLoadPassword
-	if sqlCount(e.t, e.dsn, `SELECT count(*) FROM magnetico_web.users WHERE username = $1`, name) == 0 {
-		if out, errOut, code := runWebAdminBinary(e.t, e.bin, e.dsn, "", nil, "user", "add", name); code != 0 {
-			e.t.Fatalf("user add: %d %s%s", code, out, errOut)
-		}
-		if out, errOut, code := runWebAdminBinary(e.t, e.bin, e.dsn, pw+"\n", nil, "user", "set-password", name); code != 0 {
-			e.t.Fatalf("set-password: %d %s%s", code, out, errOut)
-		}
-		if out, errOut, code := runWebAdminBinary(e.t, e.bin, e.dsn, "", nil, "user", "set-role", name, "admin"); code != 0 {
-			e.t.Fatalf("set-role: %d %s%s", code, out, errOut)
-		}
+	// the benchmark guard admits only the generated identities: the first of them is promoted
+	const name, pw = "w9u00", harnessLoadPassword
+	if out, errOut, code := runWebAdminBinary(e.t, e.bin, e.dsn, "", nil, "user", "set-role", name, "admin"); code != 0 {
+		e.t.Fatalf("set-role: %d %s%s", code, out, errOut)
 	}
 	b := newBrowser(e.t, e.webAddr)
 	b.get("/login", "X-Forwarded-For", "10.88.0.1")
@@ -416,6 +409,17 @@ func (e *harnessEnv) soak09a() {
 	if e.diagAddr == "" {
 		t.Log("the soak is most informative with MAGNETICO_BENCH_TAGS=diag (goroutine and live-heap readings)")
 	}
+	// A clean slate in the disposable benchmark database: the crawlers, statistics and test
+	// torrents of an earlier run would falsify the end-state checks.
+	for _, q := range []string{`DROP SCHEMA IF EXISTS magnetico_stats CASCADE`, `DELETE FROM magnetico_ingest.crawlers`,
+		`DELETE FROM magneticod.torrent_file_blobs WHERE torrent_id IN (SELECT id FROM magneticod.torrents WHERE name LIKE 'e2e torrent%')`,
+		`DELETE FROM magneticod.torrents WHERE name LIKE 'e2e torrent%'`} {
+		sqlExec(t, e.dsn, q)
+	}
+	// the statistics are part of what is qualified: their schema must exist before ingest starts
+	if out, code := runWebSchemaInit(t, e.bin, e.dsn, "stats-schema-init"); code != 0 {
+		t.Fatalf("migrate stats-schema-init: %d %s", code, out)
+	}
 	e.begin()
 	s.clk.start = time.Now()
 	s.setupAdmin()
@@ -588,11 +592,30 @@ func (s *soak) statsOutage(hold time.Duration) {
 	if _, err := conn.Exec(ctx, `ROLLBACK`); err != nil {
 		e.gate(false, "stats outage: release: %v", err)
 	}
-	// recovery: the writer's backlog is applied and the dashboard is fresh again
-	recovered, ok := s.waitFresh(5 * time.Minute)
-	s.event("stats_outage_end", map[string]any{"held_s": time.Since(start).Seconds(), "torrents_added_during": idDuring - idBefore, "recovered_after_s": recovered.Seconds(), "recovered": ok})
+	// Recovery: the writer's next successful flush (its backlog applied in that one flush)
+	// stamps ingest_instances.last_flush_at after the release; the dashboard is fresh again
+	// is recorded too, but the heartbeat table was not locked, so it never went stale.
+	var released time.Time
+	_ = conn.QueryRow(ctx, `SELECT now()`).Scan(&released)
+	recovered, ok := s.waitFlushAfter(conn, released, 5*time.Minute)
+	fresh, freshOK := s.waitFresh(time.Minute)
+	s.event("stats_outage_end", map[string]any{"held_s": time.Since(start).Seconds(), "torrents_added_during": idDuring - idBefore,
+		"first_flush_after_release_s": recovered.Seconds(), "flushed": ok, "dashboard_fresh_after_s": fresh.Seconds(), "dashboard_fresh": freshOK})
 	e.gate(idDuring-idBefore > 0, "no torrent was stored while the statistics were locked: processing stopped")
-	e.gate(ok, "the dashboard did not return to fresh within 5 minutes after the statistics were unlocked")
+	e.gate(ok, "the statistics writer did not flush within 5 minutes after the lock was released")
+}
+
+// waitFlushAfter waits until some instance has flushed after the given database time.
+func (s *soak) waitFlushAfter(conn *pgx.Conn, after time.Time, limit time.Duration) (time.Duration, bool) {
+	start := time.Now()
+	for time.Since(start) < limit {
+		var done bool
+		if err := conn.QueryRow(context.Background(), `SELECT COALESCE(max(last_flush_at) > $1, false) FROM magnetico_stats.ingest_instances`, after).Scan(&done); err == nil && done {
+			return time.Since(start), true
+		}
+		time.Sleep(time.Second)
+	}
+	return time.Since(start), false
 }
 
 func (s *soak) maxTorrentID(conn *pgx.Conn) int64 {
@@ -743,7 +766,7 @@ func (s *soak) checkConservation() {
 	}
 	checks["rollup_mismatches"] = mismatch
 	e.gate(len(mismatch) == 0, "the hourly, daily and monthly aggregates disagree: %v", mismatch)
-	e.gate(hours >= 2, "only %d hourly rows were persisted", hours)
+	e.gate(hours >= max(1, int64(s.clk.elapsed().Hours())), "only %d hourly rows were persisted in a run of %.1f hours", hours, s.clk.elapsed().Hours())
 	e.write("check", checks)
 }
 
