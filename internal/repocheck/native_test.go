@@ -35,12 +35,19 @@ func fakeBinary(t *testing.T, name string) string {
 		src := filepath.Join(fakeDir, "src")
 		_ = os.MkdirAll(src, 0o755)
 		_ = os.WriteFile(filepath.Join(src, "go.mod"), []byte("module fake\n\ngo 1.24\n"), 0o644)
-		_ = os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nimport \"fmt\"\n\nvar line = \"x\"\n\nfunc main() { fmt.Println(line) }\n"), 0o644)
+		_ = os.WriteFile(filepath.Join(src, "main.go"), []byte("package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n\nvar line = \"x\"\nvar banner = \"\"\n\nfunc main() {\n\tfmt.Println(line)\n\tif len(os.Args) > 99 {\n\t\tfmt.Println(banner)\n\t}\n}\n"), 0o644)
+		// the vendored script's banner is embedded in the real executable (go:embed); the
+		// fixtures carry it through a linker-set string, except the one that must fail
+		const banner = "/*! https://github.com/leeoniya/uPlot (v1.6.32) */"
 		build := func(out, arch, line string, extra ...string) {
 			if fakeErr != nil {
 				return
 			}
-			args := append([]string{"build", "-ldflags", "-X 'main.line=" + line + "'"}, extra...)
+			flags := "-X 'main.line=" + line + "'"
+			if out != "amd64-nouplot" {
+				flags += " -X 'main.banner=" + banner + "'"
+			}
+			args := append([]string{"build", "-ldflags", flags}, extra...)
 			args = append(args, "-o", filepath.Join(fakeDir, out), ".")
 			cmd := exec.Command("go", args...)
 			cmd.Dir = src
@@ -56,6 +63,7 @@ func fakeBinary(t *testing.T, name string) string {
 		build("arm64", "arm64", good("arm64"))
 		build("amd64-oldgo", "amd64", "magnetico 0.8.0-rc.0 (commit 0123456789ab, go1.27.3, linux/amd64)")
 		build("amd64-tags", "amd64", good("amd64"), "-tags", "diag")
+		build("amd64-nouplot", "amd64", good("amd64"))
 	})
 	if fakeErr != nil {
 		t.Fatal(fakeErr)
@@ -202,8 +210,41 @@ func TestNativeSmokeFailsForABuildWithTags(t *testing.T) {
 	}
 }
 
+func TestNativeSmokeFailsWhenTheUPlotScriptIsNotEmbedded(t *testing.T) {
+	if out, code := nativeSmoke(t, makeDist(t, "0.8.0-rc.0", distOpts{amd64: "amd64-nouplot"}), "0.8.0-rc.0"); code == 0 || !strings.Contains(out, "uPlot") {
+		t.Fatalf("an executable without the uPlot script must fail (exit %d):\n%s", code, out)
+	}
+}
+
 func TestNativeSmokeFailsWithoutBothArchives(t *testing.T) {
 	if out, code := nativeSmoke(t, makeDist(t, "0.8.0-rc.0", distOpts{omitArm64Archive: true}), "0.8.0-rc.0"); code == 0 {
 		t.Fatalf("a dist without the arm64 archive must fail:\n%s", out)
+	}
+}
+
+// TestSmokeTestsCheckThatTheUPlotScriptIsEmbeddedInTheExecutable (Task 09A): the
+// licence files were checked in real artifacts, but nothing looked at the asset the
+// licence belongs to. Both smoke tests, which run against the real image and the real
+// archives, look for the vendored script's banner inside the executable they were
+// given.
+func TestSmokeTestsCheckThatTheUPlotScriptIsEmbeddedInTheExecutable(t *testing.T) {
+	root := testkit.ModuleRoot(t)
+	banner, err := os.ReadFile(filepath.Join(root, "third_party", "uplot-1.6.32", "uPlot.iife.min.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := strings.SplitN(string(banner), "\n", 2)[0]
+	const want = "github.com/leeoniya/uPlot (v1.6.32)"
+	if !strings.Contains(first, want) {
+		t.Fatalf("the vendored script's banner is %q: update this test and the smoke tests together", first)
+	}
+	for _, f := range []string{"ci/image-smoke.sh", "ci/native-smoke.sh"} {
+		b, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%s does not check that the uPlot script (%q) is embedded in the executable", f, want)
+		}
 	}
 }

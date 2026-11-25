@@ -122,6 +122,7 @@ check "/data and /reports exist and belong to 10001:10001" sh_in '[ "$(stat -c %
 check "licence files present" sh_in 'test -s /usr/share/licenses/magnetico/COPYING && test -s /usr/share/licenses/magnetico/swagger-ui-LICENSE && test -s /usr/share/licenses/magnetico/swagger-ui-NOTICE && test -s /usr/share/licenses/magnetico/uplot-LICENSE'
 check "IANA time zone data is embedded in the executable (no zoneinfo in the image)" sh_in '! test -d /usr/share/zoneinfo && grep -q Europe/Moscow /usr/local/bin/magnetico'
 check "Swagger UI bundle is embedded in the executable" sh_in 'grep -q SwaggerUIBundle /usr/local/bin/magnetico'
+check "uPlot (the administrator charts) is embedded in the executable" sh_in 'grep -q "github.com/leeoniya/uPlot (v1.6.32)" /usr/local/bin/magnetico'
 check "executable is not writable by the runtime user" sh_in '! test -w /usr/local/bin/magnetico'
 
 echo "== executable behaviour (no network, read-only root, all capabilities dropped)"

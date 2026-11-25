@@ -65,6 +65,8 @@ for arch in amd64 arm64; do
 	tar -xzf "$archive" -C "$work/$arch"
 	bin="$work/$arch/magnetico"
 
+	if grep -aq 'github.com/leeoniya/uPlot (v1.6.32)' "$bin"; then ok "$arch: the uPlot script is embedded in the executable"; else fail "$arch: the uPlot script is not embedded in the executable"; fi
+
 	if command -v go >/dev/null 2>&1; then
 		info="$(go version -m "$bin" 2>/dev/null || true)"
 		if [ -z "$info" ]; then
