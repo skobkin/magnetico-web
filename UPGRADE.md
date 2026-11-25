@@ -118,6 +118,8 @@ within 60 seconds. Protocol version 1 is unchanged.
 `ingest` refuses to start while an import is running or incomplete. Records ingested after the
 import make earlier migration-verification verdicts stale.
 
+**Reinitialising an older development statistics schema.** Task 09A changed the initial definition of `magnetico_stats` (version 1, never released): a quota-utilisation gauge, per-quantity approximation flags, the unevaluated-reconciliation count and a three-state storage reconciliation. A development `magnetico_stats` created before it fails the structural check (`ingest` and `web` start without it, the dashboard says so); nothing alters it. Statistics are disposable: `DROP SCHEMA magnetico_stats CASCADE;` then `magnetico migrate stats-schema-init`, and grant the roles again as in `docs/web-deployment.md`. Only the collected aggregates are lost. The advisory-lock key of `migrate web-schema-init` also changed (it used to equal the ingest consumer's, so the command waited while ingest ran); no action is needed, a lock is held only by a running process.
+
 **Reinitialising an older development ingest schema.** The `crawlers` table (per-crawler credentials) is part of the
 initial `magnetico_ingest` definition, which has never been released, so there is no upgrade command. A development
 database whose `magnetico_ingest` predates it is refused by `ingest` and `magnetico ingest crawler …` with
