@@ -690,8 +690,12 @@ func TestRunnerDeferredIndexesInterruptedResume(t *testing.T) {
 	})
 	integrityConstraintsIntact(t, tgt)
 	// The rebuilt state is application-strict-valid again.
-	if _, err := persistence.MakeDatabase(ctxNC, tgt); err != nil {
+	store, err := persistence.MakeDatabase(ctxNC, tgt)
+	if err != nil {
 		t.Fatalf("MakeDatabase() after rebuild error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 

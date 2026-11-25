@@ -69,9 +69,11 @@ func TestInitCreatesTheCrawlersTableInSchemaVersionOne(t *testing.T) {
 	if !strings.Contains(d, "lower(name)") {
 		t.Errorf("no case-insensitive unique name index:\n%s", d)
 	}
-	if _, err := Open(context.Background(), e.dsn, Options{}); err != nil {
+	q, err := Open(context.Background(), e.dsn, Options{})
+	if err != nil {
 		t.Fatalf("Open on a fresh schema: %v", err)
 	}
+	q.Close()
 }
 
 func TestInitIsIdempotentAndRefusesUnknownVersions(t *testing.T) {
@@ -238,7 +240,9 @@ func TestReinitializingTheIngestSchemaLeavesMagneticodAndWebUntouched(t *testing
 	if after := digest(); after != before {
 		t.Fatalf("reinitialisation changed other schemas: %q vs %q", before, after)
 	}
-	if _, err := Open(ctx, dsn, Options{}); err != nil {
+	q, err := Open(ctx, dsn, Options{})
+	if err != nil {
 		t.Fatalf("Open after reinit: %v", err)
 	}
+	q.Close()
 }
