@@ -1,0 +1,122 @@
+# Pre-release investigation — PostgreSQL integration tests and CI lifecycle
+
+Branch `fix/post-merge-quick-fixes` (PR #56), on `master` `47742edf`. Evidence: the PostgreSQL service log of pipeline #123
+supplied by the owner, the public Woodpecker API (`ci.skobk.in`, repository 27; read only), and local runs against a
+disposable PostgreSQL 17 (`postgres:17-alpine`, trust authentication, loopback). No production system, tag, release or
+published artifact was touched; no CI configuration was changed.
+
+## 1. PostgreSQL service lifecycle
+
+**Confirmed cause: the `race` step was still running.** The pipeline was not stuck, and the service was not leaked.
+
+| Pipeline | Event | What the API shows |
+|---|---|---|
+| #123 | push to `master` (`47742edf`) | every step finished by 21:23:28 except `race`, started 21:23:28 (its dependencies had just finished), **still running** when the owner cancelled at 21:27:30; `postgres` service killed at 21:27:10 by the cancellation |
+| #125 | tag `0.8.0-rc0` | the same workflow: `race` ran 21:29:16–21:37:17 (8 min) and the `postgres` service ended at 21:37:17, the moment `race` finished; then `release` (Forgejo, both registries) succeeded |
+| #126 | PR #56 | cancelled during `test`; unrelated |
+| #124 | tag `0.8.0-rc0` | compile error `secret "gitea_token" not found` before any step ran; #125 is the retry |
+
+`race` is deliberately last (it depends on `test`, `govulncheck`, `openapi`, `native-smoke`, `workflow-invariants`,
+`frontend-selftest`) and takes about 8 minutes, so for its whole duration every other step shows as finished while the
+service, rightly, stays up. The service log agrees: it continues until 21:26:32 with migration and ingest test traffic
+(the race suite), then stops when the pipeline was cancelled. #125 shows that teardown works normally.
+
+- **Project defect:** none found. Every `go test` step has `-timeout 20m`, the repository timeout is 60 min, so a hung
+  test cannot hold the service indefinitely.
+- **Woodpecker defect:** none found; services end with the workflow as designed.
+- **Interference between pipelines:** none through shared state. Each workflow has its own `postgres` service container
+  and network, and every test database is `magnetico_test_<random>`. #123, #125 and #126 did run **at the same time on
+  agent 1** (21:20–21:23). That violates the "alone on the agent" assumption behind `-p 3` (#53) and slows the
+  timing-sensitive suites, but it changes no database outcome. Limiting concurrent workflows per agent is agent
+  configuration (not changed here).
+- **Lingering test processes:** none in the PostgreSQL log beyond the leaks of section 3.
+
+## 2. The broken source-snapshot SQL (migration tests)
+
+**Confirmed defect, now fixed.** `catalogSnapshot` (`internal/migration/legacy/original/fixture_test.go`) built its data half
+as `SELECT string_agg(line …) FROM (SELECT 'row torrents ' || … UNION ALL …) q`. The first branch had no `AS line`, so
+the query always failed with `column "line" does not exist`, or with `column "path" does not exist` on the layout that
+drops that column (both in the CI log). The error was turned into the marker `data (unreadable)`, which compared equal
+before and after. **Every "source left untouched" assertion of the package checked the catalog only, never the data**:
+seven tests (the four `TestOpenRefuses*`, with 13 layouts in `TestOpenRefusesUnsupportedLayouts`,
+`TestProbeAndRefusalLeaveSourceUntouched`, and the fetch and reader read-only tests).
+
+**Fix** (`dd2f4306`): `sourceSnapshot` renders the catalog plus every table of the `magneticod` schema whole (row-to-text,
+partitioned parents once, partitions never alone), so it needs no column list and works on the broken layouts. Any query
+failure now fails the test. The other migration snapshot helpers (`state`, `forensics`, runner, verify, e2e fault
+snapshots) already fail on query errors; none had the problem.
+
+**Regression tests** (`snapshot_integration_test.go`). Both failed against the old helper (every subtest), and pass now:
+
+- `TestSourceSnapshotDetectsDataChanges`: torrent renamed, added or deleted; file path or size changed; file deleted;
+  schema version changed; and changes on three broken layouts (missing column, unexpected table, partitioned `files`).
+- `TestSourceSnapshotReportsUnreadableData`: a table that cannot be read (exclusive lock held, `lock_timeout`) makes
+  the snapshot an error naming the table, not a marker.
+
+All existing assertions of the package pass with the stronger snapshot: the adapter really leaves source data untouched.
+
+## 3. "database … is not currently accepting connections"
+
+**Confirmed: deliberate, bounded fault injection; no uncontrolled retry loop.** `ALTER DATABASE … ALLOW_CONNECTIONS false`
+is set only by three outage tests. Run alone against the disposable server:
+
+| Test | Refusals | Pattern |
+|---|---:|---|
+| `TestStatsConservedAcrossAFullPostgresOutageSpanningAFlush` (`internal/e2e/cli`) | 559 in 55 s | one per submission paced every 100 ms (546 of 558 gaps are 0.1 s), plus a few from 10 s periodic work; ends with the outage |
+| `TestE2EPostgresOutageAndRecovery` (`internal/e2e`) | 4 in 1.7 s | growing gaps (client backoff) within the 4 s outage |
+| `TestServiceStorageOutageAndRecovery` (`internal/ingest/server`) | 0 | the outage is observed through 503s before any new connection is tried |
+
+The CI log's burst (`magnetico_test_ba705a3888d8c0d2`, 21:21:11.589–21:22:06.438, about 550 lines at 100 ms) is the
+first test, in the `test` step. The two small groups with growing gaps (21:16:05, `3ad099…`; 21:24:59, `9011dc…`) match
+the second (ordinary and race runs); that attribution is by pattern, not confirmed. Each refusal is one client request
+reaching the database during the outage the test creates. These are the expected errors and are not suppressed.
+
+**Leaked pools (confirmed, fixed).** A temporary probe in the harness listed, before each forced drop, the client backends
+still connected 3 s after the test ended. One full run (`-p 3`, all packages) found 8 connections in 4 tests; nothing
+else in the suite leaks:
+
+| Test | Leak | Disposition |
+|---|---|---|
+| `TestInitCreatesTheCrawlersTableInSchemaVersionOne`, `TestReinitializingTheIngestSchemaLeavesMagneticodAndWebUntouched` | a successful `pgqueue.Open` discarded | closed (`26021d96`) |
+| `TestRunnerDeferredIndexesInterruptedResume` | a successful `persistence.MakeDatabase` discarded | closed (`26021d96`) |
+| `TestShutdownAbandonsUninterruptibleAddTorrent` | 5 connections of the abandoned instance (queue, auth, stats flush, store) | **by design**: the test proves the instance is abandoned with its pools left open; declared with `pgtest.AllowLeftoverConnections` |
+
+No product leak: the refusal paths of `pgqueue.Open` and `MakeDatabase` close their pools; no background
+worker outlived its test apart from the deliberate case.
+
+**Regression guard** (`8bedb092`). `pgtest.TestDatabase`'s cleanup now waits up to 10 s for the database's client backends
+to go, then fails the test for each one left (pid, state, application, last query). Before, `DROP DATABASE … WITH
+(FORCE)` ended them silently and they showed only as `terminating connection due to administrator command`.
+`TestTestDatabaseFailsATestThatLeavesConnectionsOpen` runs a helper in three modes (closed, leaked, declared) and failed
+against the previous harness. Under the guard the four tests above failed before their fixes and pass after. The helper's
+skip is on `ci/skip-allowlist.txt`. The guard only waits when something is left, so it adds no time to a clean run.
+
+**Other log lines, expected and not individually attributed:**
+
+- `terminating connection due to administrator command` comes from `pg_terminate_backend` in the outage and lock-loss
+  tests, and from forced drops of the deliberate case.
+- `unexpected EOF … with an open transaction` and `PID … in cancel request did not match any process` come from tests
+  that cut connections (the proxy fixtures) or kill processes.
+- `invalid length of startup packet` comes from raw TCP port probes.
+- The `ERROR` lines sampled are the statements of negative tests (constraint, permission and trigger refusals,
+  injected failures); the full run surfaced no failing test behind any of them.
+
+## 4. Results
+
+Commits on `fix/post-merge-quick-fixes`: `dd2f4306` (snapshot), `26021d96` (pools closed), `8bedb092` (harness guard), plus
+this report and a `docs/testing.md` note.
+
+- Focused: each new test failed first and passes; `go test ./internal/migration/legacy/original` passes; the four leaking
+  tests fail under the guard before their fixes and pass after.
+- Whole suite once each (the guard is global), `-p 3 -count=1 -timeout 20m`, CI's commands, against the disposable server:
+  - ordinary: exit 0, 3,488 passed, 0 failed, 28 skipped (all allowed by `skipcensus`), 6 min 35 s;
+  - race: exit 0, 3,488 passed, 0 failed, 28 skipped (allowed), 7 min 41 s.
+- `go vet`, `golangci-lint run` and `fmt --diff`: 0 issues.
+
+## 5. Remaining uncertainties
+
+- The guard's 10 s grace was enough in one ordinary and one race run on the development VM. A much slower CI agent could
+  in principle retire a closed pool's backends more slowly; the failure would name the connection.
+- Concurrent workflows on one agent (section 1) remain possible until the agent's capacity is limited; they affect
+  timing-sensitive tests (#53), not correctness.
+- The two small refusal groups of the CI log are attributed by pattern only.
