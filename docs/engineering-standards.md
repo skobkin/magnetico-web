@@ -381,8 +381,10 @@ in each of four runs, and every one passed 20 of 20 in isolation with unchanged
 code. At `-p 3` both the plain and the `-race` run were green. This is a
 **workaround that hides timing sensitivity, not a fix**: those tests are tracked
 for deterministic synchronization (issue #53; the verify-decode cancellation race
-was issue #52, a product defect fixed in Task 09A and 09B), after which the default
-parallelism should be re-verified and this section updated. Do not "fix" such a
+was issue #52, a product defect fixed in Task 09A and 09B). Task 09B re-verified the
+default parallelism: green on a quiet machine, plain and race; under CPU load the race
+run still fails (PostgreSQL's 100-connection default is exhausted, see `testing.md`), so
+`-p 3` stays until that is shown to pass. Do not "fix" such a
 failure by lengthening a timeout; a failure that reproduces in isolation is a
 real defect (07J's F11 was one).
 

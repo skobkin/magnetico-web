@@ -1,0 +1,14 @@
+FAIL github.com/skobkin/magnetico-web/internal/migration/users TestAuditAgreesWithTheGoClassifierAndLeaksNothing
+    === RUN   TestAuditAgreesWithTheGoClassifierAndLeaksNothing
+        audit_test.go:87: failed to connect to `user=postgres database=magnetico_test_39829d3f15d0da7b`: 127.0.0.1:55432 (127.0.0.1): server error: FATAL: sorry, too many clients already (SQLSTATE 53300)
+    --- FAIL: TestAuditAgreesWithTheGoClassifierAndLeaksNothing (1.59s)
+FAIL package github.com/skobkin/magnetico-web/internal/migration/users
+    FAIL
+    FAIL	github.com/skobkin/magnetico-web/internal/migration/users	94.795s
+FAIL github.com/skobkin/magnetico-web/internal/web/accounts TestAuthenticationVersusDisableAndRevoke
+    === RUN   TestAuthenticationVersusDisableAndRevoke
+        tokens_test.go:275: authenticated after Disable returned
+    --- FAIL: TestAuthenticationVersusDisableAndRevoke (1.13s)
+FAIL package github.com/skobkin/magnetico-web/internal/web/accounts
+    FAIL
+    FAIL	github.com/skobkin/magnetico-web/internal/web/accounts	70.103s

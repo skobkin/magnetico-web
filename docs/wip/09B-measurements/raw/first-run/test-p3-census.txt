@@ -1,0 +1,29 @@
+skip allowed    github.com/skobkin/magnetico-web/bencode Fuzz/seed#17: unexpected EOF
+skip allowed    github.com/skobkin/magnetico-web/bencode Fuzz/seed#23: 6 unused trailing bytes
+skip allowed    github.com/skobkin/magnetico-web/bencode FuzzInterfaceRoundTrip/seed#17: (no reason line found)
+skip allowed    github.com/skobkin/magnetico-web/bencode FuzzInterfaceRoundTrip/seed#23: (no reason line found)
+skip allowed    github.com/skobkin/magnetico-web/codec TestDumpBenchBlobs: set MAGNETICO_BLOB_DIR to write the benchmark blobs
+skip allowed    github.com/skobkin/magnetico-web/internal/crawlqueue TestChildProcess: child process helper
+skip allowed    github.com/skobkin/magnetico-web/internal/crawlqueue TestMeasure: set MAGNETICO_CRAWLQUEUE_MEASURE_DIR to run the measurements
+skip allowed    github.com/skobkin/magnetico-web/internal/e2e TestE2EIngestMemoryProfile: set MAGNETICO_E2E_PROFILE_DIR to run the ingest memory investigation
+skip allowed    github.com/skobkin/magnetico-web/internal/e2e TestE2ELargeRecordQualification: set MAGNETICO_E2E_EDGE_DIR to run the large-record qualification
+skip allowed    github.com/skobkin/magnetico-web/internal/e2e TestE2EMultiCrawlerStress: set MAGNETICO_E2E_MULTI_DIR to run the multi-crawler stress qualification
+skip allowed    github.com/skobkin/magnetico-web/internal/e2e/cli TestMarkBenchmarkDatabase: set MAGNETICO_BENCH_MARK=1 (with MAGNETICO_BENCH_DSN and the confirmation) to mark a seeded benchmark database
+skip allowed    github.com/skobkin/magnetico-web/internal/e2e/cli TestWebDemoServer: explicit: set MAGNETICO_DEMO_DIR=<directory>
+skip allowed    github.com/skobkin/magnetico-web/internal/ingest/pgqueue TestOpenRefusesFsyncOff: will not change fsync on an external server
+skip allowed    github.com/skobkin/magnetico-web/internal/migration/legacy/original TestIdentitySameDatabaseViaSocketAndTCP: cluster has no Unix socket directory (Docker/external server)
+skip allowed    github.com/skobkin/magnetico-web/internal/pgtest TestHelperNeedsDB: helper of TestRequirePostgresFailsInsteadOfSkipping
+skip allowed    github.com/skobkin/magnetico-web/internal/web/filetree TestColdBuildChild: child of TestColdBuildReport
+skip allowed    github.com/skobkin/magnetico-web/internal/web/filetree TestColdBuildReport: expensive: set MAGNETICO_BENCH_LARGE=1
+skip allowed    github.com/skobkin/magnetico-web/internal/web/filetree TestMeasureComplexityLimits: explicit measurement: set MAGNETICO_BENCH_LARGE=1
+skip allowed    github.com/skobkin/magnetico-web/internal/web/fileview TestMeasureTreeSize: explicit measurement: set MAGNETICO_BENCH_LARGE=1
+skip allowed    github.com/skobkin/magnetico-web/internal/web/mail TestSSLCertFileIsHonoured: system roots were already initialised in this process: mail: send failed: tls
+skip allowed    github.com/skobkin/magnetico-web/internal/web/torrents TestWarmNavigationAllocations: explicit measurement: set MAGNETICO_BENCH_LARGE=1
+skip allowed    github.com/skobkin/magnetico-web/internal/web/ui TestFrontendSelfTestsInBrowser: explicit: set MAGNETICO_TEST_BROWSER=<chromium binary>
+skip allowed    github.com/skobkin/magnetico-web/metadata TestHostileNestingChild: child of TestHostileNesting
+skip allowed    github.com/skobkin/magnetico-web/metadata TestHostilePeerChild: child of TestHostilePeerInput
+skip allowed    github.com/skobkin/magnetico-web/metainfo Fuzz/seed#9: 1 unused trailing bytes
+skip allowed    github.com/skobkin/magnetico-web/persistence TestMeasureSearchPlans: set MAGNETICO_MEASURE=1 to run the S1 measurements
+skip allowed    github.com/skobkin/magnetico-web/persistence TestMeasureTOASTIdentityAndHeader: set MAGNETICO_MEASURE=1 to run the S1 measurements
+warning: unused allow-list entry "^TestFaultRestartedSourceIsNotDrift$" (nothing was skipped for that reason)
+skipcensus: 3457 passed, 2 failed, 27 skipped (0 unexpected)

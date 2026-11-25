@@ -1,0 +1,13 @@
+FAIL github.com/skobkin/magnetico-web/internal/e2e/cli TestStatsFailuresNeverAffectAdmissionOrAuthentication/statements_exceed_their_timeout
+    === RUN   TestStatsFailuresNeverAffectAdmissionOrAuthentication/statements_exceed_their_timeout
+    === PAUSE TestStatsFailuresNeverAffectAdmissionOrAuthentication/statements_exceed_their_timeout
+    === CONT  TestStatsFailuresNeverAffectAdmissionOrAuthentication/statements_exceed_their_timeout
+        stats_test.go:275: slowest request: 30 ms healthy, 9 ms with the failure
+        stats_test.go:287: "statistics: publishing the heartbeat failed" logged 2 times, want at most once per state change
+    --- FAIL: TestStatsFailuresNeverAffectAdmissionOrAuthentication/statements_exceed_their_timeout (41.42s)
+FAIL github.com/skobkin/magnetico-web/internal/e2e/cli TestStatsFailuresNeverAffectAdmissionOrAuthentication
+    === RUN   TestStatsFailuresNeverAffectAdmissionOrAuthentication
+    --- FAIL: TestStatsFailuresNeverAffectAdmissionOrAuthentication (0.00s)
+FAIL package github.com/skobkin/magnetico-web/internal/e2e/cli
+    FAIL
+    FAIL	github.com/skobkin/magnetico-web/internal/e2e/cli	346.032s

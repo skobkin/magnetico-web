@@ -55,10 +55,18 @@ OpenAPI tests `go test ./internal/web/apidocs/... && go test -run OpenAPI ./inte
 
 **Why `-p 3`.** The suite starts real PostgreSQL clusters and real binaries, and several tests assert on short timing
 windows. At the default package parallelism on a busy host a *different* timing-dependent test failed in each of four
-runs (and passed 20 of 20 in isolation); at `-p 3` the plain and the race suites were green. This is a workaround that
-hides timing sensitivity, **not** a fix: deterministic synchronization is tracked as issue #53 and the `migrate
-verify-decode` cancellation race as issue #52. Do not "fix" such a failure by lengthening a timeout; a failure that
-reproduces in isolation is a real defect.
+runs (07J); at `-p 3` the plain and the race suites were green. This is a workaround that hides timing sensitivity,
+**not** a fix: issue #53. Do not "fix" such a failure by lengthening a timeout; a failure that reproduces in isolation is
+a real defect.
+
+*State after Task 09A and 09B (the evidence for issue #53, `docs/wip/09B-final-local-preflight-report.md`).* The named
+tests are deterministic or were proven to be product defects and fixed (#52); the full suite at the default parallelism,
+on a quiet machine, was green for the plain and the race run in 09A and again in 09B. Under artificial CPU load (6 busy
+loops on 8 CPUs) the plain run was green but the race run failed twice, for two different reasons, **neither a timing
+window of a named test**: the disposable PostgreSQL's default `max_connections = 100` was exhausted by the concurrent
+packages (`too many clients already`), and one test's own bookkeeping had an ABA flaw (fixed). The connection budget is a
+property of the suite's resource use, not of any test: **`-p 3` stays** until the suite is shown to pass the loaded
+default-parallelism race run too (for example with a bounded connection budget per package).
 
 ## Release CI: exact commands
 

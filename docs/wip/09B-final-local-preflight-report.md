@@ -91,7 +91,49 @@ synthetic, so "gaps are gaps, not zeros" was only checked by the Node self-tests
 
 ## 4. Final verification from a clean checkout
 
-`VERIFICATION_PLACEHOLDER`
+Everything ran from a **clean clone** of the branch (`git clone --no-hardlinks`, nothing uncommitted), sequentially, never
+beside another heavy job, against the disposable PostgreSQL 17 container (`MAGNETICO_TEST_REQUIRE_POSTGRES=1`, Go 1.27.4);
+script `raw/run-09b.sh`, logs and census in `09B-measurements/raw/`.
+
+**The verification found three more defects and was repeated three times** (the original failures are kept in
+`raw/first-run/` and `raw/second-run/`):
+
+| Run | Commit | Result | Cause | Fix |
+|---|---|---|---|---|
+| 1 | `da4f069a` | ordinary `-p 3`: `TestStatsFailuresNeverAffectAdmissionOrAuthentication/statements_exceed_their_timeout` failed ("heartbeat failed logged 2 times") | **product**: a statement that outruns its deadline is classified `timeout` (client deadline first) or `pg:57014` (server cancellation first), so one outage logs twice; reproduced 1 in 8 under CPU load, 12 of 12 green after the fix | `errClass` maps 57014 to `timeout` (`TestErrClassTreatsAStatementCancelAndAContextDeadlineAsOneCondition`), commit `e5020cd9` |
+| 2 | `e5020cd9` | all `-p 3` and default-parallelism runs green; the **loaded default-parallelism race run** failed `TestNoCrawlerRegisteredWarningAtStart` (DATA RACE) | **test harness**: the test read a `strings.Builder` the service's statistics writer was logging into; reproduced with `-race -count=60` under load, 150 of 150 green after | one synchronised log sink for the ingest-server tests, commit `bea3b429`; no product code |
+| 3 | `bea3b429` | `-p 3` plain and race, govulncheck, default parallelism plain and race and loaded plain: green; the **loaded default-parallelism race run failed twice** (below) | one **test harness** flaw and one **resource limit** | below |
+
+**Run 3 in detail** (3,460 tests passed and 27 skipped, all on the allow-list, 0 unexpected, in every run that finished):
+
+| Gate | Result |
+|---|---|
+| `go build ./...`, `go vet ./...` and `-tags loadtest,diag`, `golangci-lint fmt --diff` and `run` | clean, 0 issues |
+| `go test -p 3 -count=1 ./...` (real-binary e2e and the documentation checks included) | **exit 0** |
+| `go test -race -p 3 -count=1 ./...` | **exit 0** |
+| `govulncheck` v1.10.0, both tag sets | no vulnerabilities |
+| default parallelism (`go test -count=1 ./...`), quiet machine | plain **exit 0**, race **exit 0** |
+| default parallelism with 6 busy loops on the 8 CPUs | plain **exit 0**; race **exit 1**: `TestAuthenticationVersusDisableAndRevoke` and `TestAuditAgreesWithTheGoClassifierAndLeaksNothing` |
+| `TestNearExhaustedDeadlineAfterGateWaitStartsNoStatement`, `-race -count=200`, isolated | 200 of 200 |
+| `TestConcurrentIdenticalMissesCollapse`, `-race -count=200`, isolated | 200 of 200 |
+| `TestVerifyDecodeFinalizedRunNotInterruptedByCancel` and the five `TestVerifyFinish*` cases (both kinds), `-race -count=10` | all green (522 s). A first attempt with `-count=20` hit Go's default 10-minute binary timeout while still passing; it was repeated with a 45-minute timeout and `-count=10` |
+
+The two failures of the loaded race run: **(a) `TestAuthenticationVersusDisableAndRevoke`**: the test judged calls against a
+bare 0/1 flag, so a goroutine starved for more than a whole disable/enable cycle read "disabled" before and after a call
+that had run in the enabled phase and reported "authenticated after Disable returned" (an ABA flaw of the test, not of the
+product: 2 failures in 60 runs on 12 busy CPUs, 200 of 200 green with a generation-numbered transition record, commit after
+`bea3b429`). **(b) `TestAuditAgreesWithTheGoClassifierAndLeaksNothing`**: `FATAL: sorry, too many clients already (53300)`:
+at the default package parallelism the concurrent packages exhaust the disposable PostgreSQL's default
+`max_connections = 100`. That is a resource limit of the suite, not a timing window and not a product fault (the CI
+`postgres:17-alpine` service has the same default).
+
+**Decision on `-p 3` (issue #53):** the named tests are deterministic or were product defects, and the default-parallelism
+suite is green on a quiet machine, plain and race (09A and 09B). The #53 condition, however, includes a full run with default
+parallelism **under artificial CPU load**, and the race run under load still fails on the connection budget. **`-p 3` stays**,
+documented with this evidence (`docs/testing.md`, `docs/engineering-standards.md`); removing it needs a bounded connection budget
+per package first. #53 stays open.
+
+**Final confirmation on the last commit:** `FINAL_PLACEHOLDER`
 
 ## 5. Forgejo
 
