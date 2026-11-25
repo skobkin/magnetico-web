@@ -19,9 +19,11 @@
 #        image     built ONCE by image-build into an OCI layout (.ci/image), smoke-tested
 #                  and scanned there, and pushed UNCHANGED to both registries by
 #                  ci/promote-image.sh (crane push of that layout: same digest);
-#        archives  built by native-build, qualified, and uploaded by release-forgejo
-#                  (GoReleaser rebuilds; the build is reproducible, and verify-native
-#                  requires the published checksums.txt to equal the qualified one).
+#        archives  built ONCE by native-build, qualified by native-smoke, and uploaded
+#                  UNCHANGED by release-forgejo (ci/publishnative: a draft release, the
+#                  three files, then published; it refuses anything whose checksums are
+#                  not the qualified ones). verify-native downloads the published
+#                  archives and hashes them against the qualified checksums.
 #   4. read-only verification of what was published.
 #
 # Secrets (Woodpecker, restricted to the tag event and this repository on the server;
@@ -232,18 +234,20 @@ steps:
       - sh ci/promote-image.sh .ci/image "$CI_COMMIT_TAG"
 
   - name: release-forgejo
-    image: goreleaser/goreleaser:v2.20.1
+    image: golang:1.27.4-alpine
     when:
       - event: tag
     depends_on: [require-verification, race, govulncheck, image-smoke, image-scan, native-smoke]
     environment:
-      GOTOOLCHAIN: go1.27.4+auto
-      GORELEASER_FORCE_TOKEN: gitea
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
       GITEA_TOKEN:
         from_secret: GITEA_TOKEN
     commands:
-      - test -n "$CI_FORGE_URL" || (echo "CI_FORGE_URL is empty. Cannot derive Forgejo URLs for GoReleaser." && exit 1)
-      - goreleaser release --clean
+      - test -n "$CI_FORGE_URL" || (echo "CI_FORGE_URL is empty. Cannot derive the Forgejo URLs." && exit 1)
+      # The files native-build produced and native-smoke qualified, uploaded unchanged;
+      # nothing is rebuilt. The release is created as a draft, filled, then published.
+      - go run ./ci/publishnative --tag "$CI_COMMIT_TAG" --dist dist --qualified .ci/qualified-checksums.txt --notes dist/CHANGELOG.md
 
   # ---- read-only verification of what was published (no secrets) ----
   - name: verify-published

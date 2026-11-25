@@ -64,10 +64,10 @@ tag ─► ci.yaml (verification, same commit)
          │    └─ image-scan     Trivy HIGH/CRITICAL, amd64 and arm64      │
          └─ native-build ─► native-smoke   dist/ qualified               ┘
          promote-image          crane push of the SAME layout ► docker.io + ghcr.io (tag only)
-         release-forgejo        goreleaser release ► Forgejo release       (tag only)
+         release-forgejo        ci/publishnative: the qualified files ► Forgejo (tag only)
          verify-published       both digests == the qualified digest, 2 platforms, 2 attestations
          verify-published-smoke ci/image-smoke.sh on docker.io/…@digest
-         verify-native          prerelease flag, assets, checksums.txt == qualified
+         verify-native          prerelease flag, assets, checksums.txt and the downloaded archives == qualified
 ```
 
 Guarantees, and how each is enforced:
@@ -83,9 +83,18 @@ Guarantees, and how each is enforced:
   is pushed) and is idempotent for the same digest; `ci/image-smoke.sh` judges the identity of `--version` (the tag
   and the commit the pipeline builds), not only its format. The plugin runs with
   `dry_run: true` against a non-routable `staged.invalid` repository: it cannot push anywhere.
-* **The published archives are the qualified archives.** GoReleaser's OSS edition has no `publish` command, so
-  `release-forgejo` rebuilds; builds are reproducible (the binary and archive timestamps are the commit's), the
-  qualified `checksums.txt` is kept, and `verify-native` requires the published one to be byte-identical.
+* **The published archives are the qualified archives, byte for byte.** GoReleaser's OSS edition has no `publish`
+  command and would rebuild, so `release-forgejo` runs `ci/publishnative` instead: it uploads the files `native-build`
+  produced and `native-smoke` qualified, after checking that `dist/checksums.txt` equals the qualified checksums and
+  that both archives hash to the qualified values (it refuses before any request otherwise). The release is created as
+  a **draft**, the three assets are uploaded, and only then is it published, so a failure leaves an invisible draft
+  and never a visible release with missing files; the metadata is what GoReleaser produced (name and tag are the release
+  tag, the body is the generated `CHANGELOG.md`, a release candidate is a prerelease, a stable tag is not). It never
+  overwrites a release that exists for the tag and never deletes anything. `verify-native` then **downloads the
+  published archives** and compares their SHA-256 with the qualified checksums (comparing only the two `checksums.txt`
+  files, as before, would not have noticed a different archive behind an honest list). The tool and the verifier were
+  rehearsed against each other on a local fixture of the release API (`internal/repocheck`); the API calls follow the
+  Gitea 1.22-compatible API of Forgejo and are **not verified against a real Forgejo server** (RC0 checklist).
 * **Publication needs verification of the same commit.** Workflow `depends_on: [ci]` (never optional: Woodpecker
   documents that a dependency that was not built blocks the dependent) and `ci/ciguard`, which reads the forge's commit
   statuses for exactly `CI_COMMIT_SHA` and succeeds only when the newest `ci/woodpecker/tag/ci` status **that belongs to
@@ -118,7 +127,7 @@ Guarantees, and how each is enforced:
 ## Recovery after a partial publication
 
 `promote-image` (registries) and `release-forgejo` (Forgejo) are independent, so one can succeed while the other fails,
-and a pipeline re-run **rebuilds** the image with a different digest. Therefore:
+and a pipeline re-run **rebuilds** the image with a different digest (the archives are built again too; `ci/publishnative` refuses a tag that already has a release and never replaces one, and a failed run leaves a **draft** that is deleted in the forge before the step is run again). Therefore:
 
 * a re-run whose `promote-image` finds a tag that already resolves to other bytes **stops** ("refusing to overwrite a
   published tag"); it never replaces a published image;
@@ -156,7 +165,7 @@ repository) and re-run, or run `ci/verify-published.sh` by hand. The artifacts t
 |---|---|---|
 | `DOCKER_LOGIN`, `DOCKER_TOKEN` | `promote-image` | Docker Hub user and an access token with **read & write** on `skobkin/magnetico-web` only |
 | `GHCR_LOGIN`, `GHCR_TOKEN` | `promote-image` | GitHub user and a token with `write:packages` for `ghcr.io/skobkin/magnetico-web`; link the package to the `skobkin/magnetico-web` repository (the image's `org.opencontainers.image.source` label already points there) |
-| `GITEA_TOKEN` | `release-forgejo` | a Forgejo token that may create releases and upload assets in `skobkin/magnetico-web` (`write:repository`) |
+| `GITEA_TOKEN` | `release-forgejo` | a Forgejo token that may create and edit releases and upload assets in `skobkin/magnetico-web` (`write:repository`); sent only to the forge API in the `Authorization` header |
 
 **Registries.** Create `skobkin/magnetico-web` on Docker Hub (public) and let the first push create the GHCR package
 (then set it public and link it to the repository).
@@ -184,7 +193,7 @@ tar -C .ci/image -cf - . | docker load && sh ci/image-smoke.sh --platform linux/
 
 ## Native artifacts
 
-`goreleaser release --clean` (run by `release-forgejo`) produces `magnetico-web_<version>_linux_{amd64,arm64}.tar.gz`
+`goreleaser release --clean --skip=publish` (run once by `native-build`, uploaded unchanged by `release-forgejo`) produces `magnetico-web_<version>_linux_{amd64,arm64}.tar.gz`
 and `checksums.txt` (SHA-256), attached to the Forgejo release; each archive holds the `magnetico` executable,
 `COPYING`, `README.md`, `UPGRADE.md` and the licence files of the vendored front-end libraries under `licenses/` (the Swagger UI files and `uplot-LICENSE`; the image carries the same under `/usr/share/licenses/magnetico/`). A missing licence file fails `ci/native-smoke.sh`, `ci/image-smoke.sh` and `internal/repocheck`. The executables are static
 (`CGO_ENABLED=0`), built with `-trimpath` and no build tags, with the version, commit, Go version and platform printed by
