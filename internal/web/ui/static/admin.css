@@ -14,8 +14,6 @@
     --chart-grid:#dce6e1; --chart-text:#526c6a; --chart-partial:rgba(70,90,85,0.10);
   }
 }
-.status.warning { color:var(--chart-2); }
-.status.error { color:var(--danger); }
 .chart-asof { margin:4px 0 0; color:var(--subtext); font-size:.8rem; }
 .chart-asof.stale { color:var(--chart-2); }
 .chart-notes { margin:4px 0 0; color:var(--subtext); font-size:.8rem; }
@@ -23,6 +21,11 @@
 .chart-card { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); padding:12px 14px 14px; min-width:0; }
 .chart-card header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
 .chart-card h3 { margin:0; font-size:1rem; }
+.chart-card.wide { grid-column:1 / -1; }
+/* A fixed template, not auto-fit: plots are drawn one by one as they are added, and each
+   must be measured at its final width (with auto-fit the first one would take the whole row). */
+.chart-card.wide .chart-plots { display:grid; gap:0 20px; grid-template-columns:repeat(2, minmax(0, 1fr)); }
+@media (max-width:900px) { .chart-card.wide .chart-plots { grid-template-columns:minmax(0, 1fr); } }
 .chart-controls { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
 .chart-controls .btn[aria-pressed="true"] { background:var(--accent-bg); border-color:var(--accent); }
 .chart-controls .btn[disabled] { opacity:.45; cursor:default; }

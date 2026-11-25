@@ -118,12 +118,16 @@ func optTS(t *time.Time) string {
 
 // ---- crawlers ------------------------------------------------------------------------------
 
+// crawlerView is one row of the crawlers list. The list stays narrow: name,
+// state, last contact and the main totals. Counts and sizes are compact with
+// the exact value in a tooltip; times are relative with the UTC time in one.
 type crawlerView struct {
-	ID, Name, State, StateClass, Created, Rotated, Disabled string
-	Connected                                               bool
-	FirstSeen, LastSeen, LastIP, LastSubmit                 string
-	Received, Enqueued, Duplicate, Bytes                    string
-	ExistsRequests, ExistsHashes, Rejected                  string
+	ID, ShortID, Name, State, StateClass string
+	Disabled                             *tipped // nil: not disabled, or the time is unknown
+	Connected                            bool
+	LastSeen                             tipped
+	LastIP                               string
+	Received, Enqueued, Bytes, Rejected  tipped
 }
 
 type crawlersPage struct {
@@ -160,18 +164,23 @@ func (h *Handlers) crawlersPage(w http.ResponseWriter, r *http.Request) {
 		h.unavailable(w, r, err)
 		return
 	}
-	h.render(w, r, http.StatusOK, "admin_crawlers", buildCrawlersPage(h.chrome(r, "crawlers"), page, f))
+	h.render(w, r, http.StatusOK, "admin_crawlers", buildCrawlersPage(h.chrome(r, "crawlers"), page, f, time.Now()))
 }
 
-// buildCrawlersPage turns one page of the registry into its view.
-func buildCrawlersPage(c chrome, page stats.CrawlerPage, f stats.Freshness) crawlersPage {
+// buildCrawlersPage turns one page of the registry into its view; relative
+// times are measured from now (the moment the page is served).
+func buildCrawlersPage(c chrome, page stats.CrawlerPage, f stats.Freshness, now time.Time) crawlersPage {
 	pg := crawlersPage{chrome: c, StatsAvailable: page.StatsAvailable, Stale: f.Stale, FetchedAt: readAt(f.FetchedAt)}
 	if page.Ingest.State != stats.IngestOK {
 		pg.Problem = ingestProblem("crawler registry", page.Ingest)
 		return pg
 	}
 	for _, c := range page.Items {
-		v := crawlerView{ID: c.ID, Name: c.Name, Created: ts(c.CreatedAt), Rotated: optTS(c.TokenRotatedAt), Disabled: optTS(c.DisabledAt)}
+		v := crawlerView{ID: c.ID, ShortID: shortID(c.ID), Name: c.Name}
+		if c.DisabledAt != nil {
+			d := relTime(*c.DisabledAt, now)
+			v.Disabled = &d
+		}
 		// Four different things: disabled, inactive, never connected and unknown.
 		switch c.ActivityClass(page.StatsAvailable) {
 		case stats.ActivityActive:
@@ -187,9 +196,8 @@ func buildCrawlersPage(c chrome, page stats.CrawlerPage, f stats.Freshness) craw
 		}
 		if a := c.Activity; a != nil {
 			v.Connected = true
-			v.FirstSeen, v.LastSeen, v.LastIP, v.LastSubmit = ts(a.FirstSeen), ts(a.LastSeen), orDash(a.LastIP), optTS(a.LastSubmit)
-			v.Received, v.Enqueued, v.Duplicate, v.Bytes = groupDigits(a.Received), groupDigits(a.Enqueued), groupDigits(a.Duplicate), bytesIEC(a.BytesBody)
-			v.ExistsRequests, v.ExistsHashes, v.Rejected = groupDigits(a.ExistsRequests), groupDigits(a.ExistsHashes), groupDigits(a.Rejected)
+			v.LastSeen, v.LastIP = relTime(a.LastSeen, now), orDash(a.LastIP)
+			v.Received, v.Enqueued, v.Bytes, v.Rejected = tipCount(a.Received), tipCount(a.Enqueued), tipBytes(a.BytesBody), tipCount(a.Rejected)
 		}
 		pg.Items = append(pg.Items, v)
 	}

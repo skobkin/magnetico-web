@@ -209,7 +209,7 @@ func TestCrawlersPageShowsWhenItWasReadAndWarnsWhenItIsCached(t *testing.T) {
 	page := stats.CrawlerPage{Ingest: stats.IngestStatus{State: stats.IngestOK}, StatsAvailable: true,
 		Items: []stats.CrawlerRow{{ID: "11111111-1111-4111-8111-111111111111", Name: "alpha", Enabled: true, CreatedAt: read}}}
 	render := func(stale bool) string {
-		pg := buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, page, stats.Freshness{FetchedAt: read, Stale: stale})
+		pg := buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, page, stats.Freshness{FetchedAt: read, Stale: stale}, read)
 		rec := httptest.NewRecorder()
 		if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", pg); err != nil {
 			t.Fatal(err)
@@ -316,15 +316,17 @@ func TestCrawlersPageDistinguishesDisabledInactiveNeverConnectedAndUnavailable(t
 	}}
 	render := func(p stats.CrawlerPage) string {
 		rec := httptest.NewRecorder()
-		if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, p, stats.Freshness{FetchedAt: read})); err != nil {
+		if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, p, stats.Freshness{FetchedAt: read}, read)); err != nil {
 			t.Fatal(err)
 		}
 		return rec.Body.String()
 	}
-	body := render(page)
-	for _, want := range []string{">active<", ">inactive<", ">never connected<", ">disabled<", "First seen", "2026-11-23 10:00", "Existence hashes", "4,242"} {
+	body := tableBody(t, render(page))
+	for _, want := range []string{">active<", ">inactive<", ">never connected<", ">disabled<",
+		// last seen is relative with the UTC time in the tooltip; the id is short with the full id in one
+		`title="2026-11-25 07:00 UTC">3h ago<`, `title="11111111-1111-4111-8111-111111111111">11111111<`, `title="7">7<`} {
 		if !strings.Contains(body, want) {
-			t.Errorf("the crawlers page lacks %q", want)
+			t.Errorf("the crawlers table lacks %q", want)
 		}
 	}
 	page.StatsAvailable = false
@@ -332,7 +334,7 @@ func TestCrawlersPageDistinguishesDisabledInactiveNeverConnectedAndUnavailable(t
 	for i := range page.Items {
 		page.Items[i].Activity = nil
 	}
-	body = render(page)
+	body = tableBody(t, render(page))
 	if !strings.Contains(body, ">activity unavailable<") || strings.Contains(body, ">never connected<") {
 		t.Error("with the statistics unreadable an enabled crawler's activity is unavailable, not 'never connected'")
 	}
@@ -373,11 +375,51 @@ func TestDisabledCrawlerWithUnreadableStatisticsSaysUnavailable(t *testing.T) {
 	page := stats.CrawlerPage{Ingest: stats.IngestStatus{State: stats.IngestOK}, StatsAvailable: false,
 		Items: []stats.CrawlerRow{{ID: "11111111-1111-4111-8111-111111111111", Name: "off", Enabled: false, CreatedAt: read}}}
 	rec := httptest.NewRecorder()
-	if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, page, stats.Freshness{FetchedAt: read})); err != nil {
+	if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, page, stats.Freshness{FetchedAt: read}, read)); err != nil {
 		t.Fatal(err)
 	}
-	body := rec.Body.String()
+	body := tableBody(t, rec.Body.String())
 	if strings.Contains(body, "no activity recorded") || !strings.Contains(body, "activity unavailable") {
 		t.Fatalf("a disabled crawler with unreadable statistics must say 'activity unavailable':\n%s", body)
+	}
+}
+
+// tableBody is the rows of the page's table: the state legend below it shows
+// every state too, so assertions about rows must not look at the whole page.
+func tableBody(t *testing.T, page string) string {
+	t.Helper()
+	i, j := strings.Index(page, "<tbody>"), strings.Index(page, "</tbody>")
+	if i < 0 || j < i {
+		t.Fatalf("no table body in:\n%s", page)
+	}
+	return page[i:j]
+}
+
+func TestCompactCountsKeepTheExactValueInTheTooltip(t *testing.T) {
+	for n, want := range map[int64]string{0: "0", 999: "999", 1000: "1k", 1476: "1.48k", 999_994: "999.99k", 999_999: "1M",
+		76_541_366: "76.54M", 2_000_000_000: "2G", -1476: "-1.48k", 1 << 62: "4.61E"} {
+		if got := compactCount(n); got != want {
+			t.Errorf("compactCount(%d) = %q, want %q", n, got, want)
+		}
+	}
+	if got := tipCount(76_541_366); got != (tipped{Text: "76.54M", Title: "76,541,366"}) {
+		t.Errorf("tipCount = %+v", got)
+	}
+	if got := tipBytes(1536); got != (tipped{Text: "1.5 KiB", Title: "1,536 bytes"}) {
+		t.Errorf("tipBytes = %+v", got)
+	}
+}
+
+func TestRelativeTimesKeepTheUTCTimeInTheTooltip(t *testing.T) {
+	now := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	for ago, want := range map[time.Duration]string{0: "just now", 59 * time.Second: "just now", time.Minute: "1m ago",
+		59 * time.Minute: "59m ago", time.Hour: "1h ago", 47 * time.Hour: "47h ago", 48 * time.Hour: "2d ago", 20*24*time.Hour + time.Hour: "20d ago",
+		-time.Minute: "2026-11-25 10:01 UTC"} {
+		if got := relTime(now.Add(-ago), now); got.Text != want {
+			t.Errorf("relTime(-%v) = %q, want %q", ago, got.Text, want)
+		}
+	}
+	if got := relTime(now.Add(-3*time.Hour), now).Title; got != "2026-11-25 07:00 UTC" {
+		t.Errorf("tooltip = %q", got)
 	}
 }

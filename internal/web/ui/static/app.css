@@ -19,6 +19,7 @@
   --danger:#f59d9a;
   --danger-bg:#342322;
   --success:#90d8b6;
+  --warning:#e6b450;
   --focus:#8fddf5;
   --shadow:0 12px 42px #0004;
   --radius:8px;
@@ -40,6 +41,7 @@
   --danger:#b23e3e;
   --danger-bg:#fff0ef;
   --success:#08654a;
+  --warning:#8a5a00;
   --focus:#096a92;
   --shadow:0 12px 32px #22332210;
 }
@@ -61,6 +63,7 @@
     --danger:#b23e3e;
     --danger-bg:#fff0ef;
     --success:#08654a;
+    --warning:#8a5a00;
     --focus:#096a92;
     --shadow:0 12px 32px #22332210;
   }
@@ -1489,6 +1492,20 @@ a.table-sort:hover{text-decoration:none}
 .btn[disabled],.btn[aria-disabled="true"]{opacity:.5;pointer-events:none}
 /* Tables of the administrator section are wider than a phone: they scroll inside their card instead of widening the page. */
 .table-wrap{overflow-x:auto;max-width:100%}
+/* Administrator tables size their columns to the content (the torrent list keeps its fixed layout): an id column stays narrow, cells do not wrap except long free text. */
+.data-table.admin-table{table-layout:auto}
+.admin-table td{white-space:nowrap}
+.admin-table td.wrap{white-space:normal;overflow-wrap:anywhere;min-width:16em}
+.admin-table .col-id{width:1%}
+.table-wrap + .subtext{margin:12px 0 0}
+.admin-table .cell-sub{display:block;margin-top:2px;color:var(--muted);font-size:11px}
+/* A value whose exact form is in its tooltip. */
+.tip[title]{text-decoration:underline dotted var(--muted);text-underline-offset:3px;cursor:help}
+.legend{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 14px;align-items:baseline;margin:0}
+.legend dt{margin:0}
+.legend dd{margin:0;color:var(--subtext)}
+/* Cards that follow each other keep the page rhythm, also into and out of a two-column row. */
+.section-card + .profile-grid{margin-top:15px}
 .tabs{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto;scrollbar-width:thin}
 .tab{white-space:nowrap;color:var(--subtext);padding:9px 14px;background:transparent;border:0;border-bottom:2px solid transparent;font-weight:600;text-decoration:none}
 .tab:hover{color:var(--text);text-decoration:none}
@@ -1500,6 +1517,8 @@ a.table-sort:hover{text-decoration:none}
 .kv-label{color:var(--muted)}
 .status{color:var(--success);font-size:11px;font-weight:650;display:inline-flex;align-items:center;gap:4px}
 .status.pending{color:var(--subtext)}
+.status.warning{color:var(--warning)}
+.status.error{color:var(--danger)}
 .profile-actions{margin-top:12px}
 .inline-panel{border:1px solid var(--border);border-radius:8px;background:var(--raised);padding:13px;margin-top:12px}
 .inline-panel > summary{cursor:pointer;font-weight:620}

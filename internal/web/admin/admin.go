@@ -120,12 +120,20 @@ type rateRow struct {
 	ExcludedNotice []string
 }
 
-type chartCard struct{ Key, Title string }
+// chartCard is one chart group. A wide card spans the whole grid row and lays
+// its plots out side by side.
+type chartCard struct {
+	Key, Title string
+	Wide       bool
+}
 
 // charts are the five chart groups of the dashboard (docs/specs/statistics-v1.md §9).
+// The two-plot groups (queue, storage) share a row, and traffic, which has six
+// plots, comes last at full width, so no card leaves a hole beside a taller one.
 var charts = []chartCard{
-	{stats.ChartThroughput, "Throughput"}, {stats.ChartOutcomes, "Outcomes of processing"}, {stats.ChartQueue, "Queue and quota"},
-	{stats.ChartTraffic, "Traffic and efficiency"}, {stats.ChartStorage, "Storage"},
+	{Key: stats.ChartThroughput, Title: "Throughput"}, {Key: stats.ChartOutcomes, Title: "Outcomes of processing"},
+	{Key: stats.ChartQueue, Title: "Queue and quota"}, {Key: stats.ChartStorage, Title: "Storage"},
+	{Key: stats.ChartTraffic, Title: "Traffic and efficiency", Wide: true},
 }
 
 type overviewPage struct {

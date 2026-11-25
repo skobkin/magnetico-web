@@ -7,9 +7,9 @@
 {{if .Problem}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>{{.Problem}}</span></div>{{else}}
 <section class="section-card"><div class="section-card-body">
 {{if .Items}}
-<div class="table-wrap"><table class="data-table">
-<thead><tr><th class="num">Id</th><th>Reason</th><th>Detail</th><th class="num">Attempts</th><th class="num">Size</th><th>Received</th><th>Quarantined</th><th>Age</th></tr></thead>
-<tbody>{{range .Items}}<tr><td class="num">{{.ID}}</td><td>{{.Reason}}</td><td>{{.Detail}}</td><td class="num">{{.Attempts}}</td><td class="num">{{.Size}}</td><td>{{.Received}}</td><td>{{.Quarantined}}</td><td>{{.Age}}</td></tr>{{end}}</tbody>
+<div class="table-wrap"><table class="data-table admin-table">
+<thead><tr><th class="num col-id">Id</th><th>Reason</th><th>Detail</th><th class="num">Attempts</th><th class="num">Size</th><th>Received</th><th>Quarantined</th><th>Age</th></tr></thead>
+<tbody>{{range .Items}}<tr><td class="num">{{.ID}}</td><td>{{.Reason}}</td><td class="wrap">{{.Detail}}</td><td class="num">{{.Attempts}}</td><td class="num">{{.Size}}</td><td>{{.Received}}</td><td>{{.Quarantined}}</td><td>{{.Age}}</td></tr>{{end}}</tbody>
 </table></div>
 {{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Older</a></p>{{end}}
 {{else}}<p class="subtext">The quarantine is empty.</p>{{end}}

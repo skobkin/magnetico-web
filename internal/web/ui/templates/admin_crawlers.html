@@ -9,15 +9,25 @@
 {{if not .StatsAvailable}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>Statistics are unavailable, so only the registry is shown (no activity).</span></div>{{end}}
 <section class="section-card"><div class="section-card-body">
 {{if .Items}}
-<div class="table-wrap"><table class="data-table">
-<thead><tr><th>Name</th><th>State</th><th>Id</th><th>Registered</th><th>Token rotated</th><th>First seen</th><th>Last seen</th><th>Last address</th><th>Last submit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Duplicates</th><th class="num">Request bytes</th><th class="num">Existence requests</th><th class="num">Existence hashes</th><th class="num">Rejected requests</th></tr></thead>
-<tbody>{{range .Items}}<tr><td>{{.Name}}</td><td><span class="status {{.StateClass}}">{{.State}}</span>{{if .Disabled}}{{if ne .Disabled "—"}} <span class="subtext">since {{.Disabled}}</span>{{end}}{{end}}</td><td><code>{{.ID}}</code></td><td>{{.Created}}</td><td>{{.Rotated}}</td>
-{{if .Connected}}<td>{{.FirstSeen}}</td><td>{{.LastSeen}}</td><td>{{.LastIP}}</td><td>{{.LastSubmit}}</td><td class="num">{{.Received}}</td><td class="num">{{.Enqueued}}</td><td class="num">{{.Duplicate}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.ExistsRequests}}</td><td class="num">{{.ExistsHashes}}</td><td class="num">{{.Rejected}}</td>
-{{else}}<td colspan="11" class="subtext">{{if not $.StatsAvailable}}activity unavailable{{else if eq .State "disabled"}}no activity recorded{{else if eq .State "activity unavailable"}}activity unavailable{{else}}never connected{{end}}</td>{{end}}</tr>{{end}}</tbody>
+<div class="table-wrap"><table class="data-table admin-table">
+<thead><tr><th>Crawler</th><th>State</th><th>Last seen</th><th>Last address</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Request bytes</th><th class="num">Rejected requests</th></tr></thead>
+<tbody>{{range .Items}}<tr><td>{{.Name}}<code class="cell-sub tip" title="{{.ID}}">{{.ShortID}}</code></td><td><span class="status {{.StateClass}}">{{.State}}</span>{{with .Disabled}}<span class="cell-sub">since <span class="tip" title="{{.Title}}">{{.Text}}</span></span>{{end}}</td>
+{{if .Connected}}<td><span class="tip" title="{{.LastSeen.Title}}">{{.LastSeen.Text}}</span></td><td>{{.LastIP}}</td>{{with .Received}}<td class="num"><span class="tip" title="{{.Title}}">{{.Text}}</span></td>{{end}}{{with .Enqueued}}<td class="num"><span class="tip" title="{{.Title}}">{{.Text}}</span></td>{{end}}{{with .Bytes}}<td class="num"><span class="tip" title="{{.Title}}">{{.Text}}</span></td>{{end}}{{with .Rejected}}<td class="num"><span class="tip" title="{{.Title}}">{{.Text}}</span></td>{{end}}
+{{else}}<td colspan="6" class="subtext">{{if not $.StatsAvailable}}activity unavailable{{else if eq .State "disabled"}}no activity recorded{{else if eq .State "activity unavailable"}}activity unavailable{{else}}never connected{{end}}</td>{{end}}</tr>{{end}}</tbody>
 </table></div>
+<p class="subtext">Totals since the crawler first connected. Hover a value for its exact figure, a time for the UTC date, an id for the full id.</p>
 {{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Next page</a></p>{{end}}
 {{else}}<p class="subtext">No crawler is registered. Add one with <code>magnetico ingest crawler add &lt;name&gt;</code>.</p>{{end}}
 </div></section>
-<p class="subtext">Active: enabled and an authenticated request seen within the last 15 minutes; inactive: connected before, not recently; never connected: no request ever recorded; disabled: refused with 401; activity unavailable: the statistics cannot be read. Read at {{.FetchedAt}} · credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
+<section class="section-card"><div class="section-card-head"><div><h2>States</h2></div></div><div class="section-card-body">
+<dl class="legend">
+<dt><span class="status ok">active</span></dt><dd>Enabled, and an authenticated request was seen within the last 15 minutes.</dd>
+<dt><span class="status warning">inactive</span></dt><dd>Still enabled and connected before, but not within the last 15 minutes.</dd>
+<dt><span class="status pending">never connected</span></dt><dd>Registered, but no request from it has ever been recorded.</dd>
+<dt><span class="status error">disabled</span></dt><dd>Its token is refused with 401.</dd>
+<dt><span class="status pending">activity unavailable</span></dt><dd>The statistics cannot be read, so its activity is unknown.</dd>
+</dl>
+</div></section>
+<p class="subtext">Read at {{.FetchedAt}} · credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
 {{end}}
 {{end}}

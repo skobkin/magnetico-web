@@ -129,6 +129,52 @@ func stateClass(s stats.State) string {
 	return "error"
 }
 
+// tipped is a short rendering of a value with its exact form for the tooltip.
+type tipped struct{ Text, Title string }
+
+// compactCount renders a count with a decimal suffix and at most two decimals
+// (1.48k, 76.54M); below 1,000 it is the plain number.
+func compactCount(n int64) string {
+	if n > -1000 && n < 1000 {
+		return strconv.FormatInt(n, 10)
+	}
+	v, i := float64(n), -1
+	for (v >= 999.995 || v <= -999.995) && i < 5 {
+		v /= 1000
+		i++
+	}
+	s := strings.TrimRight(strings.TrimRight(strconv.FormatFloat(v, 'f', 2, 64), "0"), ".")
+	return s + string("kMGTPE"[i])
+}
+
+// tipCount is a compact count with the exact, digit-grouped value as its tooltip.
+func tipCount(n int64) tipped { return tipped{Text: compactCount(n), Title: groupDigits(n)} }
+
+// tipBytes is a size in IEC units with the exact byte count as its tooltip.
+func tipBytes(n int64) tipped { return tipped{Text: bytesIEC(n), Title: groupDigits(n) + " bytes"} }
+
+// relTime renders how long ago t was, seen from now ("just now", "5m ago",
+// "7h ago", "20d ago"); the tooltip is the UTC time. A time in the future
+// (a clock difference) is shown as the time itself.
+func relTime(t, now time.Time) tipped {
+	abs := t.UTC().Format("2006-01-02 15:04 UTC")
+	d := now.Sub(t)
+	var s string
+	switch {
+	case d < 0:
+		s = abs
+	case d < time.Minute:
+		s = "just now"
+	case d < time.Hour:
+		s = fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		s = fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		s = fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+	return tipped{Text: s, Title: abs}
+}
+
 // fmtCount formats a registry count; a capped count is a lower bound ("10,000+").
 func fmtCount(m stats.Measured[int64], capped bool) string {
 	if !m.Valid {

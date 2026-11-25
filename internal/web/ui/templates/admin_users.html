@@ -8,8 +8,8 @@
 <input id="user-q" type="search" name="q" value="{{.Query}}" maxlength="64" autocomplete="off"> <button type="submit" class="btn small">Search</button>{{if .Query}} <a class="btn small ghost" href="/admin/users">Clear</a>{{end}}</form>
 <section class="section-card"><div class="section-card-body">
 {{if .Items}}
-<div class="table-wrap"><table class="data-table">
-<thead><tr><th class="num">Id</th><th>Username</th><th>Role</th><th>State</th><th>Email</th><th>Email state</th><th>Created</th><th>Last sign-in</th><th>Invited by</th></tr></thead>
+<div class="table-wrap"><table class="data-table admin-table">
+<thead><tr><th class="num col-id">Id</th><th>Username</th><th>Role</th><th>State</th><th>Email</th><th>Email state</th><th>Created</th><th>Last sign-in</th><th>Invited by</th></tr></thead>
 <tbody>{{range .Items}}<tr><td class="num">{{.ID}}</td><td>{{.Username}}</td><td>{{.Role}}</td><td><span class="status {{.ActiveClass}}">{{.Active}}</span></td><td>{{.Email}}</td><td>{{.EmailState}}</td><td>{{.Created}}</td><td>{{.LastLogin}}</td><td>{{.InvitedBy}}</td></tr>{{end}}</tbody>
 </table></div>
 {{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Next page</a></p>{{end}}

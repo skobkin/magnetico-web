@@ -18,7 +18,7 @@
 
 <section class="section-card" id="instances"><div class="section-card-head"><div><h2>Ingest instances</h2><p class="subtext">Heartbeat of each running ingest process. Totals count since that process started.</p></div></div><div class="section-card-body">
 {{if .Instances}}
-<div class="table-wrap"><table class="data-table">
+<div class="table-wrap"><table class="data-table admin-table">
 <thead><tr><th>Instance</th><th>State</th><th>Started</th><th>Consumer</th><th class="num">In flight</th><th class="num">Received</th><th class="num">Acknowledged</th><th class="num">Settled</th><th>Notes</th></tr></thead>
 <tbody>{{range .Instances}}<tr><td><code>{{.ID}}</code></td><td><span class="status {{.StateClass}}">{{.State}}</span></td><td>{{.Started}}</td><td>{{if .Owns}}owner{{else}}standby{{end}}</td><td class="num">{{.InFlight}}</td><td class="num">{{.Received}}</td><td class="num">{{.Acknowledged}}</td><td class="num">{{.Settled}}</td><td>{{range .Warnings}}<span class="status warning">{{.}}</span> {{end}}</td></tr>{{end}}</tbody>
 </table></div>
@@ -26,12 +26,12 @@
 </div></section>
 
 <section class="section-card" id="rates"><div class="section-card-head"><div><h2>Current rates</h2><p class="subtext">Per second (last minute), per minute (last 15 minutes) and per hour (last hour), summed over the instances that reported recently and observed at least half of the window.</p></div></div><div class="section-card-body">
-<div class="table-wrap"><table class="data-table">
+<div class="table-wrap"><table class="data-table admin-table">
 <caption class="subtext">Records</caption>
 <thead><tr><th>Window</th><th>Unit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Acknowledged</th><th class="num">Settled</th><th class="num">New torrents</th><th class="num">Instances</th></tr></thead>
 <tbody>{{range .Rates}}<tr><td>{{.Window}}</td><td>{{.Unit}}</td><td class="num">{{index .V "received"}}</td><td class="num">{{index .V "enqueued"}}</td><td class="num">{{index .V "acknowledged"}}</td><td class="num">{{index .V "settled"}}</td><td class="num">{{index .V "torrents_created"}}</td><td class="num">{{.Included}}</td></tr>{{range .ExcludedNotice}}<tr><td colspan="8" class="subtext">Not included: {{.}}</td></tr>{{end}}{{end}}</tbody>
 </table></div>
-<div class="table-wrap"><table class="data-table">
+<div class="table-wrap"><table class="data-table admin-table">
 <caption class="subtext">Requests and authentication</caption>
 <thead><tr><th>Window</th><th>Unit</th><th class="num">Submit requests</th><th class="num">Existence requests</th><th class="num">Existence hashes</th><th class="num">Request bytes</th><th class="num">Authentication database lookups</th><th class="num">Authentication cache hit rate</th><th class="num">Authentication busy refusals</th><th class="num">Authentication storage failures</th></tr></thead>
 <tbody>{{range .Rates}}<tr><td>{{.Window}}</td><td>{{.Unit}}</td><td class="num">{{index .V "submit_requests"}}</td><td class="num">{{index .V "exists_requests"}}</td><td class="num">{{index .V "exists_hashes"}}</td><td class="num">{{index .V "bytes_body"}}</td><td class="num">{{index .V "auth_db_lookups"}}</td><td class="num">{{index .V "auth_hit_rate"}}</td><td class="num">{{index .V "auth_busy"}}</td><td class="num">{{index .V "auth_storage_failures"}}</td></tr>{{end}}</tbody>
@@ -73,7 +73,7 @@
 
 <section class="section-card" id="charts"><div class="section-card-head"><div><h2>History</h2><p class="subtext">Counts per bucket and ratios computed from sums, in UTC. Shaded buckets are partial: the process was observed for only part of them, or they are still open. Gaps are periods without data, not zeros.</p></div></div><div class="section-card-body">
 <div class="chart-grid">
-{{range .Charts}}<article class="chart-card" data-chart="{{.Key}}" aria-labelledby="chart-{{.Key}}-title">
+{{range .Charts}}<article class="chart-card{{if .Wide}} wide{{end}}" data-chart="{{.Key}}" aria-labelledby="chart-{{.Key}}-title">
 <header><h3 id="chart-{{.Key}}-title">{{.Title}}</h3><div class="chart-controls" role="group" aria-label="Period of {{.Title}}"></div></header>
 <p class="chart-status" role="status" aria-live="polite">Loading…</p>
 <div class="chart-plots"></div>

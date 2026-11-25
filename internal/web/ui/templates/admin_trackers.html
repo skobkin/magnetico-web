@@ -6,9 +6,9 @@
 {{template "admintabs" .}}
 <section class="section-card"><div class="section-card-body">
 {{if .Items}}
-<div class="table-wrap"><table class="data-table">
-<thead><tr><th class="num">Position</th><th>URL</th></tr></thead>
-<tbody>{{range .Items}}<tr><td class="num">{{.Position}}</td><td>{{.URL}}</td></tr>{{end}}</tbody>
+<div class="table-wrap"><table class="data-table admin-table">
+<thead><tr><th class="num col-id">Position</th><th>URL</th></tr></thead>
+<tbody>{{range .Items}}<tr><td class="num">{{.Position}}</td><td class="wrap">{{.URL}}</td></tr>{{end}}</tbody>
 </table></div>
 {{else}}<p class="subtext">The tracker list is empty.</p>{{end}}
 </div></section>
