@@ -1,0 +1,42 @@
+# Disposable local Traefik for the RC0 automated acceptance (static configuration).
+# TLS with a throwaway test CA; only the two configured host names are routed.
+entryPoints:
+  web:
+    address: ":8080"
+    http:
+      redirections:
+        entryPoint: { to: websecure, scheme: https }
+  websecure:
+    address: ":8443"
+    http:
+      tls: {}
+    transport:
+      respondingTimeouts:
+        readTimeout: 60s      # request body read (uploads are small); Traefik's default
+        writeTimeout: 120s    # > the 70 s search write deadline + 20 s (web-deployment.md §3)
+        idleTimeout: 180s
+    # Clients connect directly: no hop in front of Traefik is trusted, so a client's own
+    # X-Forwarded-For is not believed (Traefik replaces it with the peer address).
+    forwardedHeaders:
+      insecure: false
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: false
+log:
+  level: INFO
+accessLog:
+  filePath: /logs/access.json
+  format: json
+  fields:
+    defaultMode: keep
+    names:
+      # The path carries credentials: RSS feed tokens in the query string, one-time
+      # registration/reset/verification links in path segments. Traefik cannot mask a
+      # query string or a path segment selectively, so the whole path is redacted.
+      RequestPath: redact
+    headers:
+      defaultMode: drop       # never Authorization, Cookie or api-token
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false

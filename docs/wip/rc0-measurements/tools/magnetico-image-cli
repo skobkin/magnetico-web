@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# `magnetico` operator CLI through a container image (RC0 automated acceptance): used as
+# MAGNETICO_BENCH_BIN by the load harness in container mode, so that every operator
+# command (schema init, user add/set-password/set-role, ingest crawler add/rotate/disable)
+# is the published image too. Every MAGNETICO_* variable of the caller is forwarded by
+# name (its value travels in the environment, never on a command line). The container
+# uses the host network so that the harness's loopback DSN reaches PostgreSQL; it opens
+# no listener.
+#   RC0_CLI_IMAGE   the image reference (required; not a MAGNETICO_* name on purpose:
+#                   the harness strips those from the environment it passes)
+set -euo pipefail
+img="${RC0_CLI_IMAGE:?RC0_CLI_IMAGE is required}"
+envargs=()
+while IFS='=' read -r k _; do
+	[[ $k == MAGNETICO_* ]] && envargs+=(-e "$k")
+done < <(env)
+tty=()
+[ -t 0 ] && [ -t 1 ] && tty=(-t)
+exec /usr/bin/docker run --rm -i "${tty[@]}" --network host --read-only --cap-drop ALL \
+	--security-opt no-new-privileges:true --log-driver none "${envargs[@]}" "$img" "$@"

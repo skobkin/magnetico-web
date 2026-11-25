@@ -71,6 +71,11 @@ type harnessScoped struct {
 	pid    int
 	cg     string
 	start  time.Time
+
+	// container mode (container_harness_test.go): the service is this container
+	container string
+	codeCh    chan int
+	logsDone  chan struct{}
 }
 
 var harnessScopeSeq atomic.Int64
@@ -78,6 +83,9 @@ var harnessScopeSeq atomic.Int64
 // startScoped runs bin inside its own memory- and CPU-limited systemd user scope.
 func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, bin string, args ...string) *harnessScoped {
 	t.Helper()
+	if benchImage() != "" {
+		return startContainer(t, name, mem, cpuPercent, env, args...)
+	}
 	unit := fmt.Sprintf("magnetico-w9-%s-%d-%d", name, os.Getpid(), harnessScopeSeq.Add(1))
 	sd := []string{"systemd-run", "--user", "--scope", "--quiet", "--collect", "--unit=" + unit,
 		"-p", "MemoryMax=" + mem, "-p", "MemorySwapMax=0", "-p", "CPUQuota=" + strconv.Itoa(cpuPercent) + "%", bin}
@@ -104,8 +112,19 @@ func startScoped(t *testing.T, name, mem string, cpuPercent int, env []string, b
 	return s
 }
 
+// fds counts the service's open descriptors (-1 when unreadable).
+func (s *harnessScoped) fds() int {
+	if s.container != "" {
+		return containerFDs(s.container)
+	}
+	return countFDs(s.pid)
+}
+
 // stop sends SIGTERM and returns the exit code (-1 on timeout).
 func (s *harnessScoped) stop(within time.Duration) int {
+	if s.container != "" {
+		return s.stopContainer(within)
+	}
 	_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	select {
 	case err := <-s.exited:
@@ -187,7 +206,7 @@ func startSampler(procs []*harnessScoped, dsn string) *harnessSampler {
 			for _, p := range s.procs {
 				rss, _, th := readStatusOf(p.pid)
 				s.samples = append(s.samples, harnessSample{T: now, Proc: p.name, RSSMiB: float64(rss) / (1 << 20),
-					CgroupMiB: float64(readUint(p.cg+"/memory.current")) / (1 << 20), CPUSec: cgCPUSeconds(p.cg), Threads: th, FDs: countFDs(p.pid)})
+					CgroupMiB: float64(readUint(p.cg+"/memory.current")) / (1 << 20), CPUSec: cgCPUSeconds(p.cg), Threads: th, FDs: p.fds()})
 			}
 			s.mu.Unlock()
 			s.mu.Lock()
@@ -814,7 +833,12 @@ func newHarnessEnv(t *testing.T) *harnessEnv {
 	if v := os.Getenv("MAGNETICO_BENCH_TAGS"); v != "" {
 		tags = []string{v}
 	}
-	bin := testkit.Binary(t, tags...)
+	var bin string
+	if v := os.Getenv("MAGNETICO_BENCH_BIN"); v != "" && benchImage() != "" {
+		bin = v // container mode: the operator commands run the image under test as well
+	} else {
+		bin = testkit.Binary(t, tags...)
+	}
 	e := &harnessEnv{t: t, bin: bin, dsn: dsn, outDir: out, label: envOr("MAGNETICO_BENCH_LABEL", "w9"),
 		webMem: envOr("MAGNETICO_BENCH_WEB_MEM", "1G"), goMem: envOr("MAGNETICO_BENCH_WEB_GOMEMLIMIT", "768MiB")}
 	harnessAccounts(t, bin, dsn)
@@ -833,7 +857,7 @@ func (e *harnessEnv) begin() {
 		// The web process started this long before the sampler's clock: add it to a
 		// gctrace timestamp to compare it with a sample time.
 		"web_age_at_sampler_start_s": time.Since(e.web.start).Seconds(),
-		"machine":                    benchkit.Describe().String(), "web_mem": e.webMem, "web_gomemlimit": e.goMem, "git": gitSHA(),
+		"machine":                    benchkit.Describe().String(), "web_mem": e.webMem, "web_gomemlimit": e.goMem, "git": gitSHA(), "image": benchImage(),
 		"pools": map[string]int{"small": len(e.pools.small), "medium": len(e.pools.medium), "large": len(e.pools.large), "huge": len(e.pools.huge)},
 	})
 }

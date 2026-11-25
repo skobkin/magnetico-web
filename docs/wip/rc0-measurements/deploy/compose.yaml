@@ -1,0 +1,97 @@
+# RC0 automated acceptance: the primary deployment of the published image against the
+# migrated 10 % real-data sample. Disposable, loopback-only (127.0.0.1:18443 for TLS).
+# Secrets live in env files outside the repository (RC0_SECRETS, chmod 600).
+name: rc0
+x-image: &image docker.io/skobkin/magnetico-web@sha256:8f4ee86d92cc5fe42144851d80eb0106729eb9da053186d78c4d14cfc19a2ef7
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  logging:
+    driver: local
+    options: { max-size: 20m, max-file: "5" }
+services:
+  web:
+    <<: *hardening
+    image: *image
+    container_name: rc0-web
+    command: ["web"]
+    restart: unless-stopped
+    environment:
+      MAGNETICO_WEB_LISTEN: 0.0.0.0:8081
+      MAGNETICO_WEB_PUBLIC_URL: https://magnet.rc0.test:18443
+      MAGNETICO_WEB_TRUSTED_PROXIES: 172.19.0.10/32
+      MAGNETICO_WEB_SITE_TITLE: Magnetico RC0
+      GOMEMLIMIT: 768MiB
+      GODEBUG: gctrace=1
+    env_file: ["${RC0_SECRETS}/web.env"]
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 2
+    stop_grace_period: 45s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks: [rc0-net, rc0-edge]
+  ingest:
+    <<: *hardening
+    image: *image
+    container_name: rc0-ingest
+    command: ["ingest"]
+    restart: unless-stopped
+    environment:
+      MAGNETICO_INGEST_LISTEN: 0.0.0.0:8080
+      MAGNETICO_INGEST_TRUSTED_PROXIES: 172.19.0.10/32
+      GOMEMLIMIT: 256MiB
+      GODEBUG: gctrace=1
+    env_file: ["${RC0_SECRETS}/ingest.env"]
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8080"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [rc0-net, rc0-edge]
+  ingest2:
+    <<: *hardening
+    image: *image
+    container_name: rc0-ingest2
+    command: ["ingest"]
+    profiles: [two-ingest]
+    environment:
+      MAGNETICO_INGEST_LISTEN: 0.0.0.0:8080
+      MAGNETICO_INGEST_TRUSTED_PROXIES: 172.19.0.10/32
+      GOMEMLIMIT: 256MiB
+    env_file: ["${RC0_SECRETS}/ingest.env"]
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1
+    stop_grace_period: 60s
+    networks: [rc0-net, rc0-edge]
+  traefik:
+    image: traefik:v3.8.0@sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
+    container_name: rc0-traefik
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports: ["127.0.0.1:18443:8443", "127.0.0.1:18080:8080"]
+    volumes:
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - ${RC0_DEPLOY}/traefik/certs:/certs:ro
+      - ${RC0_DEPLOY}/traefik/logs:/logs
+    networks:
+      rc0-edge: { ipv4_address: 172.19.0.10 }
+    logging:
+      driver: local
+      options: { max-size: 20m, max-file: "3" }
+networks:
+  rc0-net: { external: true }
+  rc0-edge: { external: true }

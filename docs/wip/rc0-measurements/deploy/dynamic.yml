@@ -1,0 +1,35 @@
+# Disposable local Traefik for the RC0 automated acceptance (dynamic configuration).
+http:
+  routers:
+    magnetico-web:
+      rule: Host(`magnet.rc0.test`)
+      entryPoints: [websecure]
+      service: magnetico-web
+      tls: {}
+    magnetico-ingest:
+      rule: Host(`ingest.rc0.test`) && PathPrefix(`/api/ingest/v1`)
+      entryPoints: [websecure]
+      service: magnetico-ingest
+      tls: {}
+  services:
+    magnetico-web:
+      loadBalancer:
+        serversTransport: magnetico
+        servers:
+          - url: http://rc0-web:8081
+    magnetico-ingest:
+      loadBalancer:
+        serversTransport: magnetico
+        servers:
+          - url: http://rc0-ingest:8080
+  serversTransports:
+    magnetico:
+      forwardingTimeouts:
+        responseHeaderTimeout: 100s   # > 70 s search write deadline + 20 s
+        idleConnTimeout: 90s
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/server.crt
+        keyFile: /certs/server.key
