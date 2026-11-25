@@ -666,3 +666,20 @@ func TestDisabledCrawlerIdentityIsReturnedWithTheRefusalAndNeverCached(t *testin
 		t.Fatal("a disabled crawler was cached")
 	}
 }
+
+// BenchmarkAuthenticateCacheHit is the cost of authenticating one request whose
+// credential is cached (digest, cache lookup, expiry check): acceptance ≤ 1 µs.
+func BenchmarkAuthenticateCacheHit(b *testing.B) {
+	l := newLookup()
+	l.set(tok(1), rec("id-1", "a"))
+	a := newAuth(l, newClock())
+	if _, err := a.Authenticate(context.Background(), tok(1)); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := a.Authenticate(context.Background(), tok(1)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

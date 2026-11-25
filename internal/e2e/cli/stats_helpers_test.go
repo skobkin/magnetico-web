@@ -309,3 +309,38 @@ func (s *statsWorld) appRole() string {
 	u, _ := url.Parse(s.dsn)
 	return u.User.Username()
 }
+
+// sabotage breaks the statistics (and only them) while PostgreSQL stays healthy.
+type sabotage struct {
+	name  string
+	apply func(t *testing.T, s *statsWorld)
+}
+
+func sabotageCases() []sabotage {
+	return []sabotage{
+		{"schema dropped", func(t *testing.T, s *statsWorld) { sqlExec(t, s.dsn, `DROP SCHEMA magnetico_stats CASCADE`) }},
+		{"grants revoked", func(t *testing.T, s *statsWorld) {
+			sqlExec(t, s.dsn, `REVOKE ALL ON ALL TABLES IN SCHEMA magnetico_stats FROM `+s.appRole())
+			sqlExec(t, s.dsn, `REVOKE USAGE ON SCHEMA magnetico_stats FROM `+s.appRole())
+		}},
+		{"tables locked", func(t *testing.T, s *statsWorld) {
+			c, err := pgx.Connect(context.Background(), s.dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Exec(context.Background(), `BEGIN`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Exec(context.Background(), `LOCK TABLE magnetico_stats.agg_hour, magnetico_stats.ingest_instances, magnetico_stats.snapshot, magnetico_stats.crawler_activity, magnetico_stats.shared_state IN ACCESS EXCLUSIVE MODE`); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = c.Close(context.Background()) })
+		}},
+		{"statements exceed their timeout", func(t *testing.T, s *statsWorld) {
+			sqlExec(t, s.dsn, `CREATE FUNCTION magnetico_stats.slow() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(30); RETURN NEW; END $$`)
+			for _, tbl := range []string{"agg_hour", "ingest_instances", "snapshot", "crawler_activity", "shared_state"} {
+				sqlExec(t, s.dsn, `CREATE TRIGGER slow BEFORE INSERT OR UPDATE ON magnetico_stats.`+tbl+` FOR EACH ROW EXECUTE FUNCTION magnetico_stats.slow()`)
+			}
+		}},
+	}
+}

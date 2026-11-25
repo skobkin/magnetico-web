@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"io"
 	"net"
 	"net/http"
@@ -11,8 +10,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
 // Real binaries, loopback only, synthetic data: the end-to-end qualification
@@ -259,35 +256,7 @@ func (sb *submitter) paced(d time.Duration, per int, tick time.Duration, maxLate
 }
 
 func TestStatsFailuresNeverAffectAdmissionOrAuthentication(t *testing.T) {
-	cases := []struct {
-		name   string
-		break_ func(t *testing.T, s *statsWorld)
-	}{
-		{"schema dropped", func(t *testing.T, s *statsWorld) { sqlExec(t, s.dsn, `DROP SCHEMA magnetico_stats CASCADE`) }},
-		{"grants revoked", func(t *testing.T, s *statsWorld) {
-			sqlExec(t, s.dsn, `REVOKE ALL ON ALL TABLES IN SCHEMA magnetico_stats FROM `+s.appRole())
-			sqlExec(t, s.dsn, `REVOKE USAGE ON SCHEMA magnetico_stats FROM `+s.appRole())
-		}},
-		{"tables locked", func(t *testing.T, s *statsWorld) {
-			c, err := pgx.Connect(context.Background(), s.dsn)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := c.Exec(context.Background(), `BEGIN`); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := c.Exec(context.Background(), `LOCK TABLE magnetico_stats.agg_hour, magnetico_stats.ingest_instances, magnetico_stats.snapshot, magnetico_stats.crawler_activity, magnetico_stats.shared_state IN ACCESS EXCLUSIVE MODE`); err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = c.Close(context.Background()) })
-		}},
-		{"statements exceed their timeout", func(t *testing.T, s *statsWorld) {
-			sqlExec(t, s.dsn, `CREATE FUNCTION magnetico_stats.slow() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(30); RETURN NEW; END $$`)
-			for _, tbl := range []string{"agg_hour", "ingest_instances", "snapshot", "crawler_activity", "shared_state"} {
-				sqlExec(t, s.dsn, `CREATE TRIGGER slow BEFORE INSERT OR UPDATE ON magnetico_stats.`+tbl+` FOR EACH ROW EXECUTE FUNCTION magnetico_stats.slow()`)
-			}
-		}},
-	}
+	cases := sabotageCases()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -297,7 +266,7 @@ func TestStatsFailuresNeverAffectAdmissionOrAuthentication(t *testing.T) {
 			sb := &submitter{addr: s.addr, token: tok}
 			var maxHealthy, maxBroken atomic.Int64
 			sb.paced(6*time.Second, 20, 100*time.Millisecond, &maxHealthy)
-			c.break_(t, s)
+			c.apply(t, s)
 			// Long enough for heartbeats (10 s) and queue samples (10 s) to hit the failure.
 			sb.paced(30*time.Second, 20, 100*time.Millisecond, &maxBroken)
 			if bad := sb.unavailable.Load() + sb.other.Load() + sb.transport.Load() + sb.unauth.Load(); bad != 0 {

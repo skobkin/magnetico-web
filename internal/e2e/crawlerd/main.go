@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -20,12 +21,28 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/internal/crawler"
 	"github.com/skobkin/magnetico-web/internal/crawlqueue"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/persistence"
 )
+
+// fakeResult is a discovered hash without peers; discardSink and openGate are the
+// stubs behind the prechecker in the harness.
+type fakeResult struct{ h []byte }
+
+func (r fakeResult) InfoHash() [20]byte       { return [20]byte(r.h) }
+func (r fakeResult) PeerAddrs() []net.TCPAddr { return nil }
+
+type discardSink struct{}
+
+func (discardSink) TrySink(dht.Result) metadata.SinkStatus { return metadata.SinkStarted }
+
+type openGate struct{}
+
+func (openGate) Open() bool { return true }
 
 func hashOf(n int) []byte {
 	h := make([]byte, 20)
@@ -35,6 +52,17 @@ func hashOf(n int) []byte {
 
 // synth builds a record with a realistic size mix: ~70% single-file, ~25%
 // tens of files, ~5% hundreds of files.
+// stampNames makes every synthetic name carry its creation time, so a latency
+// measurement can read the enqueue time of each record off the wire.
+var stampNames bool
+
+func synthName(n int) string {
+	if stampNames {
+		return fmt.Sprintf("e2e torrent %d @%d", n, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("e2e torrent %d", n)
+}
+
 func synth(n int) metadata.Metadata {
 	files := 1
 	switch {
@@ -51,7 +79,7 @@ func synth(n int) metadata.Metadata {
 	for _, f := range fs {
 		total += f.Size
 	}
-	return metadata.Metadata{InfoHash: hashOf(n), Name: fmt.Sprintf("e2e torrent %d", n),
+	return metadata.Metadata{InfoHash: hashOf(n), Name: synthName(n),
 		TotalSize: uint64(total), DiscoveredOn: 1700000000 + int64(n), Files: fs}
 }
 
@@ -177,7 +205,11 @@ func main() {
 	poisonLarge := flag.Int("poison-large", 0, "append N over-limit (16 MiB + 4 KiB) records directly to the queue first")
 	hold := flag.Bool("hold", false, "keep running after everything is delivered")
 	maxBytes := flag.Int64("queue-max-bytes", 1<<30, "queue limit")
+	preRate := flag.Float64("precheck-rate", 0, "offer synthetic discovered hashes to the real prechecker at this rate per second (0 = none)")
+	preCount := flag.Int("precheck-count", 0, "number of synthetic hashes for -precheck-rate")
+	stamp := flag.Bool("stamp", false, "put the creation time (ns) into every record name")
 	flag.Parse()
+	stampNames = *stamp
 	token := os.Getenv("MAGNETICO_CRAWL_INGEST_TOKEN")
 
 	q, err := crawlqueue.Open(crawlqueue.Options{Dir: *dir, MaxBytes: *maxBytes, Logf: log.Printf})
@@ -233,6 +265,25 @@ func main() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); sender.Run(ctx, 5*time.Second) }()
+
+	if *preRate > 0 {
+		// The real prechecker (the exists endpoint's batching) fed with synthetic
+		// discoveries; the leech sink is a stub (nothing to fetch without a DHT).
+		pre := crawler.NewPrechecker(client, discardSink{}, openGate{}, counters, log.Printf)
+		go pre.Run(ctx)
+		go func() {
+			t := time.NewTicker(time.Duration(float64(time.Second) / *preRate))
+			defer t.Stop()
+			for i := 0; i < *preCount; i++ {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					pre.Offer(fakeResult{hashOf(20_000_000 + i)})
+				}
+			}
+		}()
+	}
 
 	drain := make(chan metadata.Metadata, 16)
 	producedAll := make(chan struct{})
