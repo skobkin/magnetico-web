@@ -59,6 +59,8 @@
     var rows = [["period"].concat((series.lines || []).map(function (l) { return l.label; })).join("\t")];
     (series.buckets || []).forEach(function (b, i) {
       var label = periodLabel(series.granularity, b) + (series.partial && series.partial[i] ? " (partial)" : "");
+      var ns = series.notes && series.notes[i];
+      if (ns && ns.length) label += " [" + ns.join(", ") + "]";
       var cells = (series.lines || []).map(function (l) {
         var v = l.values ? l.values[i] : null;
         return v === null || v === undefined ? "–" : fmtNumber(v);
@@ -101,8 +103,116 @@
     return "Could not load the data (HTTP " + status + ").";
   }
 
+  // ---- bars, defaults, notes, freshness (pure) ----------------------------------
+
+  // KIND_OF says how a chart draws its lines: the throughput chart as grouped bars
+  // (one bar per series in every bucket), the outcome chart's mutually exclusive
+  // settlements as stacked bars, everything else as lines.
+  var GROUPED_CHARTS = { throughput: true };
+
+  // visibleByDefault: the throughput chart opens with the series that show a
+  // backlog growing (enqueued against settled); received and acknowledged are one
+  // click away in the legend. Every other line is visible.
+  function visibleByDefault(chart, key) {
+    if (chart === "throughput") return key === "enqueued" || key === "settled";
+    return true;
+  }
+
+  // lineKind: "grouped", "stacked" or "line" for one line of a series.
+  function lineKind(series, line) {
+    if (series && GROUPED_CHARTS[series.chart] && !line.stack) return "grouped";
+    if (line.stack && series && series.chart === "outcomes") return "stacked";
+    return line.stack ? "area" : "line";
+  }
+
+  // bucketEnds: the end (unix seconds, exclusive) of every bucket, in UTC.
+  function bucketEnds(series) {
+    return (series.buckets || []).map(function (b) {
+      var d = new Date(Date.parse(b));
+      if (series.granularity === "day") d.setUTCHours(d.getUTCHours() + 1);
+      else if (series.granularity === "month") d.setUTCDate(d.getUTCDate() + 1);
+      else d.setUTCMonth(d.getUTCMonth() + 1);
+      return Math.floor(d.getTime() / 1000);
+    });
+  }
+
+  // barCentres: the x values of a bar plot, so that the cursor snaps to the bar
+  // it is over rather than to the nearest bucket start.
+  function barCentres(xs, ends) {
+    return xs.map(function (x, i) { return Math.floor((x + ends[i]) / 2); });
+  }
+
+  // groupedSlot: horizontal position and width (same unit as left/right) of bar
+  // `index` of `count` inside a bucket [left, right); 10 % margin on each side.
+  function groupedSlot(left, right, count, index) {
+    var span = right - left, inner = span * 0.8, slot = inner / Math.max(count, 1);
+    return [left + span * 0.1 + slot * index, slot * 0.9];
+  }
+
+  // stackedSlot: one bar over the middle 80 % of the bucket.
+  function stackedSlot(left, right) {
+    var span = right - left;
+    return [left + span * 0.1, span * 0.8];
+  }
+
+  // stackBases: for each stacked line, the cumulative total below it in every
+  // bucket (a missing value adds nothing and leaves its own bar missing).
+  function stackBases(lines, n) {
+    var running = new Array(n).fill(0), out = {};
+    lines.forEach(function (l, li) {
+      if (!l.stack) return;
+      var base = new Array(n);
+      for (var i = 0; i < n; i++) {
+        base[i] = running[i];
+        var v = l.values ? l.values[i] : null;
+        if (v !== null && v !== undefined) running[i] += v;
+      }
+      out[li] = base;
+    });
+    return out;
+  }
+
+  var NOTE_TEXT = {
+    approximate_counts: "queue or quarantine row counts are estimates in",
+    incomplete_breakdown: "the storage breakdown is incomplete (a measure was unavailable), so no stack is drawn, in",
+    reconciliation_mismatch: "the storage categories did not add up to the total in",
+    reconciliation_not_evaluated: "the storage categories could not be checked against the total (a measure was unavailable) in"
+  };
+
+  // notesText: one sentence per kind of note, with the number of buckets it
+  // concerns; "" when no bucket carries a note. Unknown codes are ignored.
+  function notesText(series) {
+    var counts = {}, order = [];
+    (series.notes || []).forEach(function (ns) {
+      (ns || []).forEach(function (n) {
+        if (!NOTE_TEXT[n]) return;
+        if (!counts[n]) { counts[n] = 0; order.push(n); }
+        counts[n]++;
+      });
+    });
+    return order.map(function (n) {
+      return "Note: " + NOTE_TEXT[n] + " " + counts[n] + (counts[n] === 1 ? " bucket." : " buckets.");
+    }).join(" ");
+  }
+
+  // freshnessCaption says when the data was read and, if the refresh failed, that
+  // it is the last known state. The time is the server's, in UTC.
+  function freshnessCaption(f) {
+    if (!f || !f.fetched_at) return { text: "", stale: false };
+    var t = String(f.fetched_at).replace("T", " ").replace(/Z$/, "").slice(0, 19) + " UTC";
+    if (f.stale) return { text: "The database could not be read just now: last known data, read at " + t + ".", stale: true };
+    return { text: "Data read at " + t + ".", stale: false };
+  }
+
+  // utcTzDate gives uPlot a clock that is UTC whatever the browser's time zone is.
+  function utcTzDate(uplot) {
+    return function (ts) { return uplot.tzDate(new Date(ts * 1e3), "Etc/UTC"); };
+  }
+
   var api = { hasData: hasData, bucketSeconds: bucketSeconds, groupsOf: groupsOf, plotData: plotData,
-    summaryText: summaryText, formatterFor: formatterFor, problemMessage: problemMessage, fmtBytes: fmtBytes, NO_DATA: NO_DATA };
+    summaryText: summaryText, formatterFor: formatterFor, visibleByDefault: visibleByDefault, lineKind: lineKind, bucketEnds: bucketEnds,
+    barCentres: barCentres, groupedSlot: groupedSlot, stackedSlot: stackedSlot, stackBases: stackBases, notesText: notesText,
+    freshnessCaption: freshnessCaption, utcTzDate: utcTzDate, periodLabel: periodLabel, problemMessage: problemMessage, fmtBytes: fmtBytes, NO_DATA: NO_DATA };
   if (typeof module === "object" && module && module.exports) { module.exports = api; }
   if (typeof document === "undefined" || !document.querySelectorAll) return;
 
@@ -145,7 +255,8 @@
     this.status = node.querySelector(".chart-status");
     this.holder = node.querySelector(".chart-plots");
     this.text = node.querySelector(".chart-text");
-    this.hidden = {};
+    this.asof = node.querySelector(".chart-asof");
+    this.notes = node.querySelector(".chart-notes");
     this.token = 0;
     this.buildControls();
   }
@@ -200,9 +311,26 @@
     });
   };
 
+  // showMeta states when the data was read, that it is the last known state after a
+  // failed refresh, and which buckets carry a note: cached data never reads as current.
+  Card.prototype.showMeta = function (series) {
+    var f = freshnessCaption(series.freshness), n = notesText(series);
+    if (this.asof) {
+      this.asof.textContent = f.text;
+      this.asof.className = "chart-asof" + (f.stale ? " stale" : "");
+      this.asof.hidden = !f.text;
+    }
+    if (this.notes) {
+      this.notes.textContent = n;
+      this.notes.hidden = !n;
+    }
+  };
+
   Card.prototype.fail = function (status) {
     this.destroy();
     this.text.textContent = "";
+    if (this.asof) { this.asof.textContent = ""; this.asof.hidden = true; }
+    if (this.notes) { this.notes.textContent = ""; this.notes.hidden = true; }
     var msg = status === 0 ? "Could not reach the server." : problemMessage(status);
     this.setStatus(msg, status !== 404);
   };
@@ -211,6 +339,7 @@
     this.series = series;
     this.destroy();
     this.text.textContent = summaryText(series);
+    this.showMeta(series);
     if (this.buttons) {
       var self = this;
       Object.keys(this.buttons).forEach(function (g) { self.buttons[g].setAttribute("aria-pressed", g === series.granularity ? "true" : "false"); });
@@ -231,38 +360,77 @@
     });
   };
 
+  // barPaths returns a uPlot paths function that draws one series as bars over its
+  // bucket: grouped (slot `index` of `count` in the bucket) or stacked (from the
+  // base below to its cumulative value). A missing value draws nothing.
+  function barPaths(kind, starts, ends, count, index, bases) {
+    return function (u, seriesIdx) {
+      var ys = u.data[seriesIdx], path = new root.Path2D(), zero = u.valToPos(0, "y", true);
+      for (var i = 0; i < starts.length; i++) {
+        var v = ys[i];
+        if (v === null || v === undefined) continue;
+        var left = u.valToPos(starts[i], "x", true), right = u.valToPos(ends[i], "x", true);
+        var slot = kind === "stacked" ? stackedSlot(left, right) : groupedSlot(left, right, count, index);
+        var top = u.valToPos(v, "y", true), bottom = bases ? u.valToPos(bases[i], "y", true) : zero;
+        path.rect(slot[0], Math.min(top, bottom), Math.max(slot[1], 1), Math.abs(bottom - top));
+      }
+      return { stroke: path, fill: path };
+    };
+  }
+
   Card.prototype.draw = function (canvas, series, xs, group, colors, offset) {
     var unit = group.lines[0].unit, fmt = formatterFor(unit), text = cssVar("--chart-text", "#adbfc5"), grid = cssVar("--chart-grid", "#2b393f");
-    var shade = cssVar("--chart-partial", "rgba(128,128,128,0.15)"), partial = series.partial || [], bands = [], uSeries = [{}];
+    var shade = cssVar("--chart-partial", "rgba(128,128,128,0.15)"), partial = series.partial || [];
+    var ends = bucketEnds(series), starts = xs;
+    var kinds = group.lines.map(function (l) { return lineKind(series, l); });
+    var barred = kinds.some(function (k) { return k === "grouped" || k === "stacked"; });
+    var plotXs = barred ? barCentres(xs, ends) : xs;
+    var bases = stackBases(group.lines, xs.length);
+    var groupedCount = kinds.filter(function (k) { return k === "grouped"; }).length, groupedIndex = 0;
+    var uSeries = [barred ? { value: function (u, v, si, i) { return i === null || i === undefined ? "–" : periodLabel(series.granularity, series.buckets[i]) + (partial[i] ? " (partial)" : ""); } } : {}], bands = [];
     group.lines.forEach(function (l, i) {
-      var c = colors[(offset + i) % colors.length];
-      uSeries.push({ label: l.label, stroke: c, width: 2, fill: l.stack ? rgba(c, 0.35) : undefined, points: { show: xs.length <= 40 },
-        spanGaps: false, value: function (u, v) { return v === null || v === undefined ? "–" : fmt(v); } });
-      if (l.stack && i > 0 && group.lines[i - 1].stack) bands.push({ series: [i + 1, i], fill: rgba(c, 0.35) });
+      var c = colors[(offset + i) % colors.length], kind = kinds[i];
+      var o = { label: l.label, stroke: c, width: 2, show: visibleByDefault(series.chart, l.key), spanGaps: false,
+        value: function (u, v) { return v === null || v === undefined ? "–" : fmt(v); } };
+      if (kind === "grouped") {
+        o.fill = rgba(c, 0.75); o.width = 1; o.points = { show: false };
+        o.paths = barPaths("grouped", starts, ends, groupedCount, groupedIndex++, null);
+      } else if (kind === "stacked") {
+        o.fill = rgba(c, 0.75); o.width = 1; o.points = { show: false };
+        o.paths = barPaths("stacked", starts, ends, 1, 0, bases[i]);
+      } else {
+        o.fill = kind === "area" ? rgba(c, 0.35) : undefined;
+        o.points = { show: xs.length <= 40 };
+      }
+      uSeries.push(o);
+      if (kind === "area" && i > 0 && group.lines[i - 1].stack) bands.push({ series: [i + 1, i], fill: rgba(c, 0.35) });
     });
     var width = Math.max(canvas.clientWidth || 320, 280);
+    var xRange = [xs[0], ends[ends.length - 1]];
     var opts = {
       width: width, height: 220,
-      scales: { x: { time: true }, y: { range: unit === "ratio" ? [0, 1] : function (u, min, max) { return [0, max > 0 ? max * 1.08 : 1]; } } },
+      // the clock of every axis, tick and legend is UTC, whatever the browser's zone is
+      tzDate: root.uPlot && root.uPlot.tzDate ? utcTzDate(root.uPlot) : undefined,
+      scales: { x: { time: true, range: function () { return xRange; } },
+        y: { range: unit === "ratio" ? [0, 1] : function (u, min, max) { return [0, max > 0 ? max * 1.08 : 1]; } } },
       axes: [
         { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid } },
         { stroke: text, grid: { stroke: grid, width: 1 }, ticks: { stroke: grid }, size: 70, values: function (u, vals) { return vals.map(function (v) { return fmt(v); }); } }
       ],
       series: uSeries, bands: bands, legend: { live: true },
       hooks: { drawClear: [function (u) {
-        var half = xs.length > 1 ? (xs[1] - xs[0]) / 2 : 0, ctx = u.ctx;
+        var ctx = u.ctx;
         ctx.save();
         ctx.fillStyle = shade;
         partial.forEach(function (isPartial, i) {
           if (!isPartial) return;
-          var left = u.valToPos(xs[i] - half, "x", true), right = u.valToPos(xs[i] + half, "x", true);
+          var left = u.valToPos(starts[i], "x", true), right = u.valToPos(ends[i], "x", true);
           ctx.fillRect(left, u.bbox.top, right - left, u.bbox.height);
         });
         ctx.restore();
       }] }
     };
-    var plot = new root.uPlot(opts, plotData(xs, group.lines), canvas);
-    return plot;
+    return new root.uPlot(opts, plotData(plotXs, group.lines), canvas);
   };
 
   var cards = [];

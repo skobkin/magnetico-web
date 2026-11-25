@@ -86,6 +86,77 @@ test("formatters", () => {
   assert.strictEqual(pure.formatterFor("bytes")(0), "0 B");
 });
 
+test("throughputChartHasEnqueuedAndSettledSeriesVisibleByDefault", () => {
+  assert.strictEqual(pure.visibleByDefault("throughput", "enqueued"), true);
+  assert.strictEqual(pure.visibleByDefault("throughput", "settled"), true);
+  assert.strictEqual(pure.visibleByDefault("throughput", "received"), false, "received and acknowledged are one legend click away");
+  assert.strictEqual(pure.visibleByDefault("throughput", "acknowledged"), false);
+  assert.strictEqual(pure.visibleByDefault("outcomes", "stored_new"), true, "every other chart shows every line");
+});
+
+test("throughputIsGroupedBarsOutcomesAreStackedBarsOthersAreLines", () => {
+  assert.strictEqual(pure.lineKind({ chart: "throughput" }, { key: "enqueued" }), "grouped");
+  assert.strictEqual(pure.lineKind({ chart: "outcomes" }, { key: "stored_new", stack: true }), "stacked");
+  assert.strictEqual(pure.lineKind({ chart: "outcomes" }, { key: "torrents_created" }), "line", "the creation count is a line over the stacked settlements");
+  assert.strictEqual(pure.lineKind({ chart: "storage" }, { key: "indexes", stack: true }), "area");
+  assert.strictEqual(pure.lineKind({ chart: "queue" }, { key: "queue_avg" }), "line");
+});
+
+test("barGeometryGroupsWithinABucketAndStacksOverOneSlot", () => {
+  const slots = [0, 1, 2].map((i) => pure.groupedSlot(100, 200, 3, i));
+  assert.ok(Math.abs(slots[0][0] - 110) < 1e-9, "the first bar starts after the 10 % margin");
+  assert.ok(slots[0][0] + slots[0][1] <= slots[1][0] + 1e-9 && slots[1][0] + slots[1][1] <= slots[2][0] + 1e-9, "bars of a group never overlap");
+  assert.ok(slots[2][0] + slots[2][1] <= 190 + 1e-9, "and stay inside the bucket's margin");
+  const st = pure.stackedSlot(100, 200);
+  assert.deepStrictEqual(st.map((v) => Math.round(v)), [110, 80]);
+});
+
+test("bucketEndsFollowTheGranularityInUTC", () => {
+  const day = pure.bucketEnds({ granularity: "day", buckets: ["2026-11-24T23:00:00Z"] });
+  assert.strictEqual(day[0], Date.parse("2026-11-25T00:00:00Z") / 1000);
+  const month = pure.bucketEnds({ granularity: "month", buckets: ["2026-02-28T00:00:00Z"] });
+  assert.strictEqual(month[0], Date.parse("2026-03-01T00:00:00Z") / 1000, "a day bucket ends at the next UTC midnight");
+  const year = pure.bucketEnds({ granularity: "year", buckets: ["2026-02-01T00:00:00Z", "2026-12-01T00:00:00Z"] });
+  assert.deepStrictEqual(year, [Date.parse("2026-03-01T00:00:00Z") / 1000, Date.parse("2027-01-01T00:00:00Z") / 1000], "month lengths differ; the last month ends in the next year");
+});
+
+test("stackBasesAreTheCumulativeTotalBelowEachStackedLine", () => {
+  const lines = [{ stack: true, values: [1, null, 3] }, { stack: false, values: [9, 9, 9] }, { stack: true, values: [2, 5, null] }];
+  const b = pure.stackBases(lines, 3);
+  assert.deepStrictEqual(b[0], [0, 0, 0]);
+  assert.deepStrictEqual(b[2], [1, 0, 3], "a missing value adds nothing; the line in between is not stacked");
+  assert.strictEqual(b[1], undefined);
+});
+
+test("tickAndLegendTimesAreUTCWhateverTheBrowserZoneIs", () => {
+  const calls = [];
+  const fake = { tzDate: (d, tz) => { calls.push([d.getTime(), tz]); return { tz }; } };
+  const f = pure.utcTzDate(fake);
+  assert.deepStrictEqual(f(1700000000), { tz: "Etc/UTC" });
+  assert.deepStrictEqual(calls[0], [1700000000000, "Etc/UTC"]);
+  // the text rendering is string-based, so it cannot depend on the zone either
+  const label = pure.periodLabel("day", "2026-11-24T23:00:00Z");
+  assert.strictEqual(label, "2026-11-24 23:00");
+});
+
+test("notesAreCountedPerKindAndShownInTheText", () => {
+  const sr = { granularity: "day", buckets: ["2026-11-24T00:00:00Z", "2026-11-24T01:00:00Z", "2026-11-24T02:00:00Z"], partial: [false, false, false],
+    notes: [null, ["approximate_counts"], ["approximate_counts", "unknown_code"]], lines: [{ label: "L", values: [1, 2, 3] }] };
+  assert.strictEqual(pure.notesText(sr), "Note: queue or quarantine row counts are estimates in 2 buckets.");
+  assert.strictEqual(pure.notesText({ notes: [null, null] }), "");
+  assert.strictEqual(pure.notesText({ notes: [["reconciliation_mismatch"]] }), "Note: the storage categories did not add up to the total in 1 bucket.");
+  const text = pure.summaryText(sr);
+  assert.ok(text.includes("2026-11-24 01:00 [approximate_counts]"), text);
+  assert.ok(!text.includes("2026-11-24 00:00 ["), "a bucket without notes is unmarked");
+});
+
+test("cachedDataNeverReadsAsCurrent", () => {
+  assert.deepStrictEqual(pure.freshnessCaption({ fetched_at: "2026-11-25T10:00:00Z", stale: false }), { text: "Data read at 2026-11-25 10:00:00 UTC.", stale: false });
+  const st = pure.freshnessCaption({ fetched_at: "2026-11-25T10:00:00Z", stale: true });
+  assert.ok(st.stale && st.text.startsWith("The database could not be read just now") && st.text.includes("2026-11-25 10:00:00 UTC"), st.text);
+  assert.deepStrictEqual(pure.freshnessCaption(undefined), { text: "", stale: false });
+});
+
 // ---- the DOM part, against a tiny fake DOM ----
 class FakeElement {
   constructor(tag) {
@@ -110,7 +181,7 @@ function runDom(responder) {
   const created = [];
   const card = new FakeElement("article");
   card.attrs["data-chart"] = "throughput";
-  card.found = { ".chart-status": new FakeElement("p"), ".chart-plots": new FakeElement("div"), ".chart-text": new FakeElement("pre"), ".chart-controls": new FakeElement("div") };
+  card.found = { ".chart-status": new FakeElement("p"), ".chart-plots": new FakeElement("div"), ".chart-text": new FakeElement("pre"), ".chart-controls": new FakeElement("div"), ".chart-asof": new FakeElement("p"), ".chart-notes": new FakeElement("p") };
   const plots = [];
   const sandbox = {
     document: {
@@ -122,7 +193,7 @@ function runDom(responder) {
     },
     getComputedStyle: () => ({ getPropertyValue: () => "" }),
     fetch: responder,
-    uPlot: function (opts, data, target) { plots.push({ opts, data, target }); this.destroy = () => {}; },
+    uPlot: Object.assign(function (opts, data, target) { plots.push({ opts, data, target }); this.destroy = () => {}; }, { tzDate: (d, tz) => ({ d, tz }) }),
     addEventListener() {}, clearTimeout() {}, setTimeout() { return 0; },
   };
   sandbox.window = sandbox;
@@ -177,6 +248,26 @@ async function domTests() {
   await tick(); await tick();
   test("outOfRangePeriodShowsNoData", () => {
     assert.strictEqual(env.card.found[".chart-status"].textContent, pure.NO_DATA);
+  });
+
+  const fresh = { chart: "throughput", granularity: "day", period: "2026-11-24", buckets: series.buckets, partial: series.partial,
+    freshness: { fetched_at: "2026-11-25T10:00:00Z", stale: true }, notes: [null, ["approximate_counts"], null, null],
+    lines: [{ key: "received", label: "Received", unit: "records", group: "Records", values: [1, 2, 3, 4] },
+      { key: "enqueued", label: "Enqueued", unit: "records", group: "Records", values: [1, 2, 3, 4] },
+      { key: "settled", label: "Settled", unit: "records", group: "Records", values: [1, 1, 1, 1] }] };
+  env = runDom(() => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(fresh) }));
+  await tick(); await tick();
+  test("chartDrawsUTCGroupedBarsWithDefaultsCaptionsAndNotes", () => {
+    assert.strictEqual(env.plots.length, 1);
+    const o = env.plots[0].opts;
+    assert.strictEqual(typeof o.tzDate, "function", "uPlot is given a UTC clock");
+    assert.strictEqual(o.tzDate(0).tz, "Etc/UTC");
+    assert.deepStrictEqual(o.series.slice(1).map((x) => x.show), [false, true, true], "received hidden, enqueued and settled visible");
+    assert.ok(o.series.slice(1).every((x) => typeof x.paths === "function"), "throughput series are drawn as bars");
+    assert.strictEqual(env.plots[0].data[0][0], (Date.parse(series.buckets[0]) / 1000 + Date.parse("2026-11-24T01:00:00Z") / 1000) / 2, "x values are bucket centres");
+    assert.ok(env.card.found[".chart-asof"].textContent.startsWith("The database could not be read just now"));
+    assert.ok(env.card.found[".chart-asof"].className.includes("stale"));
+    assert.ok(env.card.found[".chart-notes"].textContent.includes("estimates in 1 bucket."));
   });
 }
 

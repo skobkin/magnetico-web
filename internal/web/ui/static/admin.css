@@ -14,6 +14,11 @@
     --chart-grid:#dce6e1; --chart-text:#526c6a; --chart-partial:rgba(70,90,85,0.10);
   }
 }
+.status.warning { color:var(--chart-2); }
+.status.error { color:var(--danger); }
+.chart-asof { margin:4px 0 0; color:var(--subtext); font-size:.8rem; }
+.chart-asof.stale { color:var(--chart-2); }
+.chart-notes { margin:4px 0 0; color:var(--subtext); font-size:.8rem; }
 .chart-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
 .chart-card { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); padding:12px 14px 14px; min-width:0; }
 .chart-card header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
