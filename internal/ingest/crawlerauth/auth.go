@@ -249,23 +249,41 @@ func (a *Authenticator) Authenticate(ctx context.Context, bearer string) (Identi
 	}
 	select {
 	case <-c.done:
+		var un ErrUnavailable
+		if errors.As(c.err, &un) && un.Busy {
+			// the call never got a lookup slot: every request waiting on it is refused, and
+			// each one counts (its miss was counted when it arrived)
+			a.countBusy()
+		}
 		return c.id, c.err
 	case <-ctx.Done():
 		return Identity{}, ctx.Err()
 	}
 }
 
-// refuseBusy answers a request the bounded lookup state cannot accommodate. It is
-// a miss (the cache could not answer it) and a busy refusal; the observer is
-// told after the authenticator's lock is released.
+// refuseBusy answers a request the bounded lookup state cannot accommodate before it
+// was admitted. It is a miss (the cache could not answer it) and a busy refusal; the
+// observer is told after the authenticator's lock is released. A request that WAS
+// admitted and whose call then never got a slot has its miss already: it is counted busy
+// by countBusy when it learns the outcome.
 func (a *Authenticator) refuseBusy() error {
-	a.busy.Add(1)
+	a.countBusy()
 	if a.obs != nil {
 		a.obs.AuthMiss()
-		a.obs.AuthBusy()
 	}
 	return ErrUnavailable{Busy: true}
 }
+
+// countBusy counts one refused request.
+func (a *Authenticator) countBusy() {
+	a.busy.Add(1)
+	if a.obs != nil {
+		a.obs.AuthBusy()
+	}
+}
+
+// slotWaitExpired is the outcome of a call that never got a lookup slot in time.
+func slotWaitExpired() error { return ErrUnavailable{Busy: true} }
 
 // run performs the lookup for one digest on its own deadline, independent of
 // any single waiter, and releases every reservation on every path.
@@ -297,14 +315,14 @@ func (a *Authenticator) run(digest [32]byte, c *call) {
 		case a.unknownSlots <- struct{}{}:
 			defer func() { <-a.unknownSlots }()
 		case <-timer.C:
-			err = a.refuseBusy()
+			err = slotWaitExpired()
 			return
 		}
 	}
 	select {
 	case a.slots <- struct{}{}:
 	case <-timer.C:
-		err = a.refuseBusy()
+		err = slotWaitExpired()
 		return
 	}
 	defer func() { <-a.slots }()

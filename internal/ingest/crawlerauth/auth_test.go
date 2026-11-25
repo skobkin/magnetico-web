@@ -782,3 +782,56 @@ func TestObserverCountersAgreeWithTheAuthenticatorsOwn(t *testing.T) {
 		t.Fatalf("busy %d must be a non-empty subset of the %d misses", obs.busy.Load(), obs.miss.Load())
 	}
 }
+
+// TestSlotWaitExpiryCountsEachRefusedRequestOnceAndNoExtraMiss (Task 09A review): a call
+// that never gets a lookup slot refuses every request waiting on it. Each of those requests
+// already counted its miss when it arrived, so the refusal adds a busy count per request
+// and no miss; the first version added one miss per expired call and one busy per call, so
+// hits + misses was larger than the number of requests and busy was smaller than the number
+// of refused ones.
+func TestSlotWaitExpiryCountsEachRefusedRequestOnceAndNoExtraMiss(t *testing.T) {
+	l := newLookup()
+	release := make(chan struct{})
+	l.hook = func(ctx context.Context) error { <-release; return nil }
+	obs := &countObserver{}
+	a := New(l, Options{Clock: newClock(), Logger: log.New(&bytes.Buffer{}, "", 0), Observer: obs})
+	a.slotWait = 20 * time.Millisecond
+
+	var blocked sync.WaitGroup
+	for i := 0; i < UnknownActiveLookups; i++ { // fill the share of the slots unknown digests may use
+		blocked.Add(1)
+		go func(i int) { defer blocked.Done(); _, _ = a.Authenticate(context.Background(), tok(7000+i)) }(i)
+	}
+	waitFor(t, func() bool { return l.active.Load() == UnknownActiveLookups })
+
+	const joiners = 3 // three requests for one more unknown digest: one call, three waiters
+	var refused atomic.Int64
+	var wg sync.WaitGroup
+	for i := 0; i < joiners; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := a.Authenticate(context.Background(), tok(7999)); isBusy(err) {
+				refused.Add(1)
+			}
+		}()
+	}
+	wg.Wait() // they can only end through the slot wait: the slots stay full
+	if refused.Load() != joiners {
+		t.Fatalf("%d of %d requests were refused busy", refused.Load(), joiners)
+	}
+	close(release)
+	blocked.Wait()
+
+	const requests = UnknownActiveLookups + joiners
+	st := a.Stats()
+	if obs.hit.Load()+obs.miss.Load() != requests || int64(st.Hits+st.Misses) != requests {
+		t.Fatalf("hits+misses: observer %d, authenticator %d, want the %d requests", obs.hit.Load()+obs.miss.Load(), st.Hits+st.Misses, requests)
+	}
+	if obs.busy.Load() != joiners || int64(st.Busy) != joiners {
+		t.Fatalf("busy: observer %d, authenticator %d, want one per refused request (%d)", obs.busy.Load(), st.Busy, joiners)
+	}
+	if obs.miss.Load() != int64(st.Misses) {
+		t.Fatalf("misses: observer %d, authenticator %d", obs.miss.Load(), st.Misses)
+	}
+}
