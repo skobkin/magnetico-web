@@ -19,3 +19,4 @@
 ^TestIdentitySameDatabaseViaSocketAndTCP$	no Unix socket directory	KNOWN COVERAGE GAP of the external-server mode: needs a locally controlled cluster (docker or initdb)
 ^TestSSLCertFileIsHonoured$	system roots were already initialised	order-dependent skip: the process initialised the system roots before the test; it is only effective when run in isolation
 ^TestFaultRestartedSourceIsNotDrift$	docker with a locally cached postgres:17 image is required	KNOWN COVERAGE GAP of CI: the restart scenario of finding F6(i) restarts a PostgreSQL container and needs the docker CLI, which the CI test image does not have (it runs on a developer machine)
+^Test(ReleaseTagPicksTheNewestStableGoLineRelease|PrepareRebuild\w+)$	needs git and jq	the CI test image has neither; workflow-invariants installs both and runs these tests with REPOCHECK_REQUIRE_TOOLS=1

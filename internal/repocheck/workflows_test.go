@@ -27,6 +27,12 @@ const (
 	migrationE2E = `'^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)'`
 )
 
+// allWorkflows are the workflow files of .woodpecker: verification (ci), publication of a
+// release tag (release), forced rebuild of a published image (rebuild) and the scheduled
+// security check (security). TestWorkflowFilesAreTheKnownSet keeps the list complete, so a
+// new workflow cannot escape the rules that apply to every file.
+var allWorkflows = []string{"ci.yaml", "release.yaml", "rebuild.yaml", "security.yaml"}
+
 type workflowFile struct {
 	name string
 	raw  string
@@ -295,7 +301,7 @@ func TestHistoryIsThereWhereItIsNeeded(t *testing.T) {
 // expression reached the expression engine as `\.`, an invalid string escape, so neither
 // workflow compiled ("invalid char escape (1:32)"). Use a character class such as `[.]`.
 func TestWorkflowsContainNoBackslash(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
+	for _, name := range allWorkflows {
 		for i, line := range strings.Split(load(t, name).raw, "\n") {
 			if strings.Contains(line, `\`) {
 				t.Errorf("%s:%d contains a backslash, which Woodpecker's substitution alters: %s", name, i+1, line)
@@ -346,7 +352,7 @@ func TestTagGrammarIsIdenticalInBothWorkflows(t *testing.T) {
 }
 
 func TestNoRegistryCacheIsConfigured(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
+	for _, name := range allWorkflows {
 		body := commentFree(load(t, name).raw)
 		for _, k := range []string{"cache_from", "cache_to", "cache_images", "--cache-to", "--cache-from"} {
 			if strings.Contains(body, k) {
@@ -359,7 +365,7 @@ func TestNoRegistryCacheIsConfigured(t *testing.T) {
 var goImage = regexp.MustCompile(`^golang:(\d+)\.(\d+)\.(\d+)`)
 
 func TestEveryStepThatCompilesHonoursTheGoSecurityFloor(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
+	for _, name := range allWorkflows {
 		w := load(t, name)
 		for _, s := range w.steps() {
 			img, _ := s["image"].(string)
@@ -387,7 +393,7 @@ func atoi(s string) int {
 }
 
 func TestNoAutomaticRerunsAndNoIgnoredFailures(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
+	for _, name := range allWorkflows {
 		body := commentFree(load(t, name).raw)
 		for _, k := range []string{"retry", "failure: ignore", "|| true", "continue-on-error"} {
 			if strings.Contains(body, k) {
@@ -401,7 +407,7 @@ func TestNoAutomaticRerunsAndNoIgnoredFailures(t *testing.T) {
 // time; runtime-only variables (CI_WORKSPACE, CI_PIPELINE_STATUS, ...) become
 // empty strings there. Commands run in a shell and may use them as $VAR.
 func TestNoRuntimeOnlyVariableIsSubstitutedIntoAWorkflow(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
+	for _, name := range allWorkflows {
 		raw := commentFree(load(t, name).raw)
 		for _, v := range []string{"CI_WORKSPACE", "CI_PIPELINE_STATUS"} {
 			if strings.Contains(raw, "${"+v) {
@@ -529,7 +535,7 @@ func TestCredentialsAreOnlyInTheirPublicationSteps(t *testing.T) {
 // Privileged execution is a server-side decision for the buildx plugin (it must be listed in
 // WOODPECKER_PLUGINS_PRIVILEGED); no workflow asks for it.
 func TestNoWorkflowRequestsPrivilegedExecution(t *testing.T) {
-	for _, name := range []string{"ci.yaml", "release.yaml"} {
+	for _, name := range allWorkflows {
 		w := load(t, name)
 		if strings.Contains(commentFree(w.raw), "privileged") {
 			t.Errorf("%s must not request privileged execution", name)
@@ -539,7 +545,7 @@ func TestNoWorkflowRequestsPrivilegedExecution(t *testing.T) {
 
 // Every gate of the project is in the verification workflow, and all of them run for every
 // event except two (owner decision): race never runs for a pull request (it does for
-// master, tags, so that a release waits for it, manual and cron runs), and a pull request
+// master, tags, so that a release waits for it, and manual runs), and a pull request
 // skips the migration end-to-end tests in test and runs them in migration-e2e only when it
 // changes migration paths (every other event runs them inside test).
 func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
@@ -553,7 +559,7 @@ func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
 		}
 	}
 	ev := events(w.step(t, "race")["when"])
-	for _, want := range []string{"push", "tag", "manual", "cron"} {
+	for _, want := range []string{"push", "tag", "manual"} {
 		if !ev[want] {
 			t.Errorf("ci.yaml/race must run on %s", want)
 		}

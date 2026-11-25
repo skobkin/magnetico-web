@@ -1,0 +1,50 @@
+# Scheduled security check (cheap: no build, no test suite, no secrets). Two questions,
+# asked again even when nobody pushes:
+#
+#   govulncheck   is a newly published Go vulnerability reachable from this code? Fix:
+#                 a code or toolchain change and a new release.
+#   image-scan    does the published image of the current release have a fixable HIGH or
+#                 CRITICAL vulnerability? Fix: a forced rebuild (rebuild.yaml) when it is
+#                 in a base-image package, a new release when it is in Go or a Go module.
+#
+# Started only by a cron job named "security-check" (repository settings, e.g. weekly, on
+# master; it reads this file from the branch the job runs on).
+when:
+  - event: cron
+    cron: security-check
+
+# The tags and the history of the tagged commits are needed to find the current release.
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      depth: 0
+      partial: false
+      tags: true
+
+steps:
+  # The same pinned checker and toolchain as ci.yaml.
+  - name: govulncheck
+    image: golang:1.27.4-alpine
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      GOTOOLCHAIN: local
+    commands:
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+      - go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -tags loadtest,diag ./...
+
+  - name: release-tag
+    image: alpine/git:v2.54.1
+    commands:
+      - git config --global --add safe.directory '*'
+      - sh ci/release-tag.sh > .scan-tag
+      - cat .scan-tag
+
+  # The scanner and flags of the local image scan (docs/release-engineering.md), against
+  # the published image of both platforms.
+  - name: image-scan
+    image: aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+    depends_on: [release-tag]
+    commands:
+      - sh ci/scan-release-image.sh .scan-tag

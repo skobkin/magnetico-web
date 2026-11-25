@@ -8,9 +8,10 @@ documented, not re-run there (the heavy ones are manual by design).
 
 | Class | What | Runs | Gate |
 |---|---|---|---|
-| **Regular CI** | unit tests; PostgreSQL integration tests; real-binary end-to-end tests; short regression, security-regression and fault-injection tests; fuzz **seed corpora**; `govulncheck`, the native archive snapshot and its smoke test, the front-end self-tests | every pull request, push to `master`, tag, manual and cron run (`.woodpecker/ci.yaml`) | blocks merge and release |
-| **Migration end-to-end** | the offline migrator's crash-and-resume, fault-injection and binary smoke tests in `internal/e2e/cli` | inside `test` for a push to `master`, tag, manual and cron run; for a pull request skipped there and run by the `migration-e2e` step only when it changes migration paths | blocks the release; for a pull request, the merge when it runs |
-| **Race** | the whole suite under `-race` (step `race`) | push to `master`, tag, manual and cron run; never a pull request (owner decision) | blocks the release |
+| **Regular CI** | unit tests; PostgreSQL integration tests; real-binary end-to-end tests; short regression, security-regression and fault-injection tests; fuzz **seed corpora**; `govulncheck`, the native archive snapshot and its smoke test, the front-end self-tests | every pull request, push to `master`, tag and manual run (`.woodpecker/ci.yaml`) | blocks merge and release |
+| **Migration end-to-end** | the offline migrator's crash-and-resume, fault-injection and binary smoke tests in `internal/e2e/cli` | inside `test` for a push to `master`, tag and manual run; for a pull request skipped there and run by the `migration-e2e` step only when it changes migration paths | blocks the release; for a pull request, the merge when it runs |
+| **Race** | the whole suite under `-race` (step `race`) | push to `master`, tag and manual run; never a pull request (owner decision) | blocks the release |
+| **Scheduled security check** | `govulncheck` and a Trivy scan of the published release image (`.woodpecker/security.yaml`) | the cron job `security-check` | reports; a finding calls for a forced rebuild or a new release |
 | **Explicit manual only** | large synthetic dataset generation; load, capacity and memory-floor benchmarks; long soak and stress tests; extended fuzzing; the diagnostic build; live-DHT acceptance | by an operator, on a disposable database or host | never in CI |
 
 Security regression tests and ordinary PostgreSQL integration tests are **not** opt-in: they are in the regular class. A
@@ -77,7 +78,7 @@ the pull request changes migration paths; every other event runs the whole suite
 
 ```sh
 P='^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)'
-go test -p 3 -count=1 -timeout 20m -json ./... > test.json                      # master, tag, manual, cron
+go test -p 3 -count=1 -timeout 20m -json ./... > test.json                      # master, tag, manual
 go test -p 3 -count=1 -timeout 20m -json -skip "$P" ./... > test.json           # pull request
 go test -p 3 -count=1 -timeout 20m -json -run "$P" ./internal/e2e/cli > migration.json   # pull request, migration paths
 go test -race -p 3 -count=1 -json ./... > race.json                    (run in Task 08: 66 packages ok)

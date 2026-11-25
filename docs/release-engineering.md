@@ -55,16 +55,17 @@ after `release-forgejo` succeeded (see the recovery section). A tag with a suffi
 | push to any other branch | no (its pull request verifies it) | no | no | no |
 | pull request | yes, **merged state** (no secrets, no privilege, no registry); without `race`, and the migration end-to-end tests only when it changes migration paths | no | no | no |
 | tag matching the grammar | yes, every step | yes, after `ci` | yes | yes |
-| manual run, cron | yes, every step | no | no | no |
+| manual run | yes, every step | no | no | no |
+| manual run with `FORCE_REBUILD=true` | no | no | no | `rebuild.yaml`: the image of a published release, rebuilt (see below) |
+| cron job `security-check` | no | no | no | no (`security.yaml`: `govulncheck` and a scan of the published image) |
 
 Only `master` gets push pipelines (owner decision): every other branch, the 0.8.0 branch included, is verified by its
-pull request alone, so no branch has two pipelines. A cron job is optional (configure one in Woodpecker for a nightly
-run of the full set on `master`).
+pull request alone, so no branch has two pipelines.
 
 ## Verification: `ci.yaml`
 
 These run in this order of dependency; none needs a secret or a privilege. All of them run for every event except
-two. `race` never runs for a pull request; it runs for `master`, tags (a release waits for it), manual and cron runs.
+two. `race` never runs for a pull request; it runs for `master`, tags (a release waits for it) and manual runs.
 A pull request skips the migration end-to-end tests in `test` and runs them in `migration-e2e` only when it changes
 migration paths; every other event runs them inside `test`, so `master` and a release always have them.
 
@@ -135,13 +136,54 @@ tag ─► ci.yaml (every gate above, same commit)
 * **The Go security floor is 1.27.4 everywhere** (`golang:1.27.4-*` step images, the Dockerfile's compiler stage, the
   GoReleaser steps as above); `native-smoke` and `image-smoke` assert the built Go version.
 
+## Forced rebuild: `rebuild.yaml`
+
+Ported from the owner's phanpy-docker pipeline. It builds the image of a **published** release again, from the
+release's own source, with freshly pulled base images and no build cache: it picks up security fixes of the base
+images (Alpine packages) without a new release. A fix in Go or a Go module is a code change and needs a new release.
+
+Start a **manual pipeline on `master`** with the variable `FORCE_REBUILD=true`, and optionally
+`REBUILD_TAG=<release tag>` (default: the newest stable release of the Go line, `ci/release-tag.sh`; before the first
+stable release, the newest release candidate). Nothing else starts it, and `ci.yaml` does not run for such a manual
+run. `ci/prepare-rebuild.sh` (step `prepare-rebuild`):
+
+* refuses without `FORCE_REBUILD` (also checked by the workflow's `when`), a PHP-era tag, a rebuild tag (`X.Y.Z-rN`), a
+  tag that is not a valid image tag, and a release that **neither** registry has (that is published by its tag, not
+  rebuilt); a registry that cannot be read fails the run (it is never taken for one without tags);
+* numbers the rebuild with the next `-rN` that neither registry has for that release (read anonymously: both
+  images are public);
+* writes the image tags **`X.Y.Z-rN` and `X.Y.Z`**: the release tag moves to the rebuild (owner decision; whoever
+  pins the old digest keeps it, and the previous image stays reachable by its digest), and checks the release out.
+
+`rebuild-docker` is `release-docker` with the cache off, the tags from `prepare-rebuild` (`tags_file`) and the build
+arguments `VERSION` (the release tag, so `magnetico --version` still reports the release) and `COMMIT` from its env
+file. Its repositories, platforms, labels, SBOM, provenance and logins are pinned equal to `release-docker` by
+`internal/repocheck`. The Forgejo release and its archives are not touched. **Not verified on Woodpecker:** whether
+`evaluate` sees a variable of a manual run (if it does not, the rebuild simply does not start: say so and the gate
+moves into the step); the registry logic was checked against Docker Hub and GHCR with other public images.
+
+## Scheduled security check: `security.yaml`
+
+Cheap (no build, no suite, no secret), started only by a cron job named **`security-check`** (repository settings, for
+example weekly, on `master`; until the 0.8.0 merge, on the 0.8.0 branch, because a cron pipeline reads the workflow
+files of its branch). It asks two questions even when nobody pushes:
+
+* `govulncheck`: the same check as in `ci.yaml` (pinned by `internal/repocheck`): a reachable Go vulnerability needs a
+  code or toolchain change and a new release;
+* `image-scan`: Trivy (pinned by version and digest, the flags of the local scan above) against the **published**
+  image of the current release (`ci/release-tag.sh`), both platforms: a fixable HIGH or CRITICAL finding fails the
+  run. In a base-image package it is fixed by a forced rebuild, in Go or a Go module by a new release. Before the first
+  Go-line release nothing is scanned.
+
 ## Recovery after a partial publication
 
 `release-forgejo` and `release-docker` are independent, so one can succeed while the other fails. A pipeline re-run
 **rebuilds** both. To recover, either delete the incomplete artifacts deliberately (the image tag in both registries,
 and the Forgejo release for that tag, which GoReleaser will not replace; its behaviour on an existing release is
 **not verified** here) and re-run, or cut the next tag (`0.8.0-rc2`): a tag is cheap, an overwritten image is not.
-The plugin pushes tags without a check, so never re-run a release for a tag whose image was already used.
+The plugin pushes tags without a check, so never re-run a release for a tag whose image was already used. The only
+deliberate way to move a published release tag is the forced rebuild (`rebuild.yaml`), which also keeps the rebuilt
+image under its own `-rN` tag.
 
 ## Operator configuration (not in the repository)
 
@@ -155,14 +197,19 @@ The plugin pushes tags without a check, so never re-run a release for a tag whos
 * Agents need outbound access to: the forge, Docker Hub and GHCR, `proxy.golang.org` and `sum.golang.org` (module
   downloads, the Go toolchain download of the GoReleaser step, `govulncheck`), and the Alpine mirrors used by the base images.
 
-**Woodpecker secrets** (repository secrets, each restricted to the **`tag`** event; none may be available to
-`pull_request`, `push` or `manual`):
+**Woodpecker secrets** (repository secrets; none may be available to `pull_request` or `push`):
 
-| Secret | Used by | Content / permission |
-|---|---|---|
-| `DOCKER_LOGIN`, `DOCKER_TOKEN` | `release-docker` | Docker Hub user and an access token with **read & write** on `skobkin/magnetico-web` only |
-| `GHCR_LOGIN`, `GHCR_TOKEN` | `release-docker` | GitHub user and a token with `write:packages` for `ghcr.io/skobkin/magnetico-web`; link the package to the `skobkin/magnetico-web` repository (the image's `org.opencontainers.image.source` label already points there) |
-| `GITEA_TOKEN` | `release-forgejo` | a Forgejo token that may create and edit releases and upload assets in `skobkin/magnetico-web` (`write:repository`) |
+| Secret | Events | Used by | Content / permission |
+|---|---|---|---|
+| `DOCKER_LOGIN`, `DOCKER_TOKEN` | `tag`, `manual` | `release-docker`, `rebuild-docker` | Docker Hub user and an access token with **read & write** on `skobkin/magnetico-web` only |
+| `GHCR_LOGIN`, `GHCR_TOKEN` | `tag`, `manual` | `release-docker`, `rebuild-docker` | GitHub user and a token with `write:packages` for `ghcr.io/skobkin/magnetico-web`; link the package to the `skobkin/magnetico-web` repository (the image's `org.opencontainers.image.source` label already points there) |
+| `GITEA_TOKEN` | `tag` | `release-forgejo` | a Forgejo token that may create and edit releases and upload assets in `skobkin/magnetico-web` (`write:repository`) |
+
+The registry credentials are available to `manual` for the forced rebuild. `ci.yaml` references no secret
+(`internal/repocheck`), so a manual verification run still has none; anyone who can start a manual pipeline can
+rebuild, the same people who can push a release tag.
+
+**Cron job.** For the scheduled security check, create a cron job named `security-check` (for example `@weekly`).
 
 **Registries.** Create `skobkin/magnetico-web` on Docker Hub (public) and let the first push create the GHCR package
 (then set it public and link it to the repository).

@@ -1,0 +1,74 @@
+# Forced rebuild of a published release image (ported from the owner's phanpy-docker
+# pipeline): the same release source, built again with freshly pulled base images and no
+# cache, to pick up security fixes of the base images without a new release. A Go or
+# Go-dependency fix is a code change: it needs a new release, not this.
+#
+# Start it as a manual pipeline on master with the variable FORCE_REBUILD=true, and
+# optionally REBUILD_TAG=<release tag> (default: the newest stable Go-line release, see
+# ci/release-tag.sh). It pushes <tag>-rN (the next free rebuild number) and moves <tag> to
+# it in both registries (owner decision). Nothing else starts it, and ci.yaml leaves such
+# a manual run alone. ci/prepare-rebuild.sh refuses an unpublished release, a PHP-era
+# tag and a run without FORCE_REBUILD.
+#
+# Secrets (repository secrets, available to the manual event as well as tag):
+# DOCKER_LOGIN, DOCKER_TOKEN, GHCR_LOGIN, GHCR_TOKEN, in rebuild-docker only. See
+# docs/release-engineering.md.
+when:
+  - event: manual
+    evaluate: 'FORCE_REBUILD == "true"'
+
+# The tags and the history of the tagged commits are needed to resolve and check out
+# the release.
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      depth: 0
+      partial: false
+      tags: true
+
+steps:
+  # Resolves the release and the rebuild number, writes .tags and .rebuild.env for the
+  # plugin, and checks the release out: the next step builds the release's own source.
+  - name: prepare-rebuild
+    image: alpine:3.24
+    commands:
+      - apk add --no-cache git curl jq
+      - git config --global --add safe.directory '*'
+      - sh ci/prepare-rebuild.sh
+
+  # The same build as release-docker in release.yaml, except: the tags come from
+  # prepare-rebuild, the build arguments from its env file, and the cache is off.
+  # 'woodpeckerci/plugin-docker-buildx:6' must be listed in WOODPECKER_PLUGINS_PRIVILEGED.
+  - name: rebuild-docker
+    image: woodpeckerci/plugin-docker-buildx:6
+    depends_on: [prepare-rebuild]
+    settings:
+      repo:
+        - skobkin/magnetico-web
+        - ghcr.io/skobkin/magnetico-web
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
+      pull_image: true
+      no_cache: true
+      default_labels: false
+      sbom: true
+      provenance: mode=max
+      tags_file: .tags
+      env_file: .rebuild.env
+      build_args_from_env:
+        - VERSION
+        - COMMIT
+      logins:
+        - registry: https://index.docker.io/v1/
+          username:
+            from_secret: DOCKER_LOGIN
+          password:
+            from_secret: DOCKER_TOKEN
+        - registry: https://ghcr.io
+          username:
+            from_secret: GHCR_LOGIN
+          password:
+            from_secret: GHCR_TOKEN
