@@ -133,8 +133,34 @@ parallelism **under artificial CPU load**, and the race run under load still fai
 documented with this evidence (`docs/testing.md`, `docs/engineering-standards.md`); removing it needs a bounded connection budget
 per package first. #53 stays open.
 
-**Final confirmation on the last commit:** `FINAL_PLACEHOLDER`
+**Final confirmation on the last commit:** a clean clone of `3ef6933f` (the last commit that changes code or tests; only this report and its raw logs change after it): build, vet for both tag sets and lint clean; `go test -p 3 -count=1 ./...` **exit 0**; `go test -race -p 3 -count=1 ./...` **exit 0** (both include the documentation checks and the skip census, 3,460 passed, 27 allow-listed skips); `govulncheck` clean (`raw/final-confirmation-progress.txt`). The repository checks of the very last commit (this report) ran again from a clean clone before the push.
 
 ## 5. Forgejo
 
-`FORGEJO_PLACEHOLDER`
+After the push, comments with the findings, the regression tests and the commit references were posted on **#52** (closed: a
+product defect, fixed in 09A and completed in 09B, deterministic regression tests, stress-verified) and **#53** (left open:
+the named tests are deterministic, two more timing/ordering test flaws and one product classification defect found by the
+default-parallelism runs were fixed, but the loaded race run still exhausts PostgreSQL's connection budget, so the `-p 3`
+workaround stays).
+
+## 6. Commits
+
+| Commit | Subject |
+|---|---|
+| `c1ac851b` | fix(migration): reconcile an ambiguous verification finish after the unresolved transaction has ended |
+| `58d57b66` | ci: conventional release engineering |
+| `6a6c656b` | fix(web/ui): keep an administrator's pages inside a 360 px screen |
+| `da4f069a` | docs(09B): report skeleton, browser-check material, checklist and index updates |
+| `e5020cd9` | fix(ingest/stats): one class for a statement that outruns its deadline |
+| `bea3b429` | test(ingest/server): read the service logs through a synchronised sink |
+| `6840b4ec` | test(web/accounts): judge authentication against a transition record, not a flag |
+| `3ef6933f` | docs(09B): verification results, the decision on -p 3, raw logs |
+
+## 7. Remaining before RC0
+
+The RC0 checklist is updated. Open and unverified, none checkable from this machine: the real Woodpecker run of both workflows
+(the owner's `0.8.0-rc.0` tag), GoReleaser's publication to Forgejo and the plugin's push to both registries, the local image
+smoke test and scan on the tagged commit, the arm64 image's execution, Firefox / a real phone / a screen reader for the Admin UI,
+a real reverse proxy, the live-DHT and 24-hour soak, and issue #53 (the connection budget of the default-parallelism race run).
+No tag was created and nothing was published. The scratch resources of this task (browser deployment, Chrome image, its
+PostgreSQL data) were removed; the sub-agent worktree of 09A remains under `.claude/worktrees`.
