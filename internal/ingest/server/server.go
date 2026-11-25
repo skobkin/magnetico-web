@@ -205,9 +205,10 @@ func writeRetryable(w http.ResponseWriter, code string, seconds int) {
 }
 
 // preflight applies method, authentication and content-type checks in that
-// order, before anything is read from the body. On success it returns the
-// request carrying the authenticated crawler in its context.
-func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+// order, before anything is read from the body. attempt is called as soon as
+// authentication succeeds. On success it returns the request carrying the
+// authenticated crawler in its context.
+func (s *Server) preflight(w http.ResponseWriter, r *http.Request, attempt func(crawlerID string)) (*http.Request, bool) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
 		s.cfg.Stats.RequestRejected(opstats.RejectMalformed, "")
@@ -218,6 +219,9 @@ func (s *Server) preflight(w http.ResponseWriter, r *http.Request) (*http.Reques
 	switch {
 	case err == nil:
 		r = r.WithContext(crawlerauth.WithIdentity(r.Context(), id))
+		// An authenticated request is an attempt whatever happens next (a wrong
+		// content type, a full queue, a malformed body): counted here, once.
+		attempt(id.CrawlerID)
 	case errors.Is(err, crawlerauth.ErrUnauthorized):
 		s.authFail.Add(1)
 		// A disabled crawler's refused request is also counted for that crawler;
@@ -322,7 +326,7 @@ type existsResponse struct {
 }
 
 func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
-	r, ok := s.preflight(w, r)
+	r, ok := s.preflight(w, r, s.cfg.Stats.ExistsRequest)
 	if !ok {
 		return
 	}
@@ -336,7 +340,6 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { <-s.exists }()
 	s.existsReq.Add(1)
-	s.cfg.Stats.ExistsRequest(cid)
 
 	var req existsRequest
 	body := &countingReader{r: http.MaxBytesReader(w, r.Body, MaxExistsBodyBytes)}
@@ -373,6 +376,16 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res := s.cfg.Exist.Check(r.Context(), hashes)
+	// Hashes checked, classified (found, missing) and not classified (unknown)
+	// are separate figures. Whatever the lookup returned, every checked hash is
+	// accounted for: one that was not classified (the lookup failed, timed out
+	// or was cancelled) is unknown, never silently omitted.
+	unknown := max(len(hashes)-len(res.Exists)-len(res.Missing), len(res.Unknown))
+	s.cfg.Stats.ExistsDone(cid, s.clientAddr(r), stats.ExistsOutcome{
+		Hashes: len(hashes),
+		Found:  len(res.Exists), Missing: len(res.Missing), Unknown: unknown,
+		CacheHitPositive: res.CacheHitsPositive, CacheHitNegative: res.CacheHitsNegative, CacheMiss: res.CacheMisses,
+	})
 	if r.Context().Err() != nil {
 		return // client went away
 	}
@@ -384,11 +397,6 @@ func (s *Server) handleExists(w http.ResponseWriter, r *http.Request) {
 		writeRetryable(w, "storage_unavailable", 5)
 		return
 	}
-	s.cfg.Stats.ExistsDone(cid, s.clientAddr(r), stats.ExistsOutcome{
-		Hashes: len(res.Exists) + len(res.Missing) + len(res.Unknown),
-		Found:  len(res.Exists), Missing: len(res.Missing), Unknown: len(res.Unknown),
-		CacheHitPositive: res.CacheHitsPositive, CacheHitNegative: res.CacheHitsNegative, CacheMiss: res.CacheMisses,
-	})
 	out := existsResponse{
 		Exists:  hexList(res.Exists),
 		Missing: hexList(res.Missing),
@@ -412,13 +420,12 @@ type submitRequest struct {
 }
 
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
-	r, ok := s.preflight(w, r)
+	r, ok := s.preflight(w, r, s.cfg.Stats.SubmitAuthenticated)
 	if !ok {
 		return
 	}
 	crawler, _ := crawlerauth.FromContext(r.Context())
 	cid := crawler.CrawlerID
-	s.cfg.Stats.SubmitAuthenticated(cid)
 	if !acquire(s.submit) {
 		s.busy.Add(1)
 		s.cfg.Stats.RequestRejected(opstats.RejectBusy, cid)

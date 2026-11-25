@@ -526,3 +526,55 @@ func TestStorageLastValuesAreOneBundleFromTheNewestSample(t *testing.T) {
 		t.Fatalf("a delayed older sample overwrote the newest bundle: %v %v", blobs, err)
 	}
 }
+
+// TestRepeatedClockAdjustmentsCannotPinTheSharedMarkers (Task 09A): whatever
+// sequence of forward and backward steps the writer's host clock takes, once it
+// runs steadily again the very next samples are applied and the stored marker
+// follows the clock. Random walks over many seeds, queue and storage markers.
+func TestRepeatedClockAdjustmentsCannotPinTheSharedMarkers(t *testing.T) {
+	_, pool := newDB(t, true)
+	for seed := int64(1); seed <= 25; seed++ {
+		rng := rand.New(rand.NewPCG(uint64(seed), 7))
+		clock := base
+		for step := 0; step < 40; step++ {
+			switch k := rng.IntN(10); {
+			case k < 3: // a step of between an hour and three days, either way
+				d := time.Hour + time.Duration(rng.Int64N(int64(71*time.Hour)))
+				if rng.IntN(2) == 0 {
+					d = -d
+				}
+				clock = clock.Add(d)
+			default:
+				clock = clock.Add(10 * time.Second)
+			}
+			var d Delta
+			d.GuardRef = clock
+			d.AddQueueSample(queueSample(clock, clock.Unix()/10, int64(step), int64(step)))
+			d.AddStorageSample(storageSample(clock, clock.Unix()/300, 1000, 10, true))
+			apply(t, pool, &d) // applied or refused, never an error and never a panic
+		}
+		// The clock runs steadily again.
+		var applied, storageApplied bool
+		for i := 0; i < 3; i++ {
+			clock = clock.Add(5 * time.Minute) // a full storage slot per step
+			var d Delta
+			d.GuardRef = clock
+			d.AddQueueSample(queueSample(clock, clock.Unix()/10, 777, 777))
+			d.AddStorageSample(storageSample(clock, clock.Unix()/300, 1000, 10, true))
+			r := apply(t, pool, &d)
+			applied, storageApplied = r.QueueApplied, r.StorageApplied
+		}
+		if !applied || !storageApplied {
+			t.Fatalf("seed %d: after the clock ran steadily for three slots queue applied=%v storage applied=%v", seed, applied, storageApplied)
+		}
+		if got := scanInt(t, pool, `SELECT gauge_last_slot FROM magnetico_stats.shared_state`); got != clock.Unix()/10 {
+			t.Fatalf("seed %d: queue marker %d, want the clock's slot %d", seed, got, clock.Unix()/10)
+		}
+		if got := scanInt(t, pool, `SELECT storage_last_slot FROM magnetico_stats.shared_state`); got != clock.Unix()/300 {
+			t.Fatalf("seed %d: storage marker %d, want the clock's slot %d", seed, got, clock.Unix()/300)
+		}
+		if got := scanInt(t, pool, `SELECT queue_rows FROM magnetico_stats.shared_state`); got != 777 {
+			t.Fatalf("seed %d: shared state shows %d, want the latest sample 777", seed, got)
+		}
+	}
+}

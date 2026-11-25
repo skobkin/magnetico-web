@@ -652,3 +652,57 @@ func TestNoStatisticsImportInCrawlerDHTPath(t *testing.T) {
 }
 
 var _ = atomic.Int64{}
+
+// TestAClampedEventDoesNotMarkAMinuteOfTheLaterHour (Task 09A, M-7): after a
+// backward clock step an event is attributed to the latest hour already used,
+// but its minute belongs to the earlier hour the clock now shows; setting that
+// minute's bit in the later hour would claim coverage nobody observed.
+func TestAClampedEventDoesNotMarkAMinuteOfTheLaterHour(t *testing.T) {
+	r, c := newRec() // 10:30
+	r.SubmitAcked(cidA, 1, 0, 1)
+	c.Set(time.Date(2026, 11, 25, 9, 10, 0, 0, time.UTC)) // an hour and twenty minutes back
+	r.SubmitAcked(cidA, 1, 0, 1)
+	r.MarkRunning()
+	d := r.Drain()
+	if len(d.Hours) != 1 || d.Hours[0].Counters[opstats.CRecordsEnqueued] != 2 {
+		t.Fatalf("hours: %+v", d.Hours)
+	}
+	if want := int64(1 << 30); d.Hours[0].Coverage != want {
+		t.Fatalf("coverage = %b, want only minute 30 (%b): minute 10 of hour 9 was not observed in hour 10", d.Hours[0].Coverage, want)
+	}
+}
+
+// TestAClockThatStaysBehindHealsThePinnedHour: one forward excursion (a bad RTC,
+// a VM restore) pins the monotone hour clamp ahead; when the clock then stays
+// behind for a sustained time the clamp re-anchors to the clock, raises the
+// anomaly flag and stops attributing a day of events to one future hour.
+func TestAClockThatStaysBehindHealsThePinnedHour(t *testing.T) {
+	r, c := newRec() // 10:30
+	r.SubmitAcked(cidA, 1, 0, 1)
+	c.Advance(48 * time.Hour) // excursion
+	r.SubmitAcked(cidA, 1, 0, 1)
+	c.Advance(-48 * time.Hour) // back to the real time
+	for i := 0; i < 4; i++ {   // within the grace period: still clamped, nothing is lost
+		c.Advance(time.Minute)
+		r.SubmitAcked(cidA, 1, 0, 1)
+	}
+	c.Advance(2 * time.Minute) // behind for more than five minutes now
+	r.SubmitAcked(cidA, 1, 0, 1)
+	r.SubmitAcked(cidA, 1, 0, 1)
+	d := r.Drain()
+	if !d.ClockAnomaly {
+		t.Fatal("a re-anchoring must raise the clock anomaly flag")
+	}
+	byHour := map[time.Time]int64{}
+	for _, h := range d.Hours {
+		byHour[h.Hour] += h.Counters[opstats.CRecordsEnqueued]
+	}
+	realHour := opstats.HourOf(c.Now())
+	if byHour[realHour] < 2 {
+		t.Fatalf("after the grace period events must be attributed to the real hour %v: %v", realHour, byHour)
+	}
+	pinned := realHour.Add(48 * time.Hour)
+	if byHour[pinned] != 5 { // the excursion event and the four clamped ones
+		t.Fatalf("pinned hour holds %d events, want the excursion event plus the four within the grace period", byHour[pinned])
+	}
+}

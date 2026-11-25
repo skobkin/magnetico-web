@@ -734,3 +734,51 @@ func TestFloodOfUnknownCredentialsCannotStarveAKnownCrawlersRevalidation(t *test
 		t.Fatalf("%d concurrent lookups, bound %d", m, MaxActiveLookups)
 	}
 }
+
+type countObserver struct{ hit, miss, lookup, fail, busy atomic.Int64 }
+
+func (o *countObserver) AuthHit()            { o.hit.Add(1) }
+func (o *countObserver) AuthMiss()           { o.miss.Add(1) }
+func (o *countObserver) AuthDBLookup()       { o.lookup.Add(1) }
+func (o *countObserver) AuthStorageFailure() { o.fail.Add(1) }
+func (o *countObserver) AuthBusy()           { o.busy.Add(1) }
+
+// TestObserverCountersAgreeWithTheAuthenticatorsOwn (Task 09A, M-7): a miss is a
+// request the cache could not answer, including one refused for lack of room, so
+// hits + misses is the number of well-formed requests and busy is a subset of
+// the misses. The observer and the authenticator's own counters used to differ
+// by the busy refusals.
+func TestObserverCountersAgreeWithTheAuthenticatorsOwn(t *testing.T) {
+	l := newLookup()
+	release := make(chan struct{})
+	l.hook = func(ctx context.Context) error { <-release; return nil }
+	obs := &countObserver{}
+	a := New(l, Options{Clock: newClock(), Logger: log.New(&bytes.Buffer{}, "", 0), Observer: obs})
+	a.slotWait = 20 * time.Millisecond
+	const n = 200
+	var wg sync.WaitGroup
+	var busy atomic.Int64
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := a.Authenticate(context.Background(), tok(5000+i)); isBusy(err) {
+				busy.Add(1)
+			}
+		}(i)
+	}
+	waitFor(t, func() bool { return busy.Load() >= 100 })
+	close(release)
+	wg.Wait()
+	st := a.Stats()
+	if obs.miss.Load() != int64(st.Misses) || obs.busy.Load() != int64(st.Busy) || obs.hit.Load() != int64(st.Hits) {
+		t.Fatalf("observer hit/miss/busy = %d/%d/%d, authenticator = %d/%d/%d",
+			obs.hit.Load(), obs.miss.Load(), obs.busy.Load(), st.Hits, st.Misses, st.Busy)
+	}
+	if obs.hit.Load()+obs.miss.Load() != n {
+		t.Fatalf("hits+misses = %d, want the %d well-formed requests", obs.hit.Load()+obs.miss.Load(), n)
+	}
+	if obs.busy.Load() > obs.miss.Load() || obs.busy.Load() == 0 {
+		t.Fatalf("busy %d must be a non-empty subset of the %d misses", obs.busy.Load(), obs.miss.Load())
+	}
+}

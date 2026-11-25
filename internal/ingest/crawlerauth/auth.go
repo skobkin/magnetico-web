@@ -255,9 +255,13 @@ func (a *Authenticator) Authenticate(ctx context.Context, bearer string) (Identi
 	}
 }
 
+// refuseBusy answers a request the bounded lookup state cannot accommodate. It is
+// a miss (the cache could not answer it) and a busy refusal; the observer is
+// told after the authenticator's lock is released.
 func (a *Authenticator) refuseBusy() error {
 	a.busy.Add(1)
 	if a.obs != nil {
+		a.obs.AuthMiss()
 		a.obs.AuthBusy()
 	}
 	return ErrUnavailable{Busy: true}

@@ -305,3 +305,90 @@ func TestStatsNeverChangeResponses(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAuthenticatedRequestWithAnUnsupportedContentTypeIsStillAnAttempt (Task 09A,
+// M-7): requests are counted when authentication succeeds, whatever happens next,
+// so a rejected request never appears without the request it rejected.
+func TestAnAuthenticatedRequestWithAnUnsupportedContentTypeIsStillAnAttempt(t *testing.T) {
+	e, rec := statsEnv(t, nil)
+	body := []byte(records(recJSON(t, 1)))
+	if r, _ := e.post(t, "/torrents", testToken, "text/plain", body); r.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("submit status %d", r.StatusCode)
+	}
+	if r, _ := e.post(t, "/torrents/exists", testToken, "text/plain", []byte(`{"info_hashes":[]}`)); r.StatusCode != http.StatusUnsupportedMediaType {
+		t.Fatalf("exists status %d", r.StatusCode)
+	}
+	s, _ := drainSum(rec)
+	if s[opstats.CSubmitRequests] != 1 || s[opstats.CExistsRequests] != 1 || s[opstats.CRejectedMalformed] != 2 {
+		t.Fatalf("submit_requests=%d exists_requests=%d rejected_malformed=%d, want 1/1/2", s[opstats.CSubmitRequests], s[opstats.CExistsRequests], s[opstats.CRejectedMalformed])
+	}
+	// An unauthenticated request is not an attempt of any crawler.
+	e.post(t, "/torrents", "wrong", "text/plain", body)
+	if s, _ := drainSum(rec); s[opstats.CSubmitRequests] != 0 {
+		t.Fatalf("an unauthenticated request counted as an authenticated submit: %d", s[opstats.CSubmitRequests])
+	}
+}
+
+func existsBody(n int) []byte {
+	var hs []string
+	for i := 0; i < n; i++ {
+		hs = append(hs, fmt.Sprintf("%040x", i+1))
+	}
+	return []byte(`{"info_hashes":["` + strings.Join(hs, `","`) + `"]}`)
+}
+
+// TestAFailedExistenceLookupStillCountsItsHashesAndTheirUnknownOutcome: attempted
+// requests, hashes checked and classified outcomes are separate figures, and the
+// hashes of a lookup that failed are not silently omitted.
+func TestAFailedExistenceLookupStillCountsItsHashesAndTheirUnknownOutcome(t *testing.T) {
+	e, rec := statsEnv(t, func(c *Config) {
+		c.Exist = fakeChecker{fn: func(h [][20]byte) existence.Result { return existence.Result{Unknown: h, CacheMisses: len(h)} }}
+	})
+	r, _ := e.post(t, "/torrents/exists", testToken, "application/json", existsBody(5))
+	if r.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status %d", r.StatusCode)
+	}
+	s, _ := drainSum(rec)
+	if s[opstats.CExistsRequests] != 1 || s[opstats.CExistsHashes] != 5 || s[opstats.CExistsUnknown] != 5 ||
+		s[opstats.CExistsFound] != 0 || s[opstats.CExistsMissing] != 0 || s[opstats.CRejectedStorageUnavailable] != 1 {
+		t.Fatalf("requests=%d hashes=%d unknown=%d found=%d missing=%d rejected=%d, want 1/5/5/0/0/1",
+			s[opstats.CExistsRequests], s[opstats.CExistsHashes], s[opstats.CExistsUnknown], s[opstats.CExistsFound], s[opstats.CExistsMissing], s[opstats.CRejectedStorageUnavailable])
+	}
+	if s[opstats.CCacheMiss] != 5 {
+		t.Fatalf("the cache misses of the failed lookup were dropped: %d", s[opstats.CCacheMiss])
+	}
+}
+
+func TestACancelledExistenceRequestCountsItsHashesAsUnknown(t *testing.T) {
+	started := make(chan struct{}, 1)
+	e, rec := statsEnv(t, nil)
+	e.srv.cfg.Exist = fakeCheckerCtx{fn: func(ctx context.Context, h [][20]byte) existence.Result {
+		started <- struct{}{}
+		<-ctx.Done()
+		return existence.Result{Unknown: h}
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, e.ts.URL+APIPrefix+"/torrents/exists", bytes.NewReader(existsBody(4)))
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	req.Header.Set("Content-Type", "application/json")
+	go func() { _, _ = http.DefaultClient.Do(req) }()
+	<-started
+	cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	for rec.Totals()[opstats.CExistsHashes] == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	tot := rec.Totals()
+	if tot[opstats.CExistsRequests] != 1 || tot[opstats.CExistsHashes] != 4 || tot[opstats.CExistsUnknown] != 4 || tot[opstats.CExistsFound]+tot[opstats.CExistsMissing] != 0 {
+		t.Fatalf("requests=%d hashes=%d unknown=%d: a cancelled lookup must count its hashes as unknown, not omit them",
+			tot[opstats.CExistsRequests], tot[opstats.CExistsHashes], tot[opstats.CExistsUnknown])
+	}
+}
+
+type fakeCheckerCtx struct {
+	fn func(ctx context.Context, h [][20]byte) existence.Result
+}
+
+func (f fakeCheckerCtx) Check(ctx context.Context, h [][20]byte) existence.Result {
+	return f.fn(ctx, h)
+}

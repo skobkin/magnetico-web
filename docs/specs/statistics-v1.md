@@ -12,7 +12,7 @@ The statistics describe **operation**, not content. They never store a payload, 
 
 ## 2. Boundaries and conservation
 
-All times are UTC. An event is attributed to the UTC **hour of its occurrence**, decided inside the recorder's critical section from the process clock: `hour = max(hourOf(now), lastHour)`; a backward clock step never produces an older hour, a forward step leaves hours without a row (a missing observation), and a step of more than 26 hours either way sets `clock_anomaly`. Day and month are derived from the hour.
+All times are UTC. An event is attributed to the UTC **hour of its occurrence**, decided inside the recorder's critical section from the process clock: `hour = max(hourOf(now), lastHour)`; a short backward clock step never produces an older hour (the event stays in the latest hour and does not set the coverage minute of the hour the clock has left), a forward step leaves hours without a row (a missing observation), and a step of more than 26 hours either way sets `clock_anomaly`. Day and month are derived from the hour.
 
 Byte counts are HTTP **request-body** bytes actually read (both endpoints, authenticated requests only); TLS, headers and responses are not counted.
 
@@ -36,7 +36,7 @@ Every counter is a monotone `bigint` per hour bucket (`agg_hour`, summed into `a
 
 | Counter | Recorded when | Definition |
 |---|---|---|
-| `submit_requests` | authentication succeeded | HTTP submit requests, any outcome |
+| `submit_requests` | authentication succeeded (before the content type, the body or the queue is looked at) | HTTP submit requests, any outcome: a request rejected for its content type or refused busy is counted here too, so a rejected request never appears without the request it rejected |
 | `submit_requests_validated` | the envelope decoded and every record validated | denominator of "records per request" |
 | `records_received` | the same moment | records in validated requests, before admission |
 | `records_enqueued` | `Admit` returned without error | rows inserted into the queue |
@@ -45,16 +45,16 @@ Every counter is a monotone `bigint` per hour bucket (`agg_hour`, summed into `a
 | `records_refused` | `Admit` returned an error | records whose admission ended without an acknowledgement |
 | `bytes_body` | the request body was read | request-body bytes of authenticated requests |
 | `bytes_accepted` | the same as `records_enqueued` | payload bytes of inserted rows |
-| `exists_requests` | an existence request was handled | requests |
-| `exists_hashes` | the same | hashes checked |
-| `exists_found` | per hash | already stored |
-| `exists_missing` | per hash | not stored |
-| `exists_unknown` | per hash | outcome not determinable |
+| `exists_requests` | authentication succeeded (the same moment as `submit_requests`) | requests **attempted**, any outcome |
+| `exists_hashes` | the request decoded and every hash was valid, and the lookup ran | hashes **checked**, whatever became of the lookup; a request rejected before that point contributes none |
+| `exists_found` | per hash | **classified**: already stored |
+| `exists_missing` | per hash | **classified**: not stored |
+| `exists_unknown` | per hash | **not classified**: the existence service could not decide, or the lookup failed, timed out or was cancelled. `exists_hashes = found + missing + unknown` for every request that ran; a hash is never silently omitted, and the cache hit and miss counts of a failed lookup are kept. (A request whose whole lookup failed is also counted in `rejected_storage_unavailable`; a cancelled one has no rejection class.) |
 | `cache_hit_positive` | per checked hash | answered from the positive existence cache |
 | `cache_hit_negative` | per checked hash | answered from the negative existence cache |
 | `cache_miss` | per checked hash | looked up in PostgreSQL |
 | `auth_cache_hits` | authentication | credential found in the 60 s cache |
-| `auth_cache_misses` | authentication | absent or expired, including coalesced waiters |
+| `auth_cache_misses` | authentication | any well-formed request the cache could not answer (absent or expired), including coalesced waiters and requests then refused busy; `auth_cache_hits + auth_cache_misses` is the number of well-formed credentials presented, and `auth_busy` is a subset of the misses |
 | `auth_db_lookups` | authentication | queries actually executed |
 | `auth_storage_failures` | authentication | lookups that failed (error, timeout) |
 | `auth_busy` | authentication | requests refused because the bounded lookup state was full or a slot wait expired |
@@ -177,7 +177,9 @@ A graceful shutdown makes a **final flush** bounded by 5 s, plus at most 2 s to 
 
 A repeated failure is logged once per state, where the state is the SQLSTATE class of the error, not the driver's wrapper type; a log line never carries a driver error's text (host, user, database), only the class, or our own schema and privilege messages.
 
-**Clock excursions.** The process clock decides the hour of an event and the slot of a shared sample. A shared sample more than 6 slots (a minute; 2 storage slots) ahead of the writer's clock at flush time is **not applied** (counted in `gauge_batches_skipped_overlap`), and a stored slot marker that far ahead — written by a clock that was wrong — gives way to the next sample that agrees with the writer's clock, so one bad reading cannot freeze the queue and storage figures. The web service shows a source more than 30 s in the future as **unavailable**. In memory, an event hour is clamped so it never goes backwards: after a forward excursion of an hour or more, later events are attributed to that (future) hour until real time catches up or the process restarts (`clock_anomaly` is set above 26 h); the next process start is the repair. The crawler-activity timestamps and `first_seen_at` follow the same clock.
+**Known telemetry limitations (stated, not hidden; an exact figure would need a change to the durable ingestion protocol).** (1) Counters are operational telemetry: a crash loses up to one flush interval, and the records received but not yet acknowledged at that moment stay as a permanent residual of the period. (2) A cancelled existence request counts its hashes as unknown but has no rejection class, and a client that gave up cannot be told apart from a slow one; a request refused before its body decodes counts no hashes. (3) `admission_duplicates` counts duplicates repeated within one request as well as records already pending; the protocol does not say which. (4) "Stored existing" includes torrents created by an earlier attempt of the same row (see §2). (5) A quota utilisation exists only for samples taken while a quota was configured. (6) An approximate count is flagged per sample and per bucket, but which individual row counts were estimated within a bucket is not kept.
+
+**Clock excursions.** The process clock decides the hour of an event and the slot of a shared sample. A shared sample more than 6 slots (a minute; 2 storage slots) ahead of the writer's clock at flush time is **not applied** (counted in `gauge_batches_skipped_overlap`), and a stored slot marker that far ahead — written by a clock that was wrong — gives way to the next sample that agrees with the writer's clock, so one bad reading cannot freeze the queue and storage figures. The web service shows a source more than 30 s in the future as **unavailable**. In memory, an event hour is clamped so it never goes backwards, but the clamp does not pin: if the clock stays behind the latest hour used for five minutes, that hour is considered the wrong one (a forward excursion of the host clock), the clamp re-anchors to the clock and `clock_anomaly` is set; events of the first five minutes, and the excursion itself, stay in the future hour they were attributed to (a clock set back by more than 26 h also sets `clock_anomaly` at once). A random walk of forward and backward steps cannot leave the shared markers pinned: once the clock runs steadily the next samples are applied (`TestRepeatedClockAdjustmentsCannotPinTheSharedMarkers`). The crawler-activity timestamps and `first_seen_at` follow the same clock.
 
 ## 9. Multi-instance behaviour
 

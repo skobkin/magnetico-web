@@ -44,6 +44,7 @@ type Recorder struct {
 
 	cur          map[time.Time]*hourAcc
 	lastHour     time.Time
+	behindSince  time.Time // first reading of the current run of readings behind lastHour
 	anomaly      bool
 	hoursDropped int64
 
@@ -57,6 +58,10 @@ type Recorder struct {
 	// hook, set by tests only, runs inside the critical section of every event.
 	hook func()
 }
+
+// pinHealAfter is how long the clock must stay behind the latest hour used
+// before that hour is considered wrong rather than the clock having stepped back.
+const pinHealAfter = 5 * time.Minute
 
 // New returns a Recorder reading time from clock (time.Now when nil).
 func New(clock func() time.Time) *Recorder {
@@ -77,15 +82,32 @@ func (r *Recorder) enter() (time.Time, *hourAcc) {
 	}
 	now := r.now()
 	h := opstats.HourOf(now)
+	clamped := false
 	switch {
 	case r.lastHour.IsZero():
 	case h.Before(r.lastHour):
 		if r.lastHour.Sub(h) > opstats.MaxLiveHours*time.Hour {
 			r.anomaly = true
 		}
-		h = r.lastHour // a backward step never produces an older hour
-	case h.Sub(r.lastHour) > opstats.MaxLiveHours*time.Hour:
-		r.anomaly = true
+		if r.behindSince.IsZero() {
+			r.behindSince = now
+		}
+		if now.Sub(r.behindSince) >= pinHealAfter {
+			// The clock has stayed behind the pinned hour for a sustained time: it is
+			// the pinned hour that is wrong (one forward excursion of the host clock),
+			// so follow the clock again instead of attributing everything to a
+			// future hour until the process restarts. The anomaly stays flagged.
+			r.anomaly = true
+			r.behindSince = time.Time{}
+		} else {
+			h = r.lastHour // a short backward step never produces an older hour
+			clamped = true
+		}
+	default:
+		r.behindSince = time.Time{}
+		if h.Sub(r.lastHour) > opstats.MaxLiveHours*time.Hour {
+			r.anomaly = true
+		}
 	}
 	r.lastHour = h
 	acc := r.cur[h]
@@ -96,7 +118,9 @@ func (r *Recorder) enter() (time.Time, *hourAcc) {
 		acc = &hourAcc{}
 		r.cur[h] = acc
 	}
-	acc.coverage |= opstats.MinuteBit(now)
+	if !clamped { // a clamped event's minute belongs to an hour the clock has left
+		acc.coverage |= opstats.MinuteBit(now)
+	}
 	return now, acc
 }
 
