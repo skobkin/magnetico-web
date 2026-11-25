@@ -177,6 +177,15 @@ type runRig struct {
 
 func startRun(t *testing.T, linger time.Duration, sub *countingSubmitter) *runRig {
 	t.Helper()
+	r := newUnstartedRun(t, linger, sub)
+	r.start(t)
+	return r
+}
+
+// newUnstartedRun builds the sender and its queue without running the sender, so a test can
+// fill the queue first and take no timing from the (race-slowed, durable) appends.
+func newUnstartedRun(t *testing.T, linger time.Duration, sub *countingSubmitter) *runRig {
+	t.Helper()
 	q, err := crawlqueue.Open(crawlqueue.Options{Dir: t.TempDir(), Logf: func(string, ...any) {}})
 	if err != nil {
 		t.Fatal(err)
@@ -192,11 +201,15 @@ func startRun(t *testing.T, linger time.Duration, sub *countingSubmitter) *runRi
 			return true
 		}
 	}
+	return &runRig{q: q, sub: sub, sender: s, done: make(chan struct{})}
+}
+
+func (r *runRig) start(t *testing.T) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &runRig{q: q, sub: sub, sender: s, cancel: cancel, done: make(chan struct{})}
-	go func() { defer close(r.done); s.Run(ctx, 2*time.Second) }()
+	r.cancel = cancel
+	go func() { defer close(r.done); r.sender.Run(ctx, 2*time.Second) }()
 	t.Cleanup(func() { cancel(); <-r.done })
-	return r
 }
 
 func (r *runRig) add(t *testing.T, from, to int) {
@@ -238,21 +251,30 @@ func TestWakeDoesNotSendImmediately(t *testing.T) {
 	}
 }
 
+// A backlog drains back to back, not one batch per linger (issue #53: the first version
+// of this test timed 600 durable appends against a 400 ms window, which a race-enabled run
+// on a busy host exceeds by itself). The queue is filled BEFORE the sender runs; the linger
+// is far longer than any scheduling delay, so "dispatched at once" is the only way the two
+// full batches can arrive within the window, and the partial remainder cannot be sent
+// before its linger has run from its own enqueue time.
 func TestSenderDrainsABacklogBackToBackWithOneRequestInFlight(t *testing.T) {
+	const linger = 6 * time.Second
 	sub := &countingSubmitter{delay: 5 * time.Millisecond}
-	r := startRun(t, 600*time.Millisecond, sub)
+	r := newUnstartedRun(t, linger, sub)
+	filled := time.Now()
+	r.add(t, 1, 600) // 256 + 256 + 88; Wake before the sender runs is harmless
+	r.start(t)
 	start := time.Now()
-	r.add(t, 1, 600) // 256 + 256 + 88
-	waitUntil(t, "the two full batches", 5*time.Second, func() bool { return len(sub.snapshot()) >= 2 })
+	waitUntil(t, "the two full batches", 3*time.Second, func() bool { return len(sub.snapshot()) >= 2 })
 	calls := sub.snapshot()
 	if calls[0].records != 256 || calls[1].records != 256 {
 		t.Fatalf("batches %d and %d records, want 256 each (the hard cap)", calls[0].records, calls[1].records)
 	}
-	if d := calls[1].at.Sub(start); d > 400*time.Millisecond {
-		t.Fatalf("full batches were not dispatched at once (second after %v)", d)
+	if d := calls[1].at.Sub(start); d >= linger {
+		t.Fatalf("full batches were not dispatched at once (second after %v with a %v linger)", d, linger)
 	}
-	waitUntil(t, "the remainder", 5*time.Second, func() bool { return len(sub.snapshot()) == 3 })
-	if sub.snapshot()[2].records != 88 || sub.snapshot()[2].at.Sub(start) < 500*time.Millisecond {
+	waitUntil(t, "the remainder", linger+20*time.Second, func() bool { return len(sub.snapshot()) == 3 })
+	if sub.snapshot()[2].records != 88 || sub.snapshot()[2].at.Sub(filled) < linger {
 		t.Fatalf("the partial remainder must wait for its linger: %+v", sub.snapshot()[2])
 	}
 	if sub.maxIn.Load() != 1 {
