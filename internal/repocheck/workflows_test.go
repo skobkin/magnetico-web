@@ -20,7 +20,7 @@ import (
 // release tags); they are not a release system.
 
 const (
-	tagGrammar = `CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+(-rc[.][0-9]+)?$"`
+	tagGrammar = `CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+"`
 
 	branch080 = "refactor/0.8.0-unify-and-new-storage"
 )
@@ -276,19 +276,20 @@ func TestWorkflowsContainNoBackslash(t *testing.T) {
 }
 
 // TestTagGrammarAcceptsExactlyReleaseTags runs the pattern of the tag expression through Go's
-// regexp, which the expression engine's `matches` uses.
+// regexp, which the expression engine's `matches` uses. A release tag starts with
+// MAJOR.MINOR.PATCH; the suffix is deliberately not restricted (owner decision).
 func TestTagGrammarAcceptsExactlyReleaseTags(t *testing.T) {
 	m := regexp.MustCompile(`^CI_COMMIT_TAG matches "(.*)"$`).FindStringSubmatch(tagGrammar)
 	if m == nil {
 		t.Fatalf("unexpected tag expression %q", tagGrammar)
 	}
 	re := regexp.MustCompile(m[1])
-	for _, tag := range []string{"0.8.0", "0.8.0-rc.0", "10.20.30-rc.12"} {
+	for _, tag := range []string{"0.8.0", "0.8.0-rc1", "10.20.30-rc12", "0.8.0-beta", "0.8.0-rc.1"} {
 		if !re.MatchString(tag) {
 			t.Errorf("release tag %q is not accepted", tag)
 		}
 	}
-	for _, tag := range []string{"", "0.8", "v0.8.0", "0.8.0-rc", "0.8.0-rc1", "0.8.0-beta.1", "0x8x0", "0.8.0-rcX1", "0.8.0.1", "latest"} {
+	for _, tag := range []string{"", "0.8", "v0.8.0", "0x8x0", "latest", "release-0.8.0", "0.8-rc1"} {
 		if re.MatchString(tag) {
 			t.Errorf("tag %q is accepted", tag)
 		}

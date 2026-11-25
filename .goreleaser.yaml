@@ -8,7 +8,7 @@ project_name: magnetico-web
 # verification workflow builds the same archives as a snapshot without publishing
 # (`--snapshot --skip=publish`) and smoke-tests them (ci/native-smoke.sh). The release name
 # is the tag, the body the generated changelog, and a tag with a prerelease part
-# (MAJOR.MINOR.PATCH-rc.N) is published as a prerelease.
+# (MAJOR.MINOR.PATCH-suffix, e.g. 0.8.0-rc1) is published as a prerelease.
 builds:
   - id: magnetico
     main: ./cmd/magnetico
@@ -97,7 +97,7 @@ changelog:
       - '^ci(\([^)]*\))?!?:'
 
 release:
-  # A tag with a prerelease part (0.8.0-rc.0) is published as a prerelease, never
+  # A tag with a prerelease part (0.8.0-rc1) is published as a prerelease, never
   # promoted to a stable release.
   prerelease: auto
   gitea:

@@ -1,12 +1,12 @@
-# Release workflow: publication of a release tag (MAJOR.MINOR.PATCH or
-# MAJOR.MINOR.PATCH-rc.N). Nothing else triggers it.
+# Release workflow: publication of a release tag (MAJOR.MINOR.PATCH, optionally followed
+# by any suffix such as -rc1). Nothing else triggers it.
 #
 # It waits for the verification workflow (ci.yaml) of the same tag: every gate (tests,
 # race suite, lint, govulncheck, ...) has passed before anything below starts. It is the
 # conventional shape of the project's other repositories:
 #
 #   release-forgejo  GoReleaser builds the linux/amd64 and linux/arm64 archives and creates
-#                    the Forgejo release (prerelease for a tag with an -rc.N part; the
+#                    the Forgejo release (prerelease for a tag with a -suffix; the
 #                    changelog is the release notes).
 #   release-docker   the Woodpecker buildx plugin builds the multi-architecture image and
 #                    pushes it to docker.io/skobkin/magnetico-web and
@@ -20,7 +20,7 @@
 # reach them. No registry cache is configured.
 when:
   - event: tag
-    evaluate: 'CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+(-rc[.][0-9]+)?$"'
+    evaluate: 'CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+"'
 
 depends_on:
   - ci

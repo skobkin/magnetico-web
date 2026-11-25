@@ -19,7 +19,7 @@ requirement.)
 | `goreleaser check` and a snapshot build of both archives, `ci/native-smoke.sh` | **verified locally** (also inside the pinned `goreleaser/goreleaser:v2.20.1` image) |
 | The image (amd64 and arm64 in one `docker buildx` invocation), `ci/image-smoke.sh` on amd64, Trivy for both platforms | **verified locally** during Task 08 and Task 09A; not part of any workflow |
 | arm64 image | **built and scanned; never executed** |
-| Real Woodpecker build, GoReleaser publication to Forgejo, the plugin's push to Docker Hub and GHCR | **never performed** (no tag exists, no credentials were used here): the owner verifies them with the `0.8.0-rc.0` tag |
+| Real Woodpecker build, GoReleaser publication to Forgejo, the plugin's push to Docker Hub and GHCR | **never performed** (no tag exists, no credentials were used here): the owner verifies them with the `0.8.0-rc1` tag |
 
 ## Roles
 
@@ -29,16 +29,21 @@ publication target. Images go to `docker.io/skobkin/magnetico-web` and `ghcr.io/
 
 ## Tags
 
-Existing tags are `0.2.0-symfony6-rc1` … `0.7.1` (PHP era). The Go line continues the same numbering. New tags must match
+Existing tags are `0.2.0-symfony6-rc1` … `0.7.1` (PHP era). The Go line continues the same numbering. New tags must
+start with `MAJOR.MINOR.PATCH`; whatever follows is not restricted (owner decision):
 
 ```
-^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$        e.g. 0.8.0-rc.0, 0.8.0-rc.1, 0.8.0, 0.8.1
+^[0-9]+[.][0-9]+[.][0-9]+        e.g. 0.8.0-rc1, 0.8.0-rc2, 0.8.0, 0.8.1
 ```
 
-(release candidates are spelled `-rc.N` with a dot, as SemVer orders them; the historical `-rc1` spelling is not
-accepted for new tags). A tag outside the grammar triggers **neither** workflow, so it can never publish. A
-release-candidate tag publishes exactly its version tag (`0.8.0-rc.0`) and a **prerelease** on Forgejo (GoReleaser's
-`prerelease: auto`); a stable tag publishes the stable version and a stable release. **No floating alias is applied**
+(release candidates are spelled `-rcN`, without a dot, as in the historical tags). The workflows write the dots as
+`[.]`, never `\.`: Woodpecker substitutes variables over the whole file before parsing it and consumes one level of
+backslashes, which made the expression invalid (`internal/repocheck` refuses a backslash in the workflow files). A tag
+that does not start with a version triggers **neither** workflow, so it can never publish. Because the suffix is not
+checked, the tag must still be valid for both consumers: SemVer for GoReleaser and the Docker tag alphabet
+(`[A-Za-z0-9_.-]`, at most 128 characters) for the image; a `+build` suffix, for example, would fail `release-docker`
+after `release-forgejo` succeeded (see the recovery section). A tag with a suffix publishes exactly its version tag
+(`0.8.0-rc1`) and a **prerelease** on Forgejo (GoReleaser's `prerelease: auto`); a stable tag publishes the stable version and a stable release. **No floating alias is applied**
 (`latest` is the owner's later, deliberate decision: add it to the `tags` of `release-docker` and update
 `internal/repocheck` on purpose).
 
@@ -123,7 +128,7 @@ tag ─► ci.yaml (every gate above, same commit)
 `release-forgejo` and `release-docker` are independent, so one can succeed while the other fails. A pipeline re-run
 **rebuilds** both. To recover, either delete the incomplete artifacts deliberately (the image tag in both registries,
 and the Forgejo release for that tag, which GoReleaser will not replace; its behaviour on an existing release is
-**not verified** here) and re-run, or cut the next tag (`0.8.0-rc.1`): a tag is cheap, an overwritten image is not.
+**not verified** here) and re-run, or cut the next tag (`0.8.0-rc2`): a tag is cheap, an overwritten image is not.
 The plugin pushes tags without a check, so never re-run a release for a tag whose image was already used.
 
 ## Operator configuration (not in the repository)
@@ -152,8 +157,8 @@ The plugin pushes tags without a check, so never re-run a release for a tag whos
 
 ## First release
 
-Push the first release-candidate tag (`0.8.0-rc.0`) and watch the pipeline: `ci` first, then `release-forgejo` and
-`release-docker`. Check `docker buildx imagetools inspect docker.io/skobkin/magnetico-web:0.8.0-rc.0` (and the same on
+Push the first release-candidate tag (`0.8.0-rc1`) and watch the pipeline: `ci` first, then `release-forgejo` and
+`release-docker`. Check `docker buildx imagetools inspect docker.io/skobkin/magnetico-web:0.8.0-rc1` (and the same on
 GHCR: both should show two platforms and the attestations), the Forgejo release page (a **prerelease** with both
 archives, `checksums.txt` and the changelog), and run `ci/image-smoke.sh --platform linux/amd64` against the pushed image.
 
@@ -172,7 +177,7 @@ an open owner decision.
 
 ## Known limitations
 
-* No pipeline has run on Woodpecker; the first real run is the owner's `0.8.0-rc.0` tag.
+* No pipeline has run on Woodpecker; the first real run is the owner's `0.8.0-rc1` tag.
 * The container image is not built or run by any workflow before a tag (see above): its smoke test and scan are local.
 * The amd64 image is executed by the smoke test; arm64 is built and scanned, **not executed**.
 * The skip census allow-list contains two known gaps of the external-PostgreSQL mode (see `testing.md`).

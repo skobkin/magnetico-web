@@ -26,7 +26,7 @@ authenticated web UI (implemented; see below).
 | **Native binaries** | Linux amd64 and arm64 archives with SHA-256 checksums on the [Forgejo releases](https://git.skobk.in/skobkin/magnetico-web/releases) |
 
 One multi-platform image (`linux/amd64`, `linux/arm64`) holds the single `magnetico` executable and every subcommand;
-tags are the exact release only (`0.8.0-rc.0`, `0.8.0`, …; no `latest` yet; pin the digest in production). It runs as
+tags are the exact release only (`0.8.0-rc1`, `0.8.0`, …; no `latest` yet; pin the digest in production). It runs as
 `10001:10001`, with `/data` (the crawler queue) and `/reports` (migration reports and exports) as the only writable
 places. **No image has been published yet**: the build, the checks and the publication pipeline are configured and were
 verified locally, but have not run on Woodpecker (see [`docs/release-engineering.md`](docs/release-engineering.md)).

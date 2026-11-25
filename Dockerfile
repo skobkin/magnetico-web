@@ -3,7 +3,7 @@
 # One universal image for every subcommand of the `magnetico` executable
 # (crawl, ingest, web, migrate, dev). Build:
 #
-#   docker buildx build --build-arg VERSION=0.8.0-rc.0 --build-arg COMMIT=$(git rev-parse HEAD) .
+#   docker buildx build --build-arg VERSION=0.8.0-rc1 --build-arg COMMIT=$(git rev-parse HEAD) .
 #
 # The compiler stage runs on the build platform and cross-compiles for the
 # target platform (no emulation); the final stage holds the static executable

@@ -13,7 +13,7 @@ One universal image holds the single `magnetico` executable and supports every s
 | Docker Hub | [`docker.io/skobkin/magnetico-web`](https://hub.docker.com/r/skobkin/magnetico-web) |
 | GitHub Container Registry | [`ghcr.io/skobkin/magnetico-web`](https://github.com/skobkin/magnetico-web/pkgs/container/magnetico-web) |
 | Platforms | `linux/amd64`, `linux/arm64` (one multi-platform image; the two registries carry the identical digest) |
-| Tags | the exact release only: `0.8.0-rc.0`, `0.8.0`, … — **no** `latest`, `0.8`, `stable` or `edge` (the owner enables `latest` explicitly later). Pin the digest in production: `…/magnetico-web:0.8.0@sha256:…` |
+| Tags | the exact release only: `0.8.0-rc1`, `0.8.0`, … — **no** `latest`, `0.8`, `stable` or `edge` (the owner enables `latest` explicitly later). Pin the digest in production: `…/magnetico-web:0.8.0@sha256:…` |
 | Deployment stack | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) — it temporarily still describes the **old PHP** deployment until it is updated separately |
 
 ## What is in the image
@@ -229,7 +229,7 @@ documented shape and are not a claim about every workload; the RC0 checklist ask
 ## Building the image yourself
 
 ```sh
-docker buildx build --build-arg VERSION=0.8.0-rc.0 --build-arg COMMIT=$(git rev-parse HEAD) -t magnetico-web:local .
+docker buildx build --build-arg VERSION=0.8.0-rc1 --build-arg COMMIT=$(git rev-parse HEAD) -t magnetico-web:local .
 # multi-platform, written to an OCI layout instead of the local store (no emulation needed: the final stage has no RUN):
 docker buildx build --platform linux/amd64,linux/arm64 --sbom=true --provenance=mode=max \
   --output type=oci,tar=false,dest=./image,name=magnetico-web:local .
