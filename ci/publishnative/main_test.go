@@ -33,7 +33,6 @@ type fakeForge struct {
 	assets          map[string][]byte
 	uploads         int
 	badAuth         []string
-	tokenSeenBy     map[string]bool
 }
 
 func newForge(t *testing.T) *fakeForge {
