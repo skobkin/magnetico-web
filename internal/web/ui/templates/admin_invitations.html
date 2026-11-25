@@ -1,0 +1,16 @@
+{{define "title"}}Invitations · Administration{{end}}
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "content"}}
+<div class="page-intro"><div class="page-title-wrap"><h1>Invitations</h1><p>Newest first · read-only · times in UTC · invitation codes are never shown</p></div></div>
+{{template "admintabs" .}}
+<section class="section-card"><div class="section-card-body">
+{{if .Items}}
+<div class="table-wrap"><table class="data-table">
+<thead><tr><th class="num">Id</th><th>Owner</th><th>Status</th><th>Used by</th><th>Created</th><th>Used</th><th>Expires</th><th>Revoked</th></tr></thead>
+<tbody>{{range .Items}}<tr><td class="num">{{.ID}}</td><td>{{.Owner}}</td><td><span class="status {{.StatusClass}}">{{.Status}}</span></td><td>{{.UsedBy}}</td><td>{{.Created}}</td><td>{{.Used}}</td><td>{{.Expires}}</td><td>{{.Revoked}}</td></tr>{{end}}</tbody>
+</table></div>
+{{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Older</a></p>{{end}}
+{{else}}<p class="subtext">There are no invitations.</p>{{end}}
+</div></section>
+{{end}}

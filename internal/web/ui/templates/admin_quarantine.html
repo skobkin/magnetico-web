@@ -1,0 +1,19 @@
+{{define "title"}}Quarantine · Administration{{end}}
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "content"}}
+<div class="page-intro"><div class="page-title-wrap"><h1>Quarantine</h1><p>Records the ingest queue set aside as permanently invalid · newest first · metadata only · read-only · times in UTC</p></div></div>
+{{template "admintabs" .}}
+{{if .Problem}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>{{.Problem}}</span></div>{{else}}
+<section class="section-card"><div class="section-card-body">
+{{if .Items}}
+<div class="table-wrap"><table class="data-table">
+<thead><tr><th class="num">Id</th><th>Reason</th><th>Detail</th><th class="num">Attempts</th><th class="num">Size</th><th>Received</th><th>Quarantined</th><th>Age</th></tr></thead>
+<tbody>{{range .Items}}<tr><td class="num">{{.ID}}</td><td>{{.Reason}}</td><td>{{.Detail}}</td><td class="num">{{.Attempts}}</td><td class="num">{{.Size}}</td><td>{{.Received}}</td><td>{{.Quarantined}}</td><td>{{.Age}}</td></tr>{{end}}</tbody>
+</table></div>
+{{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Older</a></p>{{end}}
+{{else}}<p class="subtext">The quarantine is empty.</p>{{end}}
+</div></section>
+<p class="subtext">The record payloads and info hashes are never shown here. Quarantined bytes count toward the queue quota until an operator acts (see docs/crawler.md).</p>
+{{end}}
+{{end}}

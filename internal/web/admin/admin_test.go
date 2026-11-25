@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/internal/web/admin/access"
+	"github.com/skobkin/magnetico-web/internal/web/admin/data"
 	"github.com/skobkin/magnetico-web/internal/web/admin/stats"
 	"github.com/skobkin/magnetico-web/internal/web/server"
 )
@@ -47,7 +48,7 @@ func TestAdminRoutesAreGetOnlyAndInTheAdminClasses(t *testing.T) {
 	srv := newServer(t)
 	srv.Router().SetGuard(server.Admin, passThrough)
 	srv.Router().SetGuard(server.AdminJSON, passThrough)
-	Install(srv, stats.NewService(nil))
+	Install(srv, stats.NewService(nil), data.New(nil))
 	var n int
 	for _, r := range srv.Router().Routes() {
 		if !strings.Contains(r.Pattern, " /admin") {
@@ -90,7 +91,7 @@ func TestMutatingMethodsAreRefusedAndRunNoHandler(t *testing.T) {
 	}
 	srv.Router().SetGuard(server.Admin, count)
 	srv.Router().SetGuard(server.AdminJSON, count)
-	Install(srv, stats.NewService(nil))
+	Install(srv, stats.NewService(nil), data.New(nil))
 	for _, m := range []string{"POST", "PUT", "DELETE", "PATCH"} {
 		for _, p := range []string{"/admin", "/admin/api/overview", "/admin/api/series"} {
 			req := httptest.NewRequest(m, "https://magnet.example.org"+p, strings.NewReader("x=1"))
@@ -111,7 +112,7 @@ func TestHandlersRefuseARequestThatDidNotPassTheGuard(t *testing.T) {
 	srv := newServer(t)
 	srv.Router().SetGuard(server.Admin, passThrough)
 	srv.Router().SetGuard(server.AdminJSON, passThrough)
-	Install(srv, stats.NewService(nil))
+	Install(srv, stats.NewService(nil), data.New(nil))
 	for _, p := range []string{"/admin", "/admin/api/overview", "/admin/api/series?chart=queue&g=day"} {
 		req := httptest.NewRequest("GET", "https://magnet.example.org"+p, nil)
 		req.RemoteAddr = "203.0.113.9:1"
@@ -157,5 +158,42 @@ func TestFormattingNeverTurnsUnavailableIntoZero(t *testing.T) {
 	}
 	if got := bytesIEC(1536); got != "1.5 KiB" {
 		t.Fatalf("bytesIEC: %q", got)
+	}
+}
+
+func TestCursorsAreStrictlyParsed(t *testing.T) {
+	for _, id := range []int64{1, 50, 123456789, 1<<62 - 1} {
+		got, ok := decodeID(encodeID(id))
+		if !ok || got != id {
+			t.Errorf("id %d does not round-trip: %d %v", id, got, ok)
+		}
+	}
+	for _, bad := range []string{
+		"", "0", "-1", "abc", "MQ==", "MQ=", strings.Repeat("A", 101), "MDE" /* "01": leading zero */, "MS4w" /* "1.0" */, "MSAy", /* "1 2" */
+		"bnVsbA" /* "null" */, "OTIyMzM3MjAzNjg1NDc3NTgwOA" /* 2^63 */, "NDYxMTY4NjAxODQyNzM4NzkwNg" /* 2^62 */, "%00", "../x",
+	} {
+		if n, ok := decodeID(bad); ok {
+			t.Errorf("decodeID(%q) = %d: accepted", bad, n)
+		}
+	}
+	for _, name := range []string{"alpha", "a", "node-1.eu_west", strings.Repeat("a", 64)} {
+		got, ok := decodeName(encodeName(name))
+		if !ok || got != name {
+			t.Errorf("name %q does not round-trip: %q %v", name, got, ok)
+		}
+	}
+	for _, bad := range []string{"", "Alpha" /* upper case */, "-lead", ".dot", "has space", strings.Repeat("a", 65), "a\x00b", "a/b", "é"} {
+		if _, ok := decodeName(encodeName(bad)); ok && bad != "" {
+			t.Errorf("decodeName accepted %q", bad)
+		}
+		if bad != "" {
+			continue
+		}
+		if _, ok := decodeName(""); ok {
+			t.Error("the empty cursor was accepted")
+		}
+	}
+	if _, ok := decodeName("not base64!"); ok {
+		t.Error("garbage accepted")
 	}
 }

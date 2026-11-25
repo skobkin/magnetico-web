@@ -1,0 +1,22 @@
+{{define "title"}}Crawlers · Administration{{end}}
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "content"}}
+<div class="page-intro"><div class="page-title-wrap"><h1>Crawlers</h1><p>Registered crawlers and their last activity · read-only · times in UTC</p></div></div>
+{{template "admintabs" .}}
+{{if .Problem}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>{{.Problem}}</span></div>{{else}}
+{{if not .StatsAvailable}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>Statistics are unavailable, so only the registry is shown (no activity).</span></div>{{end}}
+<section class="section-card"><div class="section-card-body">
+{{if .Items}}
+<div class="table-wrap"><table class="data-table">
+<thead><tr><th>Name</th><th>State</th><th>Id</th><th>Registered</th><th>Token rotated</th><th>Last seen</th><th>Last address</th><th>Last submit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Duplicates</th><th class="num">Request bytes</th><th class="num">Existence requests</th><th class="num">Rejected requests</th></tr></thead>
+<tbody>{{range .Items}}<tr><td>{{.Name}}</td><td><span class="status {{.StateClass}}">{{.State}}</span>{{if .Disabled}}{{if ne .Disabled "—"}} <span class="subtext">since {{.Disabled}}</span>{{end}}{{end}}</td><td><code>{{.ID}}</code></td><td>{{.Created}}</td><td>{{.Rotated}}</td>
+{{if .Connected}}<td>{{.LastSeen}}</td><td>{{.LastIP}}</td><td>{{.LastSubmit}}</td><td class="num">{{.Received}}</td><td class="num">{{.Enqueued}}</td><td class="num">{{.Duplicate}}</td><td class="num">{{.Bytes}}</td><td class="num">{{.ExistsRequests}}</td><td class="num">{{.Rejected}}</td>
+{{else}}<td colspan="9" class="subtext">never connected</td>{{end}}</tr>{{end}}</tbody>
+</table></div>
+{{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Next page</a></p>{{end}}
+{{else}}<p class="subtext">No crawler is registered. Add one with <code>magnetico ingest crawler add &lt;name&gt;</code>.</p>{{end}}
+</div></section>
+<p class="subtext">Credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
+{{end}}
+{{end}}

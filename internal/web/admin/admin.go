@@ -9,11 +9,14 @@ package admin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/skobkin/magnetico-web/internal/web/admin/access"
+	"github.com/skobkin/magnetico-web/internal/web/admin/data"
 	"github.com/skobkin/magnetico-web/internal/web/admin/stats"
 	"github.com/skobkin/magnetico-web/internal/web/auth"
 	"github.com/skobkin/magnetico-web/internal/web/problem"
@@ -24,12 +27,13 @@ import (
 type Handlers struct {
 	srv   *server.Server
 	stats *stats.Service
+	store *data.Store
 }
 
 // Install registers the administrator routes: all GET, all behind the Admin or
 // AdminJSON guard of the auth package.
-func Install(srv *server.Server, svc *stats.Service) *Handlers {
-	h := &Handlers{srv: srv, stats: svc}
+func Install(srv *server.Server, svc *stats.Service, store *data.Store) *Handlers {
+	h := &Handlers{srv: srv, stats: svc, store: store}
 	rt := srv.Router()
 	rt.Handle("GET /admin", server.KindRequest, server.Admin, http.HandlerFunc(h.overview))
 	rt.Handle("GET /admin/api/overview", server.KindRequest, server.AdminJSON, http.HandlerFunc(h.overviewJSON))
@@ -167,7 +171,11 @@ func (h *Handlers) overview(w http.ResponseWriter, r *http.Request) {
 	h.render(w, r, http.StatusOK, "admin_overview", buildOverview(h.chrome(r, "overview"), o, f))
 }
 
-func errType(err error) string { return strings.TrimPrefix(strings.TrimPrefix(typeName(err), "*"), "") }
+func errType(err error) string { return strings.TrimPrefix(typeName(err), "*") }
+
+func typeName(v any) string { return fmt.Sprintf("%T", v) }
+
+func urlQueryEscape(s string) string { return url.QueryEscape(s) }
 
 func buildOverview(c chrome, o stats.Overview, f stats.Freshness) overviewPage {
 	pg := overviewPage{chrome: c, Charts: charts, Problem: o.Problem, Stale: f.Stale, FetchedAt: f.FetchedAt.UTC().Format("2006-01-02 15:04:05 UTC")}

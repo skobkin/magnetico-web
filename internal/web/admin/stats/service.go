@@ -202,7 +202,7 @@ func (s *Service) Crawlers(ctx context.Context, p access.Principal, after Cursor
 		return CrawlerPage{}, Freshness{}, err
 	}
 	page, at, stale, err := s.crawlers.get(ctx, after, func(ctx context.Context) (CrawlerPage, error) {
-		ing, err := s.r.probeIngest(ctx)
+		ing, _, _, err := s.probe.get(ctx, struct{}{}, s.r.probeIngest) // one probe (cached 60 s) for every page that needs the ingest schema
 		if err != nil {
 			return CrawlerPage{}, err
 		}
