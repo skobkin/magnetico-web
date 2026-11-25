@@ -17,7 +17,7 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 
 1.3 The web service never writes to `magneticod.*` tables.
 
-1.4 Non-goals of this version: torrent upload or editing; search by file path (removed in 0.8.0, `postgresql-persistence-v2.md` §1); **an administration UI** (a future release will offer statistics, user management, invitations and tracker management; this version provides CLI commands only); OAuth; general RBAC; multi-tenant features; public read-only access and open registration (**not designed here**, §3.6); user migration (a separate task); CI/OCI packaging.
+1.4 Non-goals of this version: torrent upload or editing; search by file path (removed in 0.8.0, `postgresql-persistence-v2.md` §1); **administration mutations** (the read-only administrator section of §6.1.2 exists since Task 09; changing users, invitations, trackers or crawler credentials remains CLI-only); OAuth; general RBAC; multi-tenant features; public read-only access and open registration (**not designed here**, §3.6); user migration (a separate task); CI/OCI packaging.
 
 ## 2. Process model
 
@@ -54,7 +54,7 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 
 2.6 `GET /healthz` (process alive) and `GET /readyz` (database reachable and schema verified). Both unauthenticated; MUST NOT disclose versions, counts or configuration.
 
-2.7 Database role **[APPROVED, W2]**: `USAGE` on `magneticod` and `SELECT` on `magneticod.torrents`, `magneticod.torrent_file_blobs` **and `magneticod.schema_version`** (the startup verification reads it); `USAGE` on `magnetico_web`, `SELECT/INSERT/UPDATE` on `users`, `api_tokens`, `rss_tokens`, `invites`, `SELECT/INSERT/UPDATE/DELETE` on `sessions` and `one_time_tokens`, `SELECT` on `trackers`, `settings`, `web_version`; no DDL. The administrator CLI additionally needs `INSERT/UPDATE/DELETE` on `trackers`. The exact `GRANT` statements are in `docs/web-deployment.md` §4 and are executed verbatim by the tests. A missing privilege is a controlled startup failure that names it.
+2.7 Database role **[APPROVED, W2]**: `USAGE` on `magneticod` and `SELECT` on `magneticod.torrents`, `magneticod.torrent_file_blobs` **and `magneticod.schema_version`** (the startup verification reads it); `USAGE` on `magnetico_web`, `SELECT/INSERT/UPDATE` on `users`, `api_tokens`, `rss_tokens`, `invites`, `SELECT/INSERT/UPDATE/DELETE` on `sessions` and `one_time_tokens`, `SELECT` on `trackers`, `settings`, `web_version`; no DDL. The administrator CLI additionally needs `INSERT/UPDATE/DELETE` on `trackers`. The administrator section additionally needs `SELECT` on the `magnetico_stats` tables and **column-level** `SELECT` on `magnetico_ingest.crawlers` (no `token_hash`) and `magnetico_ingest.quarantine` (no `payload`, no `info_hash`); its pages over `users` and `invites` use the grants above but select explicit column lists only (never `password_hash` or an invitation `code`), which tests verify through a role that holds nothing else. None of these is required for the service to start: a missing grant or an incompatible ingest schema degrades only the pages that need it (`docs/web-deployment.md`, `docs/specs/statistics-v1.md`). The exact `GRANT` statements are in `docs/web-deployment.md` §4 and are executed verbatim by the tests. A missing privilege is a controlled startup failure that names it.
 
 2.8 Pools and deadlines. The pool has an explicit maximum. Every request has a context deadline. A search can run up to the search timeout (default 60 s), so **search concurrency is bounded separately** (a weighted semaphore of `SEARCH_CONCURRENCY` slots, bounded queue wait, then a `503` "busy") so that slow searches cannot starve authentication or other pages of connections.
 
@@ -111,7 +111,7 @@ There is no `pending_setup` state.
 
 4.2.2 Authentication MUST check `active` on **every** request that resolves a session or token, in the same lookup that resolves the credential (§4.7.5). Removing session rows alone is not sufficient, and there is no authentication cache beyond that lookup.
 
-4.2.3 **Roles [APPROVED].** Exactly two: `user` and `admin`. This is a column with a check constraint, not an RBAC system. Registration through an invitation always creates a `user`. The operator assigns roles with the CLI (§4.10); there is no web UI for it. In this version `admin` grants no web capability (the Admin UI is a future release); it exists so that the operator can designate the first administrators. The role is read in the same lookup as `active`. The historical PHP `roles` data is **not** used to infer administrators: migrated accounts are ordinary `user`s.
+4.2.3 **Roles [APPROVED].** Exactly two: `user` and `admin`. This is a column with a check constraint, not an RBAC system. Registration through an invitation always creates a `user`. The operator assigns roles with the CLI (§4.10); there is no web UI for it. The only web capability of `admin` is the **read-only administrator section** (§6.1.2: statistics and read-only listings; no mutation, no credential or payload is ever shown); it is enforced server-side on every route and data-access function, and the operator designates administrators with the CLI. The role is read in the same lookup as `active`. The historical PHP `roles` data is **not** used to infer administrators: migrated accounts are ordinary `user`s.
 
 4.2.4 Email is **optional for every account** **[APPROVED]**.
 
@@ -313,6 +313,11 @@ Commands MUST NOT print secrets other than the single link or token they were as
 | `GET /magnet/{infohash}` | public | Short magnet redirect (§8.3) |
 | `GET /api`, `/api/v1`, `/api/v2`, `/api/v1/openapi.yaml`, `/api/v2/openapi.yaml` | session | API documentation (anonymous: redirect to `/login`) |
 | `GET /healthz`, `/readyz`, `/robots.txt` | public | Operations |
+| `GET /admin` | admin session | Administrator overview and charts (§6.1.2) |
+| `GET /admin/api/overview`, `/admin/api/series?chart=&g=&period=` | admin session (JSON) | Data of the overview and of one chart |
+| `GET /admin/crawlers?after=`, `/admin/quarantine?after=`, `/admin/users?q=&after=`, `/admin/invitations?after=`, `/admin/trackers` | admin session | Read-only listings, keyset-paginated (50 rows) |
+
+6.1.2 **Administrator section [IMPLEMENTED, Task 09].** Every `/admin` route is `GET` only (other methods are `405`; no state-changing route can be registered), uses the session cookie only (API and RSS tokens are never read), and checks the role in the database on every request: anonymous → `/login`, a signed-in non-administrator → `403`, a disabled or just-demoted account → no access. Data-access functions take a role-checked principal that only the guard can create. Responses are `Cache-Control: no-store`, keep the unchanged CSP and security headers, and show no password hash, session secret, token, token digest, invitation code, quarantine payload or info hash. Query parameters (`after`, `q`, `period`, `chart`, `g`) are parsed strictly: a malformed, duplicated or oversized value is `400` without detail. The statistics shown are specified in [`statistics-v1.md`](statistics-v1.md); the link `Admin` appears next to the account link for administrators only.
 
 6.1.1 **No legacy UI redirects [APPROVED].** The legacy site was private and not indexed and has no known scraping consumers. The new UI may reorganise or rename routes freely; internal navigation starts at `/`. The only routes retained for external compatibility or functionality are **`/api/v1/feed/rss/last`** and **`/magnet/{infohash}`**. No redirects are provided for `/auth/login`, `/auth/reset/*`, `/profile/api/*`, or any other old route, and state-changing legacy `GET` routes are not served or redirected (they return 404).
 
@@ -664,6 +669,10 @@ W8 implements `magnetico migrate users` exactly as designed in `docs/wip/07H-use
 - Legacy timestamps carry no zone and are converted with the operator-stated IANA zone.
 - Password hashes are classified as verified (exact PHP vectors), unvetted (parsed within the verifier's bounds, no exact vectors; a final run refuses) or unsupported (`needs-reset`, acknowledged by exact count).
 - A dry-run writes nothing to either database, sequence state included.
+
+### 14.10 Revision 9 (Task 09: statistics and the read-only administrator section)
+
+§1.4, §2.7, §4.2.3 and §6.1 are updated: `admin` now grants the read-only administrator section (§6.1.2) and nothing else; its grants are column-level where a table holds a credential. The invariants of §4.7 are unchanged (an administrator's session is revoked and refused exactly like any other). Mutations, invitation creation and revocation from the web, tracker management and live updating remain out of scope and are tracked on the Forgejo issues for the administration UI.
 
 ### 14.9 Revision 8 (task 07J: W9)
 

@@ -102,6 +102,16 @@ MAGNETICO_BENCH_LARGE=1 MAGNETICO_BENCH_DSN=… MAGNETICO_BENCH_CONFIRM_DISPOSAB
 # profiles: steps, soak, memfloor, knee, regress, diag (see docs/wip/07J-measurements/README.md; translate with the
 # mapping below)
 
+# The statistics qualification (Task 09): synthetic data, the real binaries, loopback only. Each test names its criterion
+# (docs/wip/09-statistics-admin-plan.md, "Acceptance criteria") and fails when it is not met; results are appended as JSON
+# lines to $MAGNETICO_STATS_OUT. MAGNETICO_STATS_QUALIFY_SCALE=0.1 shortens every duration for a smoke run.
+export MAGNETICO_STATS_OUT=<dir>
+#   MAGNETICO_STATS_BASELINE_CRAWLERD=<binary>  the pre-batching crawler client (built from commit 8f339306 with the -stamp patch)
+go test -tags loadtest -count=1 -v -timeout 3h -run 'TestQualifyOverheadAndSabotage|TestQualifySteadyStateMemory|TestQualifyWriteFrequency|TestQualifyBatching|TestQualifyAuthFlood|TestQualifyQueueSamplingAdmissionInflation|TestQualifyStorageGrowth|TestQualifyDashboardLatency' ./internal/e2e/cli
+go test -tags loadtest -count=1 -v -run TestMeasureCachedVersusUncached ./internal/ingest/crawlerauth
+go test -tags loadtest -count=1 -v -run TestMeasureQueueSamplingCost ./internal/ingest/stats
+go test -run xxx -bench 'BenchmarkRecorder|BenchmarkAuthenticateCacheHit' -benchmem ./internal/ingest/stats ./internal/ingest/crawlerauth
+
 # The earlier web load campaign
 MAGNETICO_BENCH_LARGE=1 MAGNETICO_LOAD_DSN=… go test -tags loadtest -run 'TestWebLoad$' -count=1 -v -timeout 4h ./internal/e2e/cli
 

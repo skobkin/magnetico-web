@@ -1,6 +1,6 @@
 # How Magnetico Web 0.8.0 differs from `boramalper/magnetico` and `tgragnato/magnetico`
 
-**Last updated: 2026-11-24.**
+**Last updated: 2026-11-25.**
 
 This page explains what the unified Go implementation in this repository (Magnetico Web **0.8.0**, still unreleased at the date above) does differently from the two projects it descends from, and why. It describes **implemented behaviour only**. Things that are planned, researched or deliberately refused are listed separately in [§9](#9-non-goals-and-deferred-topics) and are not promises.
 
@@ -70,6 +70,8 @@ The lineage above is the history of the *code*. The system the maintainer runs i
 | File lists | one row per file | one row per file (PostgreSQL: 100 hash partitions and a trigram index on paths) | **one compact, versioned blob per torrent**; single-file torrents with no blob |
 | Crawler → storage | the crawler writes the database directly | the crawler writes the database directly | crawler has **no PostgreSQL access**: durable local SQLite queue → HTTP → ingest → PostgreSQL queue → single consumer |
 | Several crawlers | each needs database access | each needs database access | any number of crawler hosts deliver to one ingest endpoint over HTTPS |
+| Crawler identity | — | — | **one revocable credential per crawler** (`mgc_…`, SHA-256 only at rest, bounded 60 s propagation), operator CLI `magnetico ingest crawler …` |
+| Operational visibility | stdout logs | logs | **ingest statistics** persisted as hourly/daily/monthly aggregates in `magnetico_stats`, and a **read-only administrator section** with charts, crawler, quarantine, user, invitation and tracker listings |
 | Web access | Basic Auth from a credentials file; no accounts | (upstream web UI, Basic Auth) | **private, authenticated**; accounts, sessions, invitation-only registration |
 | Search | SQLite FTS5 (the PostgreSQL engine has no web interface) | trigram index on names (PostgreSQL), FTS5 (SQLite) | case-insensitive substring match on names; keyset pagination; no result count |
 | File browsing | whole list on one page | whole list on one page | backend-selected **complete tree** or **paginated directories**, positional directory paths |
@@ -204,6 +206,19 @@ sequenceDiagram
 
 **Ingest existence cache.** `ingest` keeps a process-local cache in front of the existence lookup: a **plain LRU** (not CLOCK, SIEVE or TinyLFU) over 20-byte hashes, with an **8 MiB default budget** (about 87,000 entries at 96 B each). A positive entry ("stored") **never expires**: the torrent store is append-only, so the answer cannot become false; only eviction (or a restart) removes it. A negative entry ("missing") lives about **20 seconds** so a torrent stored moments later is noticed. Errors are never cached, and a late "missing" never downgrades a positive entry. *Why:* simple, bounded and predictable memory that matches append-only data; smarter admission policies were deliberately deferred. *Trade-off:* the cache can only help with hashes seen recently, and a positive answer says nothing about the database being reachable right now.
 
+**Per-crawler credentials, batched delivery and statistics.** `ingest` authenticates each crawler with its own credential (`mgc_` and 32 random bytes; only the SHA-256 digest is stored in `magnetico_ingest.crawlers`). A positive result is cached for exactly 60 seconds from the moment the database was asked, so a rotation or disable reaches every running instance within a minute; lookups are bounded (8 at a time, immediate `503` beyond the bounds) so a flood of invalid tokens cannot exhaust PostgreSQL, and a storage failure is a `503`, never a false `401`. The crawler batches its requests by time (about one request per second per endpoint instead of one per record), dispatching early when the next record would not fit. `ingest` counts its own operation in memory (one mutex, never held across database I/O) and persists hourly, daily and monthly aggregates once a minute through an idempotent, single-arbiter flush protocol into an optional `magnetico_stats` schema; the `web` service reads them into a **read-only** administrator section. Statistics never store a payload, hash, name, path or credential, and their failure never changes an admission or authentication decision.
+
+```mermaid
+flowchart LR
+  CR["crawl (one credential each)"] -->|"HTTPS, batched ≈ 1 req/s"| IN["magnetico ingest"]
+  IN -->|"admission"| PQ[("magnetico_ingest<br/>queue + crawlers")]
+  IN -. "in-memory counters,<br/>flush every 60 s" .-> ST[("magnetico_stats<br/>hour / day / month")]
+  ST -->|"read-only, cached"| WEB["magnetico web<br/>Admin (administrators)"]
+  PQ -. "crawler list, quarantine<br/>(safe columns)" .-> WEB
+```
+
+*Trade-offs.* A running ingest honours a revoked credential for up to 60 s; the statistics are operational telemetry, not an audit log (a crash loses up to one flush interval, an outage buffers at most 26 hours); there are no administrator mutations in 0.8.0 (credentials, users, invitations and trackers are changed with the command line). Measurements: `docs/wip/09-statistics-admin-report.md`.
+
 **Why the pipeline.** Delivery guarantees for durably admitted records (crash-safe on both sides, at-least-once; best-effort before admission), several crawlers, a crawler without PostgreSQL credentials, and bounded memory on the ingest side (the quota and queue bound what a burst can cost).
 
 **Trade-offs and limits.** More components and failure modes than direct writes; at-least-once delivery means the same torrent can be offered twice (stored idempotently by info hash); the queue quota must be sized for the longest expected database outage. **Live-DHT acceptance of the whole chain has not been run** (it is part of the release-candidate phase); the pipeline was qualified on synthetic data with 2-hour soaks, large-record and multi-crawler runs (`docs/wip/06-crawler-ingest-results.md`).
@@ -298,6 +313,7 @@ A path is decimal components joined by `_` (`""` is the root, `1_1_0` is the fir
 **Deliberate non-goals** (decided; not on a roadmap):
 
 - **Public access.** See §7.1: registration is invitation-only and the service is private on purpose.
+- **Administrator mutations in the web UI** (0.8.0 ships a read-only administrator section; changes are command-line only).
 - **Self-service invitation creation.** Users list, copy and revoke the invitations they were given; creating them contradicts the closed-service model (operators create them).
 - **The legacy JSON API** will not be restored.
 - **Native TLS termination** in the application.
@@ -306,6 +322,7 @@ A path is decimal components joined by `_` (`""` is the root, `1_1_0` is the fir
 **Deferred or speculative** (open questions, **not commitments**):
 
 - **File-name search across torrent contents** is not a committed feature; it would need substantial research and benchmarking (indexing paths is exactly what the compact storage gave up) before it could be considered.
+- **Live updating of the dashboard, crawler-side statistics, per-crawler time series and a retention command** are deferred to later releases.
 - **Ingest protocol compression** may be investigated if it saves meaningful traffic at low CPU cost.
 - **OAuth** may be considered for a future API v3 if there is sufficient demand.
 - **A lightweight UI library** such as Preact may be considered in the more distant future; a heavy single-page-application rewrite is not planned.

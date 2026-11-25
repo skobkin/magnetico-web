@@ -1,0 +1,10 @@
+{"cond":"disabled","iter":1,"records":13940,"rss_mib":256.44140625}
+{"cond":"enabled","iter":1,"records":13940,"rss_mib":256.8671875}
+{"cond":"enabled","iter":2,"records":13940,"rss_mib":268.8125}
+{"cond":"disabled","iter":2,"records":13940,"rss_mib":260.423828125}
+{"cond":"disabled","iter":3,"records":13940,"rss_mib":264.13671875}
+{"cond":"enabled","iter":3,"records":13940,"rss_mib":263.162109375}
+{"cond":"enabled","iter":4,"records":13940,"rss_mib":257.435546875}
+{"cond":"disabled","iter":4,"records":13940,"rss_mib":264.224609375}
+{"cond":"disabled","iter":5,"records":13940,"rss_mib":254.89453125}
+{"cond":"enabled","iter":5,"records":13940,"rss_mib":258.060546875}

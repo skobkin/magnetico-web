@@ -64,7 +64,15 @@ A single binary `magnetico` with the following subcommands:
   (`POST /api/ingest/v1/torrents`, `202` only after a PostgreSQL commit) into a
   `magnetico_ingest` queue with a byte quota, drained by a single consumer
   holding an advisory lock. It verifies the 0.8.0 schema and the queue schema
-  (`magnetico migrate ingest-schema-init`) read-only at startup.
+  (`magnetico migrate ingest-schema-init`) read-only at startup. Each crawler has its own
+  credential (`magnetico ingest crawler add|list|rotate-token|disable|enable`; only a
+  SHA-256 digest is stored, effective within 60 s). `ingest` counts its own operation
+  in memory and persists hourly, daily and monthly aggregates into an optional
+  `magnetico_stats` schema (`magnetico migrate stats-schema-init`;
+  [`docs/specs/statistics-v1.md`](docs/specs/statistics-v1.md),
+  [`docs/operator-statistics.md`](docs/operator-statistics.md)), shown in the
+  read-only **Admin** section of `web` (overview and charts, crawlers, quarantine,
+  users, invitations, trackers; administrators only).
 - `migrate` — the offline migration toolchain for original magnetico v0.12.0
   databases. Checkpointed and resumable (crash-safe, all-or-nothing batches,
   advisory-lock exclusion, durable operational state in a dedicated

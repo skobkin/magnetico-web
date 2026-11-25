@@ -112,7 +112,8 @@ within 60 seconds. Protocol version 1 is unchanged.
 1. `magnetico migrate schema-init`
 2. `magnetico migrate torrents` (legacy import), verification, optional `cleanup` (offline only, before any ingest; by default the migration schema is kept)
 3. `magnetico migrate ingest-schema-init` (creates the `magnetico_ingest` schema; idempotent)
-4. start `magnetico ingest`, then the crawlers
+4. optionally `magnetico migrate stats-schema-init` (the statistics of the administrator section; `ingest` and `web` run without it)
+5. register each crawler (`magnetico ingest crawler add <name>`), start `magnetico ingest`, then the crawlers
 
 `ingest` refuses to start while an import is running or incomplete. Records ingested after the
 import make earlier migration-verification verdicts stale.
@@ -129,7 +130,10 @@ database whose `magnetico_ingest` predates it is refused by `ingest` and `magnet
 4. `magnetico ingest crawler add <name>` once per crawler, and give each crawler its token.
 
 Only `magnetico_ingest` is touched: the torrent dataset (`magneticod`), the web schema (`magnetico_web`: users, tokens,
-invitations) and `magnetico_stats` are left as they are.
+invitations) and `magnetico_stats` are left as they are. Statistics rows of crawlers of the dropped registry
+(`magnetico_stats.crawler_activity`) stay, unreferenced and harmless: the Crawlers page lists the registry, so they are
+not shown; drop `magnetico_stats` as well (`DROP SCHEMA magnetico_stats CASCADE;`, then `migrate stats-schema-init`) only
+if you want its history gone — statistics are disposable.
 
 **Quarantine.** Both sides keep records that are permanently invalid in a quarantine table
 (`quarantine` in the crawler's SQLite file, `magnetico_ingest.quarantine` in PostgreSQL). Nothing is

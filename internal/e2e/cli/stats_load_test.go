@@ -297,19 +297,26 @@ func TestQualifySteadyStateMemory(t *testing.T) {
 	}
 	res := map[string][]float64{}
 	for i := 1; i <= runs; i++ {
-		for k, cond := range []string{"disabled", "enabled"} {
-			cond = []string{"disabled", "enabled"}[(k+i-1)%2]
+		for k := range 2 {
+			cond := []string{"disabled", "enabled"}[(k+i-1)%2]
 			t.Run(fmt.Sprintf("%s/%d", cond, i), func(t *testing.T) {
 				s := newStatsWorld(t)
 				tok := s.crawler("load")
-				var env []string
+				// The recommended production setting (docs/container.md): a soft heap target, the same for both conditions.
+				env := []string{"GOMEMLIMIT=256MiB"}
 				if cond == "disabled" {
-					env = []string{"MAGNETICO_INGEST_STATS_DISABLED=true"}
+					env = append(env, "MAGNETICO_INGEST_STATS_DISABLED=true")
 				}
 				s.startIngest(env...)
 				sb := &submitter{addr: s.addr, token: tok}
-				sb.paced(scaled(70*time.Second), 20, 100*time.Millisecond, nil)
-				rss := rssKiB(s.ing.cmd.Process.Pid)
+				sb.paced(scaled(50*time.Second), 20, 100*time.Millisecond, nil)
+				// The median of ten samples over the last 20 s: a single reading moves by tens of MiB with garbage-collection timing.
+				var samples []float64
+				for i := 0; i < 10; i++ {
+					sb.paced(scaled(2*time.Second), 20, 100*time.Millisecond, nil)
+					samples = append(samples, float64(rssKiB(s.ing.cmd.Process.Pid)))
+				}
+				rss := int(median(samples))
 				res[cond] = append(res[cond], float64(rss)/1024)
 				qualOut(t, "memory", map[string]any{"cond": cond, "iter": i, "rss_mib": float64(rss) / 1024, "records": sb.ok.Load()})
 				t.Logf("%s #%d: RSS %.1f MiB after %d records", cond, i, float64(rss)/1024, sb.ok.Load())
@@ -345,6 +352,8 @@ type countingProxy struct {
 	conns     int
 	first     time.Time
 	last      time.Time
+	restored  time.Time // set by a scenario that takes the link down and up again
+	firstUp   time.Time // the first successful submit after restored
 }
 
 var stampRe = regexp.MustCompile(`"name":"e2e torrent \d+ @(\d+)"`)
@@ -412,6 +421,9 @@ func (p *countingProxy) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	p.last = ackAt
 	if r.URL.Path == "/api/ingest/v1/torrents" && resp.StatusCode/100 == 2 {
+		if !p.restored.IsZero() && p.firstUp.IsZero() {
+			p.firstUp = arrival
+		}
 		var n struct {
 			Records []json.RawMessage `json:"records"`
 		}
@@ -438,7 +450,8 @@ type batchResult struct {
 	FirstRequestAgeMs              float64
 	Connections                    int
 	ConnectionReuse                float64
-	RecoverySeconds                float64
+	RecoverySeconds                float64 // link back → last acknowledgement (includes the sender's retry backoff wait)
+	DrainSeconds                   float64 // first successful submit after the link came back → last acknowledgement
 	Records                        int
 	Seconds                        float64
 }
@@ -465,6 +478,12 @@ func (p *countingProxy) result(variant, scenario string, wall time.Duration) bat
 	lat := slices.Clone(p.latency)
 	slices.Sort(lat)
 	r.LatencyP50, r.LatencyP95 = percentile(lat, .5), percentile(lat, .95)
+	if !p.restored.IsZero() {
+		r.RecoverySeconds = p.last.Sub(p.restored).Seconds()
+		if !p.firstUp.IsZero() {
+			r.DrainSeconds = p.last.Sub(p.firstUp).Seconds()
+		}
+	}
 	if len(p.submitAge) > 0 {
 		r.FirstRequestAgeMs = p.submitAge[0]
 	}
@@ -544,20 +563,24 @@ func TestQualifyBatching(t *testing.T) {
 			}
 			res["sustained"][v], _ = batchRun(t, bin, v, "sustained", 1000, args, nil)
 		})
-		t.Run("recovery/"+v, func(t *testing.T) { // a 60 s outage under 200 records/s
+		t.Run("recovery/"+v, func(t *testing.T) { // a 60 s outage; production ends when the link returns, so what follows is pure backlog
 			outage := scaled(60 * time.Second)
-			var restored atomic.Int64
-			r, _ := batchRun(t, bin, v, "recovery", 100000, []string{"-count", strconv.Itoa(int(float64(200) * (outage.Seconds() + 60))), "-rate", "200"}, func(p *countingProxy) {
-				time.Sleep(10 * time.Second)
-				p.down.Store(true)
-				time.Sleep(outage)
-				p.down.Store(false)
-				restored.Store(time.Now().UnixNano())
-			})
-			if ns := restored.Load(); ns != 0 {
-				r.RecoverySeconds = time.Since(time.Unix(0, ns)).Seconds()
+			count := int(200 * (10 + outage.Seconds()))
+			var reps []batchResult
+			for i := 0; i < 3; i++ { // the retry backoff is jittered: its phase at the moment the link returns is luck
+				r, _ := batchRun(t, bin, v, "recovery", 100000+i*100000, []string{"-count", strconv.Itoa(count), "-rate", "200"}, func(p *countingProxy) {
+					time.Sleep(10 * time.Second)
+					p.down.Store(true)
+					time.Sleep(outage)
+					p.down.Store(false)
+					p.mu.Lock()
+					p.restored = time.Now()
+					p.mu.Unlock()
+				})
+				reps = append(reps, r)
 			}
-			res["recovery"][v] = r
+			slices.SortFunc(reps, func(a, b batchResult) int { return int(a.DrainSeconds*1000) - int(b.DrainSeconds*1000) })
+			res["recovery"][v] = reps[1] // the median drain
 		})
 	}
 	n, ok := res["sustained"]["batching"]
@@ -579,8 +602,8 @@ func TestQualifyBatching(t *testing.T) {
 	if n.ConnectionReuse < 0.99 {
 		t.Errorf("connection reuse %.1f%%, want ≥ 99%%", n.ConnectionReuse*100)
 	}
-	if b, ok := res["recovery"]["baseline"]; ok && res["recovery"]["batching"].RecoverySeconds > b.RecoverySeconds*1.05+1 {
-		t.Errorf("backlog recovery took %.1f s, the baseline %.1f s", res["recovery"]["batching"].RecoverySeconds, b.RecoverySeconds)
+	if b, ok := res["recovery"]["baseline"]; ok && res["recovery"]["batching"].DrainSeconds > b.DrainSeconds*1.05+1 {
+		t.Errorf("draining the backlog took %.1f s, the baseline %.1f s", res["recovery"]["batching"].DrainSeconds, b.DrainSeconds)
 	}
 }
 
@@ -959,11 +982,24 @@ func TestQualifyStorageGrowth(t *testing.T) {
 	sqlExec(t, s.dsn, `VACUUM (ANALYZE) magnetico_stats.crawler_activity`)
 	ca := s.sizes()["crawler_activity"]
 	qualOut(t, "storage_growth", map[string]any{"crawler_activity_10000_rows": ca})
-	// Update churn without vacuum: one month of upserts to the newest month row, one day to the newest day and hour rows.
+	// Update churn: one month of flushes (43,200 upserts of the newest month row), each in its own
+	// transaction as a flush is, with autovacuum left to do what it does.
 	before := s.sizes()
-	sqlExec(t, s.dsn, `DO $$ BEGIN FOR i IN 1..43200 LOOP UPDATE magnetico_stats.agg_month SET records_received = records_received + 1 WHERE bucket_start = (SELECT max(bucket_start) FROM magnetico_stats.agg_month); END LOOP; END $$`)
+	c, err := pgx.Connect(context.Background(), s.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 43200; i++ {
+		if _, err := c.Exec(context.Background(), `UPDATE magnetico_stats.agg_month SET records_received = records_received + 1 WHERE bucket_start = (SELECT max(bucket_start) FROM magnetico_stats.agg_month)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = c.Close(context.Background())
 	after := s.sizes()
-	qualOut(t, "storage_growth", map[string]any{"month_row_43200_updates_table_bytes_before": before["agg_month"].Table, "after": after["agg_month"].Table})
+	qualOut(t, "storage_growth", map[string]any{"month_row_43200_separate_updates_table_bytes_before": before["agg_month"].Table, "after": after["agg_month"].Table})
+	if after["agg_month"].Table > before["agg_month"].Table+1<<20 {
+		t.Errorf("one month of upserts grew agg_month from %d to %d bytes", before["agg_month"].Table, after["agg_month"].Table)
+	}
 }
 
 // ---- dashboard latency ---------------------------------------------------------------------------
@@ -1039,4 +1075,56 @@ func TestQualifyDashboardLatency(t *testing.T) {
 	if p95 := stat(coldSeries)["p95_ms"]; p95 > 1000 {
 		t.Errorf("cold series p95 %.1f ms, want ≤ 1,000 ms", p95)
 	}
+}
+
+// TestQualifySabotageControl separates the cost of the statistics code from the
+// cost of the sabotage method: the "tables locked" sabotage holds a transaction
+// open, and an open transaction pins the vacuum horizon of the whole database
+// while the saturating load churns the queue. The control holds the same kind of
+// transaction with the statistics DISABLED and no statistics table involved.
+func TestQualifySabotageControl(t *testing.T) {
+	requireOut(t)
+	runs := 3
+	if qualScale() < 1 {
+		runs = 1
+	}
+	idleTx := func(t *testing.T, s *statsWorld) { // an open transaction on an unrelated table: nothing of the statistics
+		c, err := pgx.Connect(context.Background(), s.dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, q := range []string{`BEGIN`, `SELECT txid_current()`, `LOCK TABLE magnetico_web.settings IN ACCESS EXCLUSIVE MODE`} {
+			if _, err := c.Exec(context.Background(), q); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { _ = c.Close(context.Background()) })
+	}
+	locked := sabotageCases()[2]
+	conds := []struct {
+		name  string
+		env   []string
+		apply func(*testing.T, *statsWorld)
+	}{
+		{"control: disabled", []string{"MAGNETICO_INGEST_STATS_DISABLED=true"}, nil},
+		{"control: disabled, idle transaction on an unrelated table", []string{"MAGNETICO_INGEST_STATS_DISABLED=true"}, idleTx},
+		{"enabled, statistics tables locked", nil, locked.apply},
+	}
+	res := map[string][]float64{}
+	for i := 1; i <= runs; i++ {
+		for k := range conds {
+			c := conds[(k+i-1)%len(conds)]
+			t.Run(fmt.Sprintf("%s/%d", c.name, i), func(t *testing.T) {
+				r := measureRun(t, c.name, 100+i, c.env, c.apply)
+				res[c.name] = append(res[c.name], r.RecPerSec)
+			})
+		}
+	}
+	base := median(res[conds[0].name])
+	summary := map[string]float64{}
+	for _, c := range conds {
+		summary[c.name] = median(res[c.name]) / base
+	}
+	qualOut(t, "sabotage_control_summary", summary)
+	t.Logf("rate relative to the disabled baseline: %+v", summary)
 }

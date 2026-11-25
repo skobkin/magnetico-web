@@ -59,6 +59,7 @@ schema):
 docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate schema-init
 docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate web-schema-init
 docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate ingest-schema-init
+docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate stats-schema-init   # optional: ingestion statistics for the Admin section
 ```
 
 An older **development** `magnetico_ingest` schema without the `crawlers` table is refused, never repaired; see
@@ -208,7 +209,7 @@ own drain budget or Docker kills it with `SIGKILL` first:
 | Service | Drain | Give Docker | Exit status |
 |---|---|---|---|
 | `web` | `MAGNETICO_WEB_SHUTDOWN_TIMEOUT` (default 30 s) | `stop_grace_period: 45s` | `0`; `3` when the grace period expired with requests still running |
-| `ingest` | consumer grace + abort grace + HTTP drain (see `crawler.md` §8) | `60s` | `0`; `3` when a drain budget was exceeded |
+| `ingest` | consumer grace + abort grace + HTTP drain (see `crawler.md` §8) and, last, one bounded flush of the statistics (≤ 5 s, plus ≤ 2 s to close its connections): 35 s worst case | `60s` | `0`; `3` when a drain budget was exceeded |
 | `crawl` | stops the DHT, cancels leeches, commits what is buffered (5 s), lets the sender finish (30 s), closes the queue (≈ 45 s worst case) | `60s` (`--stop-timeout 60`) | `0`; `3` when the SQLite writer is stuck in the operating system (SQLite recovers the queue at the next start; committed records survive any exit) |
 | `migrate torrents` and the other long runs | the run is checkpointed and resumable: an interruption commits the settled work | a generous `--stop-timeout` (the grace period only has to cover the current batch) | `2` interrupted (resume by re-running the same command), `1` failure or refusal |
 

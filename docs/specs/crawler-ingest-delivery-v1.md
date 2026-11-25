@@ -421,6 +421,10 @@ The Store keeps its pool. The queue uses one small separate pool (max 4) plus th
 connection. `MAGNETICO_INGEST_QUEUE_DATABASE` optionally supplies a different DSN/role (DML on
 `magnetico_ingest` only); default is the same DSN. A separate server is not required.
 
+### 6.2 Statistics and the administrator section (Task 09)
+
+The ingest service counts its own operation in memory and persists hourly, daily and monthly totals into the optional schema `magnetico_stats` (created by `migrate stats-schema-init`; `ingest` starts without it and never depends on it). Admission, authentication and the durability contract of §5–§6 do not change and cannot be changed by a statistics failure; the contract of what is counted, its boundaries, the flush protocol and its failure behaviour is [`statistics-v1.md`](statistics-v1.md). The `web` service shows the result in a read-only administrator section ([`web-v1.md`](web-v1.md) §6.1.2).
+
 ## 7. Existence cache
 
 One bounded, process-local LRU (array-backed list + `map[[20]byte]int32`) behind an
@@ -476,7 +480,9 @@ One bounded, process-local LRU (array-backed list + `map[[20]byte]int32`) behind
   requests for `HTTPGrace` (20 s) and then drops their connections (cancelling the request contexts); handlers
   get `HandlerGrace` (3 s) to return. Guarantee: `Run` returns within
   `max(HTTPGrace, ConsumerGrace+AbortGrace) + HandlerGrace` plus ≤ 5 s for the final summary — **28 s** with
-  the defaults. If the consumer or a handler is still running after its budget (a call that ignores its context),
+  the defaults — plus ≤ 7 s for the statistics (a final flush bounded by 5 s that drains the sealed batch and the
+  carry behind it, then ≤ 2 s to close the three statistics connections; skipped when something was abandoned):
+  **35 s** worst case. If the consumer or a handler is still running after its budget (a call that ignores its context),
   it is **abandoned**: the database pools are *not* closed (closing blocks on checked-out connections and would
   pull them from under the stuck goroutine), `Run` returns `ErrShutdownIncomplete` and the process exits with
   status 3. Interrupted work needs no repair: the queue row is deleted only after `AddTorrent` succeeded, so the
@@ -505,7 +511,10 @@ optional; CLI flags exist for non-secret values. Unknown `MAGNETICO_*` variables
 rejected, as today. Secrets (tokens, DSNs with passwords) are ENV/config-only, never flags.
 `crawl`: `MAGNETICO_CRAWL_INGEST_URL`, `_INGEST_TOKEN`, `_QUEUE_DIR`, `_QUEUE_MAX_BYTES`,
 `_LEECH_MAX_ACTIVE`. `ingest`: `MAGNETICO_INGEST_LISTEN`, `_DATABASE`, `_QUEUE_DATABASE`,
-`_QUEUE_MAX_BYTES`, `_CACHE_MAX_BYTES`, `_CACHE_DISABLED`, `_ALLOW_NON_DURABLE_DB`. The crawl option
+`_QUEUE_MAX_BYTES`, `_CACHE_MAX_BYTES`, `_CACHE_DISABLED`, `_ALLOW_NON_DURABLE_DB`, `_TRUSTED_PROXIES`
+(CIDR list: which peers may name the client address recorded as a crawler's last address) and `_STATS_DISABLED`
+(kill switch of the statistics, [`statistics-v1.md`](statistics-v1.md)); `MAGNETICO_INGEST_TOKEN` is removed (§5: credentials
+are per crawler, `magnetico ingest crawler …`). The crawl option
 `databaseURL` (`--database`, `MAGNETICO_CRAWL_DATABASE`) is **removed**; a stale key fails loudly.
 
 ## 11. Resource estimates

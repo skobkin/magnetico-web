@@ -39,6 +39,8 @@ All of this happens on the main server, with a database you have already initial
    magnetico migrate ingest-schema-init
    ```
 
+   Optionally, `magnetico migrate stats-schema-init` creates the statistics schema that the administrator section of the web service shows (idempotent; `ingest` runs without it and never depends on it, `MAGNETICO_INGEST_STATS_DISABLED=true` turns the collection off). What it counts and how to read it: [`docs/operator-statistics.md`](operator-statistics.md).
+
    If the database is the result of a legacy migration, `magnetico_migration` stays in place by default and ingest works with it. The optional `magnetico migrate cleanup` is an offline migration-completion step that is only possible **before** ingest stores its first torrent (see [`docs/migration_0.8.0.md`](migration_0.8.0.md) §8.3); afterwards keep the schema.
 
 2. **PostgreSQL must run with `fsync = on`**; ingest refuses to start otherwise (`MAGNETICO_INGEST_ALLOW_NON_DURABLE_DB=true` exists for development only).
@@ -51,6 +53,8 @@ All of this happens on the main server, with a database you have already initial
    | `MAGNETICO_INGEST_LISTEN` | listen address, **plain HTTP** | `127.0.0.1:8080` |
    | `MAGNETICO_INGEST_QUEUE_MAX_BYTES` | quota of queued + quarantined payload bytes; above it admissions get `503 queue_full` | `2147483648` |
    | `MAGNETICO_INGEST_CACHE_MAX_BYTES` / `_CACHE_DISABLED` | existence cache | 8 MiB / off |
+   | `MAGNETICO_INGEST_TRUSTED_PROXIES` | CIDR list of reverse proxies whose `X-Forwarded-For` is believed; decides the client address recorded as a crawler's last address (the TCP peer when empty) | empty |
+   | `MAGNETICO_INGEST_STATS_DISABLED` | `true` turns the statistics off (no writer, no extra database connections); authentication and ingestion are unaffected | off |
 
    Set `GOMEMLIMIT=256MiB` and give the container a 1 GiB memory limit (the measured staging recommendation in `UPGRADE.md`). When ingest runs in a container behind Traefik, listen on `0.0.0.0:8080` **inside the container network only** and publish no host port. Any variable starting with `MAGNETICO_INGEST_` that is not in the table above is rejected at startup. `MAGNETICO_INGEST_TOKEN` (the former shared secret) is refused with a message: crawler credentials are per crawler and live in PostgreSQL (§3).
 

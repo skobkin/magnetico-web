@@ -114,6 +114,10 @@ GRANT SELECT (id, reason_code, detail, attempts, payload_bytes, received_at, qua
 ```
 <!-- stats-grants:end -->
 
+The Users and Invitations pages read `magnetico_web.users` and `invites` with explicit column lists (no `password_hash`, no invitation `code`), using the table grants of §4 that the service needs anyway; the tests run them through a role that holds only the safe columns, so the guarantee does not depend on the grant.
+
+The administrator section is read-only: it never writes, and no role needs a write grant for it. The pages are `/admin` (overview and charts), `/admin/crawlers`, `/admin/quarantine`, `/admin/users`, `/admin/invitations` and `/admin/trackers`; they are visible to accounts whose role is `admin` (`magnetico web user set-role <username> admin`) and to nobody else. Behind a reverse proxy nothing special is needed: the pages are ordinary session-cookie `GET` routes with `Cache-Control: no-store`. How to read them is in [`docs/operator-statistics.md`](operator-statistics.md).
+
 The web role never needs `token_hash` (crawler credential digests) or the quarantine `payload` and `info_hash` columns; a missing grant, a
 missing or incompatible ingest schema, or a missing statistics schema degrades only the affected administrator page — the web
 service always starts.

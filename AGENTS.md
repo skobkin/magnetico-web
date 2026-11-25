@@ -16,7 +16,7 @@ Work through **one approved task at a time** (all in `docs/wip/`):
 2. `02-upstream-cleanup.md` — remove irrelevant upstream functionality and unsafe old DB auto-migration, prepare Go crawler foundation.
 3. `03-storage-persistence.md` — codec v1 and fresh PostgreSQL schema/persistence plus tests; do not implement migrator or web UI yet.
 
-The numbered list above is the original three-task sequence. Later tasks (04A–04D migrator, 05 codec determinism, 06 crawler/ingest, 07A–07I web design and implementation, user migration and fixtures) are indexed in `docs/wip/README.md`; tasks 07A–07J have been accepted by the owner. The Go web UI was built **one milestone per owner-approved task** (W1–W9, `docs/wip/07A-web-design-plan.md` §8; W9 is task 07J: integration, security and regression, accepted). Task 08 (`docs/wip/08-ci-oci-plan.md`, report `docs/wip/08-ci-oci-report.md`: repository cleanup, CI/OCI and release engineering) is implemented and awaits owner review; never start work beyond the current assignment without an explicit owner assignment.
+The numbered list above is the original three-task sequence. Later tasks (04A–04D migrator, 05 codec determinism, 06 crawler/ingest, 07A–07I web design and implementation, user migration and fixtures) are indexed in `docs/wip/README.md`; tasks 07A–07J have been accepted by the owner. The Go web UI was built **one milestone per owner-approved task** (W1–W9, `docs/wip/07A-web-design-plan.md` §8; W9 is task 07J: integration, security and regression, accepted). Task 08 (`docs/wip/08-ci-oci-plan.md`, report `docs/wip/08-ci-oci-report.md`: repository cleanup, CI/OCI and release engineering) is implemented and awaits owner review; Task 09 (statistics and the administrator section, `docs/wip/09-statistics-admin-plan.md`) is implemented and awaits the owner's review of its report; never start work beyond the current assignment without an explicit owner assignment.
 
 Normative contracts: `docs/specs/wire-format-v1.md` and `docs/specs/postgresql-persistence-v2.md`. If task text and a normative specification disagree, stop and ask for the owner's decision; do not silently change wire format, schema contract or data-compatibility promises. Working reports go in `docs/wip/`; stable user-facing documentation may go directly under `docs/` later.
 
@@ -47,6 +47,16 @@ Normative contracts: `docs/specs/wire-format-v1.md` and `docs/specs/postgresql-p
 - the **last-updated date** at the top.
 
 Keep comparisons grounded in identifiable versions or commits of the other projects (tags or commit hashes, never "upstream" in general), cite measurements only with their dataset, configuration and report, and keep **implemented** behaviour separate from planned, researched or refused work (the non-goals section lists the latter and states they are not commitments).
+
+## Statistics and the administrator section
+
+Task 09 (`docs/wip/09-statistics-admin-plan.md`, report `docs/wip/09-statistics-admin-report.md`) added per-crawler credentials, the ingest statistics (`docs/specs/statistics-v1.md`, schema `magnetico_stats`) and a read-only administrator section of the web service. Rules that follow from it and that a later change must keep:
+
+- **Privacy.** Statistics never store a payload, info hash, torrent name, file path, credential or token digest, and never associate a crawler with a torrent; `magnetico_stats` has no `bytea` or `text` column. The administrator pages never select `password_hash`, an invitation `code`, `token_hash`, or the quarantine `payload` and `info_hash` (explicit column lists; the tests use a role that holds nothing more). A credential is shown once, by the command that creates it, and never in a listing, log, statistic or page.
+- **Read-only.** Every `/admin` route is `GET` only and registered through the `Admin`/`AdminJSON` access classes; there is no administrator mutation in 0.8.0, and the section's data functions take a role-checked principal that only the guard can create.
+- **Statistics never affect ingestion.** A statistics failure must not change an admission decision or an authentication result; the recorder takes one mutex that is never held across admission I/O; no write per request.
+- **Schemas are never repaired.** `magnetico_ingest` stays at version 1 and includes `crawlers`; an older development schema is refused and reinitialised by hand (`UPGRADE.md`); `magnetico_stats` is created by `migrate stats-schema-init` and never altered automatically.
+- A change to what is counted, its boundaries or the schema updates `docs/specs/statistics-v1.md` in the same change (a test compares the documented metric names with the schema).
 
 ## Later work, not yet started
 

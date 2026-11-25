@@ -1,0 +1,3 @@
+{"cold_series_month_ms":5.929,"status":200}
+{"cold_series_year_ms":6.204,"status":200}
+{"history_years":10,"overview_cached":{"max_ms":0.362,"n":100,"p50_ms":0.241,"p95_ms":0.33},"overview_cold":{"max_ms":9.697,"n":40,"p50_ms":4.467,"p95_ms":6.218},"series_day_cached":{"max_ms":3.381,"n":100,"p50_ms":0.213,"p95_ms":0.354},"series_day_cold":{"max_ms":5.778,"n":100,"p50_ms":3.05,"p95_ms":4.053}}
