@@ -37,8 +37,14 @@ func vmRSSKiB() (kib int64, ok bool) {
 }
 
 // Two verifications of maximum-parameter hashes (m=64 MiB, t=10, p=16) must
-// stay inside the budget, and a third caller must wait or get ErrBusy rather
-// than allocate. The limiter capacity is 2, the production default.
+// stay inside the budget, and a third caller must get ErrBusy rather than
+// allocate while both slots are taken. The limiter capacity is 2, the production
+// default.
+//
+// The third caller is tested against slots the test holds itself: racing it
+// against two real verifications depended on Argon2's speed (on a fast CI
+// agent the verifications finished within the 100 ms wait and the third caller
+// legitimately got a slot).
 func TestLimiterMemoryBudget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("memory test runs a full-size Argon2 computation")
@@ -84,20 +90,17 @@ func TestLimiterMemoryBudget(t *testing.T) {
 
 	start := time.Now()
 	var wg sync.WaitGroup
-	var okCount, busyCount atomic.Int32
-	for i := 0; i < 3; i++ {
+	var okCount atomic.Int32
+	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			ok, err := svc.Verify(context.Background(), "max-parameter-password", hash)
-			switch {
-			case errors.Is(err, ErrBusy):
-				busyCount.Add(1)
-			case err != nil || !ok:
+			if err != nil || !ok {
 				t.Errorf("verify = %v, %v", ok, err)
-			default:
-				okCount.Add(1)
+				return
 			}
+			okCount.Add(1)
 		}()
 	}
 	wg.Wait()
@@ -105,8 +108,8 @@ func TestLimiterMemoryBudget(t *testing.T) {
 	close(stop)
 	sampler.Wait()
 
-	if okCount.Load() != 2 || busyCount.Load() != 1 {
-		t.Errorf("ok = %d, busy = %d; want 2 verifications and 1 ErrBusy", okCount.Load(), busyCount.Load())
+	if okCount.Load() != 2 {
+		t.Errorf("ok = %d; want 2 verifications", okCount.Load())
 	}
 	growth := int64(peakHeap.Load()) - int64(base.HeapAlloc)
 	t.Logf("two concurrent m=64MiB,t=10,p=16 verifications: %v total, heap growth %d MiB (budget %d MiB)",
@@ -118,5 +121,37 @@ func TestLimiterMemoryBudget(t *testing.T) {
 	// earlier tests left resident, so asserting on it would be flaky.
 	if rssOK {
 		t.Logf("RSS growth %d MiB (diagnostic, not asserted)", ((peakRSS.Load()-rssBase)<<10)>>20)
+	}
+
+	// A third caller while both slots are taken: ErrBusy after the wait, and no
+	// Argon2 memory allocated for it.
+	l := svc.Limiter()
+	release := make(chan struct{})
+	var held sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		held.Add(1)
+		go func() {
+			defer held.Done()
+			if err := l.Do(context.Background(), func() { <-release }); err != nil {
+				t.Errorf("holding a slot: %v", err)
+			}
+		}()
+	}
+	defer func() { close(release); held.Wait() }()
+	for deadline := time.Now().Add(5 * time.Second); len(l.slots) < 2; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the test could not take both limiter slots")
+		}
+	}
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	ok, err := svc.Verify(context.Background(), "max-parameter-password", hash)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(err, ErrBusy) || ok {
+		t.Errorf("third caller: verify = %v, %v; want ErrBusy", ok, err)
+	}
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc >= 1<<20 {
+		t.Errorf("the refused caller allocated %d KiB; an Argon2 computation must not have started", alloc>>10)
 	}
 }
