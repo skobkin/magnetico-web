@@ -245,6 +245,14 @@ func TestDisableVersusRegistrationStress(t *testing.T) {
 }
 
 // Authentication loops against toggling disable/enable and revoke.
+//
+// The expectations are judged against a transition record, not a bare flag: every change of
+// state publishes a new value that carries a generation number, and a call is judged only when
+// the value read after it is the very value read before it. With a flag (0 = disabled, 1 =
+// enabled) a goroutine that was starved for more than a whole disable/enable cycle read "0"
+// before, "0" after, and judged an authentication that ran in the enabled phase as one after
+// Disable returned (found at default parallelism under CPU load, Task 09B; reproduced with
+// -race -count=60 on 12 busy CPUs, issue #53).
 func TestAuthenticationVersusDisableAndRevoke(t *testing.T) {
 	s, pool := newStore(t)
 	ctx := tctx(t)
@@ -252,9 +260,16 @@ func TestAuthenticationVersusDisableAndRevoke(t *testing.T) {
 	api, _ := s.CreateAPIToken(ctx, u.ID, "", nil)
 	rss, _ := s.CreateRSSToken(ctx, u.ID, "", nil)
 
+	const (
+		transition = 0 // a Disable or Enable call is in progress
+		disabled   = 1 // Disable returned
+		enabled    = 2 // Enable returned
+	)
 	var stop atomic.Bool
-	var state atomic.Int32 // 1 = enabled (Enable returned), 0 = disabled (Disable returned), -1 = transition
-	state.Store(1)
+	var cell atomic.Uint64 // generation<<2 | phase; every store has a new generation
+	var gen uint64         // only the toggling goroutine writes it
+	publish := func(phase uint64) { gen++; cell.Store(gen<<2 | phase) }
+	publish(enabled)
 	var wg sync.WaitGroup
 	for _, f := range []func() error{
 		func() error { _, e := s.AuthenticateAPIToken(ctx, api.Plaintext); return e },
@@ -264,18 +279,21 @@ func TestAuthenticationVersusDisableAndRevoke(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for !stop.Load() {
-				st := state.Load()
+				before := cell.Load()
 				err := f()
 				if err != nil && !errors.Is(err, ErrUnauthenticated) {
 					t.Errorf("auth: %v", err)
 					return
 				}
-				// Started after Disable returned, and no transition began since: must fail.
-				if st == 0 && state.Load() == 0 && err == nil {
+				// No transition began, let alone finished, while the call ran: the phase is certain.
+				if cell.Load() != before {
+					continue
+				}
+				if before&3 == disabled && err == nil {
 					t.Error("authenticated after Disable returned")
 					return
 				}
-				if st == 1 && state.Load() == 1 && err != nil {
+				if before&3 == enabled && err != nil {
 					t.Error("rejected after Enable returned")
 					return
 				}
@@ -283,17 +301,17 @@ func TestAuthenticationVersusDisableAndRevoke(t *testing.T) {
 		}()
 	}
 	for i := 0; i < 60; i++ {
-		state.Store(-1)
+		publish(transition)
 		if _, err := s.Disable(ctx, "zed"); err != nil {
 			t.Fatal(err)
 		}
-		state.Store(0)
+		publish(disabled)
 		time.Sleep(3 * time.Millisecond)
-		state.Store(-1)
+		publish(transition)
 		if err := s.Enable(ctx, "zed"); err != nil {
 			t.Fatal(err)
 		}
-		state.Store(1)
+		publish(enabled)
 		time.Sleep(3 * time.Millisecond)
 	}
 	stop.Store(true)
