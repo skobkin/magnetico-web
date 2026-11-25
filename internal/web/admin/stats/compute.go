@@ -109,6 +109,11 @@ func (o Overview) aged(fetchedAt, now time.Time) Overview {
 			*s = StorageView{State: StateUnavailable, Age: s.Age}
 		}
 	}
+	// "Recently active" is a count: the last-seen times behind it are not cached, so it cannot be
+	// recomputed. Once a whole window has passed nobody counted then is known to still be active.
+	if elapsed >= ActiveWindow {
+		out.Crawlers.Active = Measured[int64]{}
+	}
 	if !o.ThisHourAt.IsZero() && !now.UTC().Truncate(time.Hour).Equal(o.ThisHourAt.UTC().Truncate(time.Hour)) {
 		out.ThisHourAt, out.ThisHour = time.Time{}, [metricCount]int64{}
 	}

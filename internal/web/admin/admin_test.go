@@ -364,3 +364,20 @@ func TestSeriesJSONCarriesNotesAndFreshness(t *testing.T) {
 		t.Fatalf("freshness = %+v", back.Freshness)
 	}
 }
+
+// A disabled crawler's row must not claim "no activity recorded" when the statistics cannot
+// be read: that is unknown, not absent (review finding).
+func TestDisabledCrawlerWithUnreadableStatisticsSaysUnavailable(t *testing.T) {
+	srv := newServer(t)
+	read := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	page := stats.CrawlerPage{Ingest: stats.IngestStatus{State: stats.IngestOK}, StatsAvailable: false,
+		Items: []stats.CrawlerRow{{ID: "11111111-1111-4111-8111-111111111111", Name: "off", Enabled: false, CreatedAt: read}}}
+	rec := httptest.NewRecorder()
+	if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, page, stats.Freshness{FetchedAt: read})); err != nil {
+		t.Fatal(err)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "no activity recorded") || !strings.Contains(body, "activity unavailable") {
+		t.Fatalf("a disabled crawler with unreadable statistics must say 'activity unavailable':\n%s", body)
+	}
+}

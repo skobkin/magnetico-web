@@ -123,7 +123,9 @@ type Activity struct {
 }
 
 // Recent reports whether the crawler was seen within ActiveWindow.
-func (a *Activity) Recent() bool { return a.SeenAgo < ActiveWindow }
+// A last-seen time in the future beyond the usual skew between hosts came from a wrong clock
+// and is not activity (the freshness clocks treat such a source the same way).
+func (a *Activity) Recent() bool { return a.SeenAgo > -RateWindowSkew && a.SeenAgo < ActiveWindow }
 
 // ActivityClass is what a crawler's row says about its activity: four
 // different things that must never look alike.

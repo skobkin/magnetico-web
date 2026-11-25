@@ -15,8 +15,8 @@ import (
 	"github.com/skobkin/magnetico-web/internal/web/webschema"
 )
 
-// advisoryKey serializes concurrent `migrate users` runs; a neighbour of the
-// webschema initialization keys (…187, …188).
+// advisoryKey serializes concurrent `migrate users` runs (internal/advisory is the
+// registry of every key).
 const advisoryKey = advisory.UsersMigration
 
 // lockTimeout bounds how long a final run waits for a user table (a variable

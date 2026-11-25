@@ -334,7 +334,8 @@ FROM (SELECT enabled FROM magnetico_ingest.crawlers LIMIT $1) x`, CrawlerCountCa
 	var active int64
 	if err := r.db.QueryRow(ctx, `SELECT count(*) FROM (
 SELECT 1 FROM magnetico_ingest.crawlers c JOIN magnetico_stats.crawler_activity a ON a.crawler_id = c.crawler_id
-WHERE c.enabled AND a.last_seen_at > now() - make_interval(secs => $1) LIMIT $2) x`, ActiveWindow.Seconds(), CrawlerCountCap).Scan(&active); err == nil {
+WHERE c.enabled AND a.last_seen_at > now() - make_interval(secs => $1) AND a.last_seen_at < now() + make_interval(secs => $3) LIMIT $2) x`,
+		ActiveWindow.Seconds(), CrawlerCountCap, RateWindowSkew.Seconds()).Scan(&active); err == nil {
 		c.Active = known(active)
 	}
 	return c

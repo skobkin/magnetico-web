@@ -153,3 +153,41 @@ func TestVerifyDecodeVerdictCommittedBeforeTheAcknowledgementIsNotAnInterruption
 		t.Fatalf("durable run = %+v, %v", run, lerr)
 	}
 }
+
+// The same window in verify-content, which shares the finish path (review finding: only
+// verify-decode had a regression test).
+func TestVerifyContentVerdictCommittedBeforeTheAcknowledgementIsNotAnInterruption(t *testing.T) {
+	t.Parallel()
+	src, tgt := decodeFixture(t)
+	seedSourceTorrent(t, src, 1, "t1.bin", 10, 1700000001)
+	seedSourceFile(t, src, 1, "t1.bin", 10)
+	importAll(t, src, tgt)
+
+	proxy, proxied := startHoldFinishAckProxy(t, tgt)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-proxy.held:
+			time.Sleep(200 * time.Millisecond)
+			cancel()
+		case <-time.After(60 * time.Second):
+		}
+	}()
+	res, err := verifyContent(t, ctx, src, proxied, nil)
+	select {
+	case <-proxy.held:
+	default:
+		t.Fatal("the finishing COMMIT was never intercepted: the scenario is vacuous")
+	}
+	if err != nil {
+		t.Fatalf("error = %v, want nil: the verdict was durable before the cancellation was seen", err)
+	}
+	if res == nil || !res.Pass {
+		t.Fatalf("result = %+v, want the durable pass", res)
+	}
+	run, lerr := state.LatestVerification(context.Background(), poolForRunner(t, tgt), state.VerificationKindContent)
+	if lerr != nil || run == nil || run.State != state.VerificationCompletedPass {
+		t.Fatalf("durable run = %+v, %v", run, lerr)
+	}
+}

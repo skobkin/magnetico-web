@@ -137,3 +137,53 @@ func TestCachedCrawlerPageAgesItsActivity(t *testing.T) {
 		t.Fatal("aging modified the cached page")
 	}
 }
+
+// Review findings of Task 09A.
+
+// A cached overview cannot recompute "recently active" (it holds a count, not the last-seen
+// times), so once a whole activity window has passed since the read the count says nothing
+// any more and is unavailable, not the old number.
+func TestCachedRecentlyActiveCountExpiresWithTheActivityWindow(t *testing.T) {
+	o := agedFixture()
+	o.Crawlers = CrawlerCounts{Registered: known(int64(4)), Enabled: known(int64(3)), Active: known(int64(2))}
+	fetched := time.Date(2026, 11, 25, 10, 30, 0, 0, time.UTC)
+	if got := o.aged(fetched, fetched.Add(ActiveWindow-time.Second)); !got.Crawlers.Active.Valid {
+		t.Fatal("inside the window the count stays")
+	}
+	got := o.aged(fetched, fetched.Add(ActiveWindow))
+	if got.Crawlers.Active.Valid {
+		t.Fatalf("after the window the old count %d must not be shown as current", got.Crawlers.Active.Value)
+	}
+	if !got.Crawlers.Registered.Valid || !got.Crawlers.Enabled.Valid || o.Crawlers.Active.Valid != true {
+		t.Fatal("the registry counts stay and the cached value is not modified")
+	}
+}
+
+// A last-seen time in the future (the ingest host's clock ahead) is not recent: it came from
+// a wrong clock, like a source far in the future on the freshness clocks.
+func TestAFutureLastSeenIsNotRecentActivity(t *testing.T) {
+	if (&Activity{SeenAgo: -time.Hour}).Recent() {
+		t.Fatal("a crawler 'seen' an hour in the future is active")
+	}
+	if !(&Activity{SeenAgo: -5 * time.Second}).Recent() {
+		t.Fatal("a few seconds of skew between hosts must not make a live crawler inactive")
+	}
+}
+
+func TestActiveCountIgnoresALastSeenFarInTheFuture(t *testing.T) {
+	e := newEnv(t, flags{stats: true, ingest: true})
+	store := crawlers.New(e.pool)
+	c, err := store.Add(bg, "skewed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.exec(`INSERT INTO magnetico_stats.crawler_activity (crawler_id, first_seen_at, last_seen_at, last_ip, records_received)
+VALUES ($1, now(), now() + interval '1 day', '192.0.2.1', 1)`, c.ID)
+	o, _, err := e.svc.Overview(bg, admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.Crawlers.Active.Valid || o.Crawlers.Active.Value != 0 {
+		t.Fatalf("active = %+v, want 0: a last-seen a day ahead is a wrong clock, not activity", o.Crawlers.Active)
+	}
+}
