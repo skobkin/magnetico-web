@@ -261,6 +261,25 @@ func TestReleaseWorkflowDependsOnCIAndNeverOptionally(t *testing.T) {
 	}
 }
 
+// TestWorkflowsCloneTheWholeHistory: merge-target needs the merge base with the target
+// branch and GoReleaser the commits since the previous tag. The clone plugin's partial
+// setting defaults to true and then overrides depth with 1: the first pull-request
+// pipeline failed with "refusing to merge unrelated histories" on such a clone.
+func TestWorkflowsCloneTheWholeHistory(t *testing.T) {
+	for _, name := range []string{"ci.yaml", "release.yaml"} {
+		w := load(t, name)
+		clone, _ := w.doc["clone"].(map[string]any)
+		git, _ := clone["git"].(map[string]any)
+		settings, _ := git["settings"].(map[string]any)
+		if d, ok := settings["depth"].(uint64); !ok || d != 0 {
+			t.Errorf("%s: clone depth = %v, want 0 (no shallow clone)", name, settings["depth"])
+		}
+		if p, ok := settings["partial"].(bool); !ok || p {
+			t.Errorf("%s: clone partial = %v, want false (true overrides depth with 1)", name, settings["partial"])
+		}
+	}
+}
+
 // TestWorkflowsContainNoBackslash: Woodpecker substitutes variables over the whole file
 // before parsing it, and that pass consumes one level of backslashes. A `\\.` in the tag
 // expression reached the expression engine as `\.`, an invalid string escape, so neither

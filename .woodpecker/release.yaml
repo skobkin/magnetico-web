@@ -28,8 +28,13 @@ depends_on:
 clone:
   git:
     image: woodpeckerci/plugin-git
+    # The whole history: merge-target needs the merge base with the target branch, and
+    # GoReleaser the commits since the previous tag. partial must be off explicitly: it
+    # defaults to true and then overrides depth with 1 (a single-commit clone, in which a
+    # merge fails with "refusing to merge unrelated histories").
     settings:
       depth: 0
+      partial: false
 
 steps:
   - name: release-forgejo
