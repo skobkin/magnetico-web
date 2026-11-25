@@ -1,4 +1,4 @@
-# magnetico-web (unified Magnetico 0.8.0 — under development)
+# magnetico-web [![build status](https://ci.skobk.in/api/badges/skobkin/magnetico-web/status.svg?events=push%2Ctag)](https://ci.skobk.in/repos/skobkin/magnetico-web)[![latest release](https://git.skobk.in/skobkin/magnetico-web/badges/release.svg)](https://git.skobk.in/skobkin/magnetico-web/releases)
 
 This repository is a unified Go implementation of
 [Magnetico](https://github.com/boramalper/magnetico), targeting the upcoming
