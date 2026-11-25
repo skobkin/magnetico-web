@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -110,7 +111,9 @@ func openSource(t *testing.T, dsn string) *Source {
 }
 
 // catalogSnapshot renders a deterministic summary of the source catalog and
-// data, used to prove probes and refusals leave the source untouched.
+// data, used to prove probes and refusals leave the source untouched. Any
+// query failure fails the test: a snapshot that could not be taken proves
+// nothing.
 func catalogSnapshot(t *testing.T, dsn string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), pgtest.DBOpTimeout)
@@ -121,7 +124,20 @@ func catalogSnapshot(t *testing.T, dsn string) string {
 	}
 	defer conn.Close(context.Background())
 
-	var out *string
+	snap, err := sourceSnapshot(ctx, conn)
+	if err != nil {
+		t.Fatalf("source snapshot: %v", err)
+	}
+	return snap
+}
+
+// sourceSnapshot renders the magneticod catalog (relations, columns,
+// constraints, index validity) and the complete contents of every table in
+// it, one sorted line each. Rows are rendered whole (the row's text form),
+// so the data part needs no knowledge of the columns and stays readable in
+// the deliberately broken layouts the refusal tests build.
+func sourceSnapshot(ctx context.Context, conn *pgx.Conn) (string, error) {
+	var catalog *string
 	const catalogQuery = `SELECT string_agg(line, E'\n' ORDER BY line) FROM (
         SELECT 'rel ' || c.relname || ' ' || c.relkind::text AS line
           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -139,31 +155,41 @@ func catalogSnapshot(t *testing.T, dsn string) string {
           JOIN pg_namespace n ON n.oid = tt.relnamespace
           WHERE n.nspname = 'magneticod'
     ) q`
-	if err := conn.QueryRow(ctx, catalogQuery).Scan(&out); err != nil {
-		t.Fatalf("catalog snapshot: %v", err)
+	if err := conn.QueryRow(ctx, catalogQuery).Scan(&catalog); err != nil {
+		return "", fmt.Errorf("catalog: %w", err)
 	}
-	if out == nil {
-		return ""
+	var b strings.Builder
+	if catalog != nil {
+		b.WriteString(*catalog)
 	}
-	lines := *out
 
-	// Data lines are only available in an unbroken schema; a broken one
-	// yields a stable marker instead, so before/after comparisons stay fair.
-	const dataQuery = `SELECT string_agg(line, E'\n' ORDER BY line) FROM (
-        SELECT 'row torrents ' || id || ' ' || encode(info_hash,'hex') || ' ' || name || ' ' || total_size || ' ' || discovered_on
-          FROM magneticod.torrents
-        UNION ALL
-        SELECT 'row files ' || id || ' ' || COALESCE(torrent_id::text,'NULL') || ' ' || size || ' ' || path
-          FROM magneticod.files
-        UNION ALL
-        SELECT 'mig ' || schema_version::text FROM magneticod.migrations
-    ) q`
-	var data *string
-	if err := conn.QueryRow(ctx, dataQuery).Scan(&data); err != nil || data == nil {
-		lines += "\ndata (unreadable)"
-		return lines
+	// Every table of the schema: ordinary ones and partitioned parents (whose
+	// rows include their partitions'), never a partition on its own.
+	rows, err := conn.Query(ctx, `SELECT c.relname FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'magneticod' AND c.relkind IN ('r','p') AND NOT c.relispartition
+        ORDER BY 1`)
+	if err != nil {
+		return "", fmt.Errorf("table list: %w", err)
 	}
-	return lines + "\n" + *data
+	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return "", fmt.Errorf("table list: %w", err)
+	}
+	for _, table := range tables {
+		var count int64
+		var data string
+		q := fmt.Sprintf(`SELECT count(*), COALESCE(string_agg(r::text, E'\n' ORDER BY r::text), '')
+            FROM magneticod.%s r`, pgtest.QuoteIdent(table))
+		if err := conn.QueryRow(ctx, q).Scan(&count, &data); err != nil {
+			return "", fmt.Errorf("data of magneticod.%s: %w", table, err)
+		}
+		fmt.Fprintf(&b, "\ndata %s rows=%d", table, count)
+		if data != "" {
+			b.WriteString("\nrow " + table + " " + strings.ReplaceAll(data, "\n", "\nrow "+table+" "))
+		}
+	}
+	return b.String(), nil
 }
 
 // openFailsWith asserts Open refuses with the expected sentinel and leaves
