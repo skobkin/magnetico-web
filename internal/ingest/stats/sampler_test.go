@@ -340,3 +340,16 @@ func TestWriterUsesThreeIndependentPools(t *testing.T) {
 
 var _ = pgx.ErrNoRows
 var _ atomic.Int64
+
+// A process that has just started must show up on the dashboard without
+// waiting a whole heartbeat interval: the first snapshot is published at once.
+func TestFirstHeartbeatIsPublishedImmediatelyOnceReady(t *testing.T) {
+	e := newWEnv(t, func(o *WriterOptions, _ *wenv) { o.HeartbeatInterval = time.Hour })
+	e.ev(1)
+	e.mustFlush() // ready
+	ctx, cancel := context.WithCancel(bg)
+	done := make(chan struct{})
+	go func() { defer close(done); e.w.heartbeatLoop(ctx) }()
+	defer func() { cancel(); <-done }()
+	waitFor(t, "a snapshot long before the first tick", func() bool { return e.n(`SELECT count(*) FROM magnetico_stats.snapshot`) == 1 })
+}

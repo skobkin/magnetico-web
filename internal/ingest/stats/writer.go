@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/internal/opstats"
 )
@@ -205,7 +206,14 @@ func (w *Writer) Run(ctx context.Context) {
 // than waited for.
 func (w *Writer) Close(ctx context.Context) {
 	if w.Status().Ready {
-		_ = w.flushOnce(ctx, true)
+		// One pass settles at most one sealed batch: after a failed flush the
+		// newer events wait in the carry behind it, so drain until nothing is
+		// left (or a pass fails, or the context ends).
+		for pass := 0; pass < 4 && ctx.Err() == nil; pass++ {
+			if err := w.flushOnce(ctx, true); err != nil || w.drained() {
+				break
+			}
+		}
 	}
 	done := make(chan struct{})
 	go func() {
@@ -219,6 +227,13 @@ func (w *Writer) Close(ctx context.Context) {
 	case <-time.After(2 * time.Second):
 		w.log.Printf("statistics: a database connection did not close in time; abandoned")
 	}
+}
+
+// drained reports that no batch is sealed and nothing waits in the carry.
+func (w *Writer) drained() bool {
+	w.flushMu.Lock()
+	defer w.flushMu.Unlock()
+	return w.sealed == nil && w.carry.IsEmpty()
 }
 
 // logChange logs the state of a topic ("flush", "heartbeat", …) only when it
@@ -272,6 +287,18 @@ func errClass(err error) string {
 		return "schema-missing"
 	case errors.Is(err, opstats.ErrSchemaInvalid):
 		return "schema-invalid"
+	}
+	// The class must not depend on how the driver wrapped the failure (a prepare
+	// error and an execute error carry the same SQLSTATE): a repeated condition
+	// is one state and is logged once.
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(err, &pgErr):
+		return "pg:" + pgErr.Code
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
 	}
 	return fmt.Sprintf("%T", err)
 }

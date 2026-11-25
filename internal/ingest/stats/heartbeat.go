@@ -14,16 +14,29 @@ import (
 func (w *Writer) heartbeatLoop(ctx context.Context) {
 	t := time.NewTicker(w.opt.HeartbeatInterval)
 	defer t.Stop()
+	// The first snapshot is published as soon as the writer is ready (polled
+	// every second until then), so a freshly started process is visible at once
+	// instead of after a whole interval.
+	first := true
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+		if first {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(startPoll(w.Status().Ready)):
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
 		}
 		w.rec.MarkRunning() // a quiet process still has coverage
 		if !w.Status().Ready {
 			continue
 		}
+		first = false
 		hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		snap := w.snapshotNow()
 		_, err := w.hbPool.Exec(hctx, opstats.UpsertSnapshotSQL(), snap.Args()...)
@@ -34,6 +47,15 @@ func (w *Writer) heartbeatLoop(ctx context.Context) {
 			w.logChange("heartbeat", "ok", "statistics: heartbeat publishing works")
 		}
 	}
+}
+
+// startPoll is how long the first heartbeat waits before looking at the writer
+// again: nothing once it is ready, a second while it is still preparing.
+func startPoll(ready bool) time.Duration {
+	if ready {
+		return 0
+	}
+	return time.Second
 }
 
 // snapshotNow assembles the heartbeat row from the recorder and the writer.

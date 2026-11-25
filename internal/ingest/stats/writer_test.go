@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/skobkin/magnetico-web/internal/ingest/crawlers"
 	"github.com/skobkin/magnetico-web/internal/opstats"
 )
@@ -554,5 +555,42 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The state key of a repeated failure must not depend on how the driver wrapped
+// it: the same SQLSTATE through a prepare error and through an execute error is
+// one condition and is logged once.
+func TestErrClassIsStableAcrossWrappers(t *testing.T) {
+	pg := &pgconn.PgError{Code: "42P01"}
+	wrapped := fmt.Errorf("prepare: %w", pg)
+	if a, b := errClass(pg), errClass(wrapped); a != b || a == "" {
+		t.Fatalf("classes differ: %q vs %q", a, b)
+	}
+	if errClass(&pgconn.PgError{Code: "42501"}) == errClass(pg) {
+		t.Fatal("different SQLSTATEs share a class")
+	}
+	if errClass(context.DeadlineExceeded) != errClass(fmt.Errorf("x: %w", context.DeadlineExceeded)) {
+		t.Fatal("a deadline is classified by its wrapper")
+	}
+}
+
+// A flush that failed earlier leaves a sealed batch and, behind it, the newer
+// events in the carry. The final flush of a shutdown must persist both: one
+// attempt would settle the sealed batch and silently drop everything after it.
+func TestCloseDrainsTheCarryBehindAPendingSealedBatch(t *testing.T) {
+	e, p := proxied(t)
+	e.ev(1)
+	e.mustFlush() // ready, seq 1
+	p.setMode("down")
+	e.ev(5)
+	if err := e.flush(); err == nil {
+		t.Fatal("a flush through a dead proxy succeeded")
+	}
+	e.ev(7) // newer events wait in the carry behind the sealed batch
+	p.setMode("")
+	e.w.Close(bg)
+	if got := e.total("records_enqueued"); got != 13 {
+		t.Fatalf("persisted %d after Close, want 13 (1 + 5 sealed + 7 carried): the shutdown lost events", got)
 	}
 }
