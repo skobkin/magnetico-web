@@ -318,12 +318,12 @@ func (s *soak) heapReading(addr, label string) {
 func (s *soak) monitorLoop(stop <-chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 	e := s.e
-	conn, err := pgx.Connect(context.Background(), e.dsn)
-	if err != nil {
-		e.t.Errorf("monitor: cannot connect: %v", err)
-		return
-	}
-	defer conn.Close(context.Background())
+	var conn *pgx.Conn
+	defer func() {
+		if conn != nil {
+			conn.Close(context.Background())
+		}
+	}()
 	lastHeap := time.Now()
 	for {
 		select {
@@ -332,11 +332,27 @@ func (s *soak) monitorLoop(stop <-chan struct{}, wg *sync.WaitGroup) {
 		case <-time.After(soakMonitorEvery):
 		}
 		rec := map[string]any{"t_s": s.clk.elapsed().Seconds()}
+		if conn == nil { // (re)connect: a timed-out query closes the connection, and the monitor must outlive that
+			ctx, cancel := context.WithTimeout(context.Background(), harnessQueryTimeout)
+			c, err := pgx.Connect(ctx, e.dsn)
+			cancel()
+			if err != nil {
+				rec["pg_connect_error"] = err.Error()
+			} else {
+				conn = c
+			}
+		}
 		q := func(name, sql string, dest ...any) {
+			if conn == nil {
+				rec[name+"_error"] = "no connection"
+				return
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), harnessQueryTimeout)
 			defer cancel()
 			if err := conn.QueryRow(ctx, sql).Scan(dest...); err != nil {
 				rec[name+"_error"] = err.Error()
+				_ = conn.Close(context.Background()) // never reuse a connection after a failed query
+				conn = nil
 			}
 		}
 		var conns, waiting, ungranted int64
@@ -351,9 +367,12 @@ func (s *soak) monitorLoop(stop <-chan struct{}, wg *sync.WaitGroup) {
 		q("queue", `SELECT (SELECT count(*) FROM magnetico_ingest.queue), (SELECT used_bytes FROM magnetico_ingest.usage WHERE id = 1), (SELECT COALESCE(max(id), 0) FROM magneticod.torrents)`, &qRows, &qBytes, &maxID)
 		rec["queue_rows"], rec["quota_used_bytes"], rec["torrents_max_id"] = qRows, qBytes, maxID
 		var dead, statsBytes, ingestBytes int64
-		q("dead", `SELECT COALESCE(sum(n_dead_tup) FILTER (WHERE schemaname = 'magnetico_stats'), 0), COALESCE(sum(pg_total_relation_size(relid)) FILTER (WHERE schemaname = 'magnetico_stats'), 0),
+		// No pg_total_relation_size here: it takes a lock on every table, and the statistics
+		// outage holds an exclusive one. The size is the catalog's (approximate) page count.
+		q("dead", `SELECT COALESCE(sum(n_dead_tup) FILTER (WHERE schemaname = 'magnetico_stats'), 0),
+(SELECT COALESCE(sum(c.relpages), 0)::bigint * 8192 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'magnetico_stats'),
 COALESCE(sum(n_dead_tup) FILTER (WHERE schemaname = 'magnetico_ingest'), 0) FROM pg_stat_user_tables`, &dead, &statsBytes, &ingestBytes)
-		rec["dead_tuples_stats"], rec["stats_schema_bytes"], rec["dead_tuples_ingest"] = dead, statsBytes, ingestBytes
+		rec["dead_tuples_stats"], rec["stats_schema_bytes_approx"], rec["dead_tuples_ingest"] = dead, statsBytes, ingestBytes
 		var commits int64
 		q("xact", `SELECT xact_commit FROM pg_stat_database WHERE datname = current_database()`, &commits)
 		rec["xact_commit"] = commits
