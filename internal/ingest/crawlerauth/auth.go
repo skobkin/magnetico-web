@@ -29,6 +29,17 @@ const (
 	MaxPendingDigests = 64
 	MaxWaiters        = 1024
 
+	// A reserved lane for credentials that authenticated before. A flood of
+	// unknown (forged) credentials may use at most the "Unknown" share of each
+	// bound; the rest stays free for a known crawler whose 60 s cache entry has
+	// expired and must be re-validated. The totals above are unchanged.
+	ReservedActiveLookups  = 2
+	ReservedPendingDigests = 16
+	ReservedWaiters        = 256
+	UnknownActiveLookups   = MaxActiveLookups - ReservedActiveLookups
+	UnknownPendingDigests  = MaxPendingDigests - ReservedPendingDigests
+	UnknownWaiters         = MaxWaiters - ReservedWaiters
+
 	// DefaultSlotWait is how long a digest waits for one of the active lookup
 	// slots before its waiters get "busy".
 	DefaultSlotWait = 250 * time.Millisecond
@@ -102,9 +113,10 @@ type entry struct {
 }
 
 type call struct {
-	done chan struct{}
-	id   Identity
-	err  error
+	known bool // the digest authenticated before: it uses the reserved lane
+	done  chan struct{}
+	id    Identity
+	err   error
 }
 
 // Authenticator is safe for concurrent use.
@@ -117,12 +129,16 @@ type Authenticator struct {
 	slotWait       time.Duration
 	lookupDeadline time.Duration
 
-	slots chan struct{}
+	slots        chan struct{}
+	unknownSlots chan struct{} // at most UnknownActiveLookups of the slots go to unknown digests
 
-	mu      sync.Mutex
-	cache   map[[32]byte]entry
-	calls   map[[32]byte]*call
-	waiters int
+	mu             sync.Mutex
+	cache          map[[32]byte]entry
+	known          map[[32]byte]struct{} // digests that authenticated before (a hint, bounded like the cache)
+	calls          map[[32]byte]*call
+	callsUnknown   int
+	waiters        int
+	waitersUnknown int
 
 	hits, misses, dbLookups, storageFailures, busy atomic.Uint64
 }
@@ -132,8 +148,8 @@ func New(lookup Lookup, opt Options) *Authenticator {
 	a := &Authenticator{
 		lookup: lookup, clock: opt.Clock, log: opt.Logger, obs: opt.Observer,
 		slotWait: DefaultSlotWait, lookupDeadline: DefaultLookupDeadline,
-		slots: make(chan struct{}, MaxActiveLookups),
-		cache: map[[32]byte]entry{}, calls: map[[32]byte]*call{},
+		slots: make(chan struct{}, MaxActiveLookups), unknownSlots: make(chan struct{}, UnknownActiveLookups),
+		cache: map[[32]byte]entry{}, known: map[[32]byte]struct{}{}, calls: map[[32]byte]*call{},
 	}
 	if a.clock == nil {
 		a.clock = realClock{}
@@ -190,31 +206,42 @@ func (a *Authenticator) Authenticate(ctx context.Context, bearer string) (Identi
 		delete(a.cache, digest)
 	}
 	a.misses.Add(1)
+	_, known := a.known[digest]
 	// Reserve a waiter place first: nothing is allocated for a request that
-	// cannot be accommodated.
-	if a.waiters >= MaxWaiters {
+	// cannot be accommodated. An unknown credential may only use its share.
+	if a.waiters >= MaxWaiters || (!known && a.waitersUnknown >= UnknownWaiters) {
 		a.mu.Unlock()
 		return Identity{}, a.refuseBusy()
 	}
 	c, joined := a.calls[digest]
 	if !joined {
-		if len(a.calls) >= MaxPendingDigests {
+		if len(a.calls) >= MaxPendingDigests || (!known && a.callsUnknown >= UnknownPendingDigests) {
 			a.mu.Unlock()
 			return Identity{}, a.refuseBusy()
 		}
-		c = &call{done: make(chan struct{})}
+		c = &call{done: make(chan struct{}), known: known}
 		a.calls[digest] = c
+		if !known {
+			a.callsUnknown++
+		}
 	}
 	a.waiters++
-	a.mu.Unlock()
-	if a.obs != nil {
-		a.obs.AuthMiss()
+	if !known {
+		a.waitersUnknown++
 	}
+	a.mu.Unlock()
+	// Released on every exit path, before anything that could panic runs.
 	defer func() {
 		a.mu.Lock()
 		a.waiters--
+		if !known {
+			a.waitersUnknown--
+		}
 		a.mu.Unlock()
 	}()
+	if a.obs != nil {
+		a.obs.AuthMiss()
+	}
 
 	if !joined {
 		//nolint:gosec // G118: the lookup deliberately outlives and is independent of any single waiter's request context
@@ -251,15 +278,27 @@ func (a *Authenticator) run(digest [32]byte, c *call) {
 		}
 		a.mu.Lock()
 		delete(a.calls, digest)
+		if !c.known {
+			a.callsUnknown--
+		}
 		a.mu.Unlock()
 		c.id, c.err = id, err
 		close(c.done)
 	}()
 
 	timer := time.NewTimer(a.slotWait)
+	defer timer.Stop()
+	if !c.known { // an unknown digest first needs a place in its share of the slots
+		select {
+		case a.unknownSlots <- struct{}{}:
+			defer func() { <-a.unknownSlots }()
+		case <-timer.C:
+			err = a.refuseBusy()
+			return
+		}
+	}
 	select {
 	case a.slots <- struct{}{}:
-		timer.Stop()
 	case <-timer.C:
 		err = a.refuseBusy()
 		return
@@ -321,6 +360,15 @@ func (a *Authenticator) store(d [32]byte, e entry) {
 		delete(a.cache, oldest)
 	}
 	a.cache[d] = e
+	if _, ok := a.known[d]; !ok {
+		if len(a.known) >= MaxCacheEntries {
+			for k := range a.known { // any one: the hint is only a lane choice
+				delete(a.known, k)
+				break
+			}
+		}
+		a.known[d] = struct{}{}
+	}
 }
 
 // stateSizes reports the coordination state (tests): call records, reserved

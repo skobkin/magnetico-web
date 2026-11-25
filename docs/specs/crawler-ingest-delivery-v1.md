@@ -176,7 +176,12 @@ A positive cache keeps healthy crawlers off the database: key = the digest, entr
 from the start of the lookup that produced it** (fixed, never extended by use or by a database failure),
 at most 4,096 entries, concurrent lookups of one digest coalesced. Lookup coordination is bounded: at
 most 8 concurrent queries, 64 distinct pending digests and 1,024 waiting requests, each lookup with a 2 s
-deadline and a ≤ 250 ms wait for a slot; requests beyond the bounds get `503 busy` at once. A disabled,
+deadline and a ≤ 250 ms wait for a slot; requests beyond the bounds get `503 busy` at once. **A reserved lane
+protects a known crawler from a flood of forged credentials:** a digest that has authenticated before (a hint
+kept beyond the cache entry's life, bounded like the cache) may use all of the bounds, while an unknown digest
+may use at most 6 of the 8 queries, 48 of the 64 pending digests and 768 of the 1,024 waiting requests, so
+the re-validation of a legitimate crawler whose 60 s entry just expired is never starved (measured with a
+90 s flood of forged tokens: no legitimate request failed). A disabled,
 rotated-away or removed credential is therefore accepted by a running ingest for **at most 60 s** after
 the change (**accepted and documented**); a new credential works immediately. The crawler reads its own
 token from `MAGNETICO_CRAWL_INGEST_TOKEN` (environment only: no CLI flag, no YAML field; never logged or

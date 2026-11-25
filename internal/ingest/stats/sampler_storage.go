@@ -34,7 +34,7 @@ func (w *Writer) storageSamplerLoop(ctx context.Context) {
 		s, err := sampleStorage(ctx, w.samplePool, w.now(), storageLimits)
 		if err != nil {
 			if ctx.Err() == nil {
-				w.logChange("storage-sample", err.Error(), "statistics: sampling the storage sizes failed (%v); the previous sample stays and shows its age", err)
+				w.logChange("storage-sample", errClass(err), "statistics: sampling the storage sizes failed (%s); the previous sample stays and shows its age", safeErr(err))
 			}
 			continue
 		}

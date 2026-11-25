@@ -42,7 +42,7 @@ func (w *Writer) heartbeatLoop(ctx context.Context) {
 		_, err := w.hbPool.Exec(hctx, opstats.UpsertSnapshotSQL(), snap.Args()...)
 		cancel()
 		if err != nil && ctx.Err() == nil {
-			w.logChange("heartbeat", errClass(err), "statistics: publishing the heartbeat failed (%v); retrying", err)
+			w.logChange("heartbeat", errClass(err), "statistics: publishing the heartbeat failed (%s); retrying", safeErr(err))
 		} else if err == nil {
 			w.logChange("heartbeat", "ok", "statistics: heartbeat publishing works")
 		}

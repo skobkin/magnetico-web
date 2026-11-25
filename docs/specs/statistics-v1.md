@@ -40,7 +40,7 @@ Every counter is a monotone `bigint` per hour bucket (`agg_hour`, summed into `a
 | `submit_requests_validated` | the envelope decoded and every record validated | denominator of "records per request" |
 | `records_received` | the same moment | records in validated requests, before admission |
 | `records_enqueued` | `Admit` returned without error | rows inserted into the queue |
-| `admission_duplicates` | the same | records already pending in the queue |
+| `admission_duplicates` | the same | records that were already pending in the queue, or repeated within the same request |
 | `records_acknowledged` | the same | `records_enqueued + admission_duplicates` |
 | `records_refused` | `Admit` returned an error | records whose admission ended without an acknowledgement |
 | `bytes_body` | the request body was read | request-body bytes of authenticated requests |
@@ -117,7 +117,7 @@ Storage is sampled every 5 minutes into `storage_hour`, `storage_day` and `stora
 | current (open) hour | count so far, labelled partial | count |
 | weighted mean | `Σ sum ÷ Σ count` of stored pairs | per metric |
 
-Rolling windows come from in-memory rings (60 × 1 s and 60 × 1 min) and use only completed seconds. **Coverage** is the set of UTC minutes in which a process was running and recording: `agg_hour.covered_mask` holds it as a bitmask merged with bitwise OR, so two instances in the same minute count once and coverage never exceeds the bucket length; day and month rows count the newly covered minutes (`covered_minutes`). A bucket with no row is a **missing observation**; a row with `covered_minutes > 0` and zero counters is a **measured zero**.
+Rolling windows come from an in-memory ring of 3,600 one-second slots (the 60 s, 15 min and 60 min windows are sums over it) and use only completed seconds. **Coverage** is the set of UTC minutes in which a process was running and recording: `agg_hour.covered_mask` holds it as a bitmask merged with bitwise OR, so two instances in the same minute count once and coverage never exceeds the bucket length; day and month rows count the newly covered minutes (`covered_minutes`). A bucket with no row is a **missing observation**; a row with `covered_minutes > 0` and zero counters is a **measured zero**.
 
 Three independent freshness clocks decide what the web shows: instances (`snapshot.published_at`: up under 30 s, stale under 5 min, else unavailable), queue state (`shared_state.queue_sampled_at`: fresh within 90 s, stale within 15 min, else unavailable) and storage (`storage_sampled_at`: fresh within 15 min, stale within 1 h, else unavailable). A failed queue sample leaves the instance "up" with the queue fields shown unavailable and their age. Nothing unavailable is rendered as zero.
 
@@ -135,7 +135,7 @@ Created by `magnetico migrate stats-schema-init` (idempotent, advisory lock, req
 | `agg_hour`, `agg_day`, `agg_month` | `bucket_start` | the counters of §3, the gauge columns of §4, coverage |
 | `storage_hour`, `storage_day`, `storage_month` | `bucket_start` | the storage measures of §4 |
 
-`CHECK` constraints keep `bucket_start` aligned to its unit in UTC, counters non-negative and `min ≤ max`; the reader rejects and reports rows that violate them.
+`CHECK` constraints keep `bucket_start` aligned to its unit in UTC, counters non-negative and `min ≤ max`, so the database refuses a row that violates them; the reader does not re-validate rows.
 
 Crawler-activity merge: counters add; `first_seen_at` is `LEAST`; the pair (`last_seen_at`, `last_ip`) is replaced together only by a strictly newer `last_seen_at`; `last_submit_at` is `GREATEST` on its own, `NULL` ignored, so a delayed batch never moves a newer value back and an existence-only batch never erases a submission time.
 
@@ -155,7 +155,7 @@ The process owns three one-connection pools. A stalled flush shares no connectio
 
 **Sealed immutable batches.** The writer drains the recorder into a carry delta and seals it as a batch `(prev, seq)`; a sealed batch is never changed after its first attempt, newer events wait in the carry. One transaction per attempt starts with `UPDATE ingest_instances SET last_flush_seq = seq WHERE instance_id = id AND last_flush_seq = prev`; its affected-row count is the **single arbiter**: one row ⇒ apply the hour, day, month and per-crawler upserts and commit; zero rows ⇒ apply nothing and read the sequence (`seq` ⇒ it already committed, `prev` ⇒ a concurrent transaction rolled back, anything else ⇒ drop the batch, count `sequence_anomalies`, never reuse a number). A lost connection around `COMMIT` is therefore resolved by the next attempt without a double count. A batch older than 24 h is **abandoned as a tombstone** that keeps its sequence number and is resolved by the same arbiter, so there is no gap and no double count; buffered hours older than 26 hours are dropped and counted. Hour, day and month rows are locked in ascending order (`shared_state`, hours, days, months, crawlers).
 
-A graceful shutdown makes a **final flush** bounded by 5 s (inside the existing shutdown budget) that drains the sealed batch and the carry behind it. Counters lost on `SIGKILL` are bounded by the flush interval **only while persistence succeeds**; during a statistics-database outage up to 24 h of buffered hours are lost on a crash, and anything beyond the bound is dropped and counted.
+A graceful shutdown makes a **final flush** bounded by 5 s, plus at most 2 s to close the statistics connections (the shutdown budget of `crawler-ingest-delivery-v1.md` §8 grows from 28 s to 35 s), that drains the sealed batch and the carry behind it. Counters lost on `SIGKILL` are bounded by the flush interval **only while persistence succeeds**; during a statistics-database outage up to 24 h of buffered hours are lost on a crash, and anything beyond the bound is dropped and counted.
 
 ## 8. Failure behaviour
 
@@ -169,7 +169,9 @@ A graceful shutdown makes a **final flush** bounded by 5 s (inside the existing 
 | ingest restart | counters restart under a new `instance_id`; persisted aggregates continue |
 | ambiguous commit | never double-counted; dropped only when unresolvable, and then counted |
 
-A repeated failure is logged once per state, where the state is the SQLSTATE class of the error, not the driver's wrapper type.
+A repeated failure is logged once per state, where the state is the SQLSTATE class of the error, not the driver's wrapper type; a log line never carries a driver error's text (host, user, database), only the class, or our own schema and privilege messages.
+
+**Clock excursions.** The process clock decides the hour of an event and the slot of a shared sample. A shared sample more than 6 slots (a minute; 2 storage slots) ahead of the writer's clock at flush time is **not applied** (counted in `gauge_batches_skipped_overlap`), and a stored slot marker that far ahead — written by a clock that was wrong — gives way to the next sample that agrees with the writer's clock, so one bad reading cannot freeze the queue and storage figures. The web service shows a source more than 30 s in the future as **unavailable**. In memory, an event hour is clamped so it never goes backwards: after a forward excursion of an hour or more, later events are attributed to that (future) hour until real time catches up or the process restarts (`clock_anomaly` is set above 26 h); the next process start is the repair. The crawler-activity timestamps and `first_seen_at` follow the same clock.
 
 ## 9. Multi-instance behaviour
 

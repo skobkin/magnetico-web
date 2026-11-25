@@ -92,6 +92,13 @@ type Delta struct {
 	StorageFirstSlot, StorageLastSlot int64
 	LatestQueue                       *QueueState
 	LatestStorage                     *StorageState
+
+	// GuardRef is the writer's clock at the time of the attempt (not merged,
+	// not part of a batch's content). A shared sample more than a few slots
+	// ahead of it was taken by a clock that was wrong, and a marker that far
+	// ahead was written by one: neither may pin the shared state. Zero turns
+	// the check off.
+	GuardRef time.Time
 }
 
 // IsEmpty reports whether the delta carries nothing worth persisting.

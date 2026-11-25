@@ -409,8 +409,11 @@ func Apply(ctx context.Context, tx pgx.Tx, d *Delta) (ApplyResult, error) {
 			args = append(args, nullInt(q.Valid[g], q.Values[g]))
 			sets = append(sets, fmt.Sprintf("%s = $%d", g.Name(), len(args)))
 		}
+		args = append(args, refSlot(d.GuardRef, 10))
+		ref := fmt.Sprintf("$%d::bigint", len(args))
 		tag, err := tx.Exec(ctx, `UPDATE magnetico_stats.shared_state SET `+strings.Join(sets, ", ")+
-			` WHERE id = 1 AND gauge_last_slot < $1`, args...)
+			` WHERE id = 1 AND $2 <= `+ref+` + `+fmt.Sprint(QueueClockTolerance)+
+			` AND (gauge_last_slot < $1 OR gauge_last_slot > `+ref+` + `+fmt.Sprint(QueueClockTolerance)+`)`, args...)
 		if err != nil {
 			return res, err
 		}
@@ -425,8 +428,11 @@ func Apply(ctx context.Context, tx pgx.Tx, d *Delta) (ApplyResult, error) {
 			args = append(args, nullInt(s.Valid[m], s.Values[m]))
 			sets = append(sets, fmt.Sprintf("storage_%s = $%d", m.Name(), len(args)))
 		}
+		args = append(args, refSlot(d.GuardRef, 300))
+		ref := fmt.Sprintf("$%d::bigint", len(args))
 		tag, err := tx.Exec(ctx, `UPDATE magnetico_stats.shared_state SET `+strings.Join(sets, ", ")+
-			` WHERE id = 1 AND storage_last_slot < $1`, args...)
+			` WHERE id = 1 AND $2 <= `+ref+` + `+fmt.Sprint(StorageClockTolerance)+
+			` AND (storage_last_slot < $1 OR storage_last_slot > `+ref+` + `+fmt.Sprint(StorageClockTolerance)+`)`, args...)
 		if err != nil {
 			return res, err
 		}
@@ -537,4 +543,20 @@ func Apply(ctx context.Context, tx pgx.Tx, d *Delta) (ApplyResult, error) {
 		}
 	}
 	return res, nil
+}
+
+// Clock tolerances of the shared-sample guard, in slots: a minute for the queue
+// (10 s slots) and ten minutes for the storage (5 min slots).
+const (
+	QueueClockTolerance   = 6
+	StorageClockTolerance = 2
+)
+
+// refSlot is the slot of the guard's reference time, or a value that disables
+// the check when there is none.
+func refSlot(ref time.Time, seconds int64) int64 {
+	if ref.IsZero() {
+		return 1 << 60
+	}
+	return ref.Unix() / seconds
 }

@@ -141,6 +141,8 @@ func TestFreshnessClassificationBoundaries(t *testing.T) {
 		{"queue 14m59s", ClassifyQueue, 899 * s, StateStale}, {"queue 15m", ClassifyQueue, 900 * s, StateUnavailable},
 		{"storage 15m", ClassifyStorage, 900 * s, StateUp}, {"storage 15m1s", ClassifyStorage, 901 * s, StateStale},
 		{"storage 59m59s", ClassifyStorage, 3599 * s, StateStale}, {"storage 1h", ClassifyStorage, 3600 * s, StateUnavailable},
+		{"queue 20s from the future", ClassifyQueue, -20 * s, StateUp}, {"queue a day from the future", ClassifyQueue, -86400 * s, StateUnavailable},
+		{"storage a day from the future", ClassifyStorage, -86400 * s, StateUnavailable}, {"ingest 5m from the future", ClassifyIngest, -300 * s, StateUnavailable},
 	} {
 		if got := tc.f(tc.age); got != tc.want {
 			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)

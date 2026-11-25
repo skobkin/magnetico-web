@@ -3,6 +3,7 @@ package stats
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -592,5 +593,18 @@ func TestCloseDrainsTheCarryBehindAPendingSealedBatch(t *testing.T) {
 	e.w.Close(bg)
 	if got := e.total("records_enqueued"); got != 13 {
 		t.Fatalf("persisted %d after Close, want 13 (1 + 5 sealed + 7 carried): the shutdown lost events", got)
+	}
+}
+
+// The ingest log never prints what a driver error carries (host, user and
+// database of the connection); our own schema and privilege messages are kept.
+func TestLogLinesNeverCarryDriverErrorDetails(t *testing.T) {
+	driver := fmt.Errorf("failed to connect to `host=db.internal.example user=magnetico_rt database=prod`: dial error")
+	if got := safeErr(driver); strings.Contains(got, "db.internal.example") || strings.Contains(got, "magnetico_rt") || got == "" {
+		t.Fatalf("safeErr leaks the connection details: %q", got)
+	}
+	own := fmt.Errorf("%w: [magnetico_stats.snapshot]", errMissingPrivileges)
+	if got := safeErr(own); !strings.Contains(got, "magnetico_stats.snapshot") {
+		t.Fatalf("our own privilege message was lost: %q", got)
 	}
 }

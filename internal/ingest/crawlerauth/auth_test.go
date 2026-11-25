@@ -347,14 +347,14 @@ func TestOutstandingLookupStateIsBounded(t *testing.T) {
 			}
 		}(i)
 	}
-	waitFor(t, func() bool { return busy.Load() >= n-MaxPendingDigests })
+	waitFor(t, func() bool { return busy.Load() >= n-UnknownPendingDigests })
 	calls, waiters, active := a.stateSizes()
 	if calls > MaxPendingDigests || waiters > MaxWaiters || active > MaxActiveLookups {
 		t.Fatalf("calls=%d waiters=%d active=%d exceed the bounds %d/%d/%d", calls, waiters, active,
 			MaxPendingDigests, MaxWaiters, MaxActiveLookups)
 	}
-	if calls != MaxPendingDigests {
-		t.Fatalf("calls=%d, want exactly %d pending digests", calls, MaxPendingDigests)
+	if calls != UnknownPendingDigests { // unknown credentials may hold only their share of the 64
+		t.Fatalf("calls=%d, want exactly %d pending digests for unknown credentials", calls, UnknownPendingDigests)
 	}
 	close(release)
 	wg.Wait()
@@ -371,7 +371,7 @@ func TestWaitersOfOneDigestAreBoundedAndTheRestGetBusy(t *testing.T) {
 	a := newAuth(l, newClock())
 	var wg sync.WaitGroup
 	var busy, ok atomic.Int64
-	for i := 0; i < MaxWaiters+500; i++ {
+	for i := 0; i < UnknownWaiters+500; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -388,8 +388,8 @@ func TestWaitersOfOneDigestAreBoundedAndTheRestGetBusy(t *testing.T) {
 	}
 	close(release)
 	wg.Wait()
-	if ok.Load() != MaxWaiters || busy.Load() != 500 {
-		t.Fatalf("ok=%d busy=%d, want %d and 500", ok.Load(), busy.Load(), MaxWaiters)
+	if ok.Load() != UnknownWaiters || busy.Load() != 500 {
+		t.Fatalf("ok=%d busy=%d, want %d and 500", ok.Load(), busy.Load(), UnknownWaiters)
 	}
 }
 
@@ -400,11 +400,11 @@ func TestPendingDigestWaitsAtMostSlotWaitThenBusyAndLeavesNoState(t *testing.T) 
 	a := newAuth(l, newClock())
 	a.slotWait = 50 * time.Millisecond
 	var wg sync.WaitGroup
-	for i := 0; i < MaxActiveLookups; i++ {
+	for i := 0; i < UnknownActiveLookups; i++ {
 		wg.Add(1)
 		go func(i int) { defer wg.Done(); _, _ = a.Authenticate(context.Background(), tok(i)) }(i)
 	}
-	waitFor(t, func() bool { _, _, act := a.stateSizes(); return act == MaxActiveLookups })
+	waitFor(t, func() bool { _, _, act := a.stateSizes(); return act == UnknownActiveLookups })
 	start := time.Now()
 	_, err := a.Authenticate(context.Background(), tok(500))
 	if !isBusy(err) {
@@ -413,7 +413,7 @@ func TestPendingDigestWaitsAtMostSlotWaitThenBusyAndLeavesNoState(t *testing.T) 
 	if d := time.Since(start); d < 40*time.Millisecond || d > 2*time.Second {
 		t.Fatalf("waited %v for a slot, want about 50 ms", d)
 	}
-	if calls, _, _ := a.stateSizes(); calls != MaxActiveLookups {
+	if calls, _, _ := a.stateSizes(); calls != UnknownActiveLookups {
 		t.Fatalf("the abandoned digest left a call record (%d)", calls)
 	}
 	close(release)
@@ -681,5 +681,56 @@ func BenchmarkAuthenticateCacheHit(b *testing.B) {
 		if _, err := a.Authenticate(context.Background(), tok(1)); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// A flood of well-formed but unknown credentials must not be able to starve the
+// re-validation of a crawler that authenticated before: its cache entry expires
+// every 60 s, and its lookup needs a slot, a call record and a waiter place that
+// the flood has to leave free.
+func TestFloodOfUnknownCredentialsCannotStarveAKnownCrawlersRevalidation(t *testing.T) {
+	l := newLookup()
+	l.set(tok(1), rec("id-1", "known"))
+	c := newClock()
+	a := newAuth(l, c)
+	a.slotWait = 100 * time.Millisecond
+	if _, err := a.Authenticate(context.Background(), tok(1)); err != nil { // the crawler authenticates once
+		t.Fatal(err)
+	}
+	c.Advance(CacheTTL + time.Second) // and its cache entry expires
+
+	release := make(chan struct{})
+	l.hook = func(ctx context.Context) error { <-release; return nil }
+	var wg sync.WaitGroup
+	var busy atomic.Int64
+	for i := 0; i < 300; i++ { // the flood: distinct unknown credentials, lookups held open
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if _, err := a.Authenticate(context.Background(), tok(5000+i)); isBusy(err) {
+				busy.Add(1)
+			}
+		}(i)
+	}
+	waitFor(t, func() bool { return busy.Load() >= 200 }) // the flood is saturating what it may use
+
+	type result struct {
+		id  Identity
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		id, err := a.Authenticate(context.Background(), tok(1))
+		done <- result{id, err}
+	}()
+	time.Sleep(300 * time.Millisecond) // longer than the slot wait: a starved lookup would be refused by now
+	close(release)
+	r := <-done
+	if r.err != nil || r.id.CrawlerID != "id-1" {
+		t.Fatalf("the known crawler's re-validation during a flood: %+v, %v (want it to succeed)", r.id, r.err)
+	}
+	wg.Wait()
+	if m := l.maxActive.Load(); m > MaxActiveLookups {
+		t.Fatalf("%d concurrent lookups, bound %d", m, MaxActiveLookups)
 	}
 }

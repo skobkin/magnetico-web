@@ -122,7 +122,6 @@ type Writer struct {
 		abandoned      bool
 		carryHours     int
 	}
-	inFlight int64
 
 	// flush-goroutine state (only touched by the flush path, serialised by flushMu)
 	flushMu       sync.Mutex
@@ -271,7 +270,7 @@ func (w *Writer) flushLoop(ctx context.Context) {
 	defer t.Stop()
 	for {
 		if err := w.flushOnce(ctx, false); err != nil && ctx.Err() == nil {
-			w.logChange("flush", errClass(err), "statistics: persisting failed (%v); measurements stay buffered in memory and the retry continues", err)
+			w.logChange("flush", errClass(err), "statistics: persisting failed (%s); measurements stay buffered in memory and the retry continues", safeErr(err))
 		}
 		select {
 		case <-ctx.Done():
@@ -279,6 +278,20 @@ func (w *Writer) flushLoop(ctx context.Context) {
 		case <-t.C:
 		}
 	}
+}
+
+// errMissingPrivileges names the one start-up condition whose message we own.
+var errMissingPrivileges = errors.New("the ingest role lacks privileges on the statistics schema")
+
+// safeErr is what a log line may say about a failure: our own schema and
+// privilege messages (names only), otherwise the class. A driver error carries
+// the host, user and database of the connection, which the ingest log never
+// prints (the convention of the whole service).
+func safeErr(err error) string {
+	if errors.Is(err, opstats.ErrSchemaMissing) || errors.Is(err, opstats.ErrSchemaInvalid) || errors.Is(err, errMissingPrivileges) {
+		return err.Error()
+	}
+	return errClass(err)
 }
 
 func errClass(err error) string {
@@ -313,7 +326,7 @@ func (w *Writer) prepare(ctx context.Context) error {
 		return err
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("the ingest role lacks privileges on the statistics schema: %v", missing)
+		return fmt.Errorf("%w: %v", errMissingPrivileges, missing)
 	}
 	if err := w.ensureInstance(ctx, 0); err != nil {
 		return err
@@ -337,7 +350,6 @@ func (w *Writer) collect() {
 	w.mu.Lock()
 	opstats.Merge(&d, &w.pending)
 	w.pending = opstats.Delta{}
-	w.inFlight = d.InFlightAtDrain
 	w.mu.Unlock()
 	opstats.Merge(&w.carry, &d)
 
@@ -470,6 +482,7 @@ WHERE instance_id = $2 AND last_flush_seq = $3`, b.seq, w.instanceID, b.prev)
 	if tag.RowsAffected() == 1 {
 		var res opstats.ApplyResult
 		if !b.abandoned {
+			b.delta.GuardRef = w.now() // the writer's clock now: a sample from a clock far ahead of it is not applied
 			if res, err = opstats.Apply(actx, tx, &b.delta); err != nil {
 				return err
 			}

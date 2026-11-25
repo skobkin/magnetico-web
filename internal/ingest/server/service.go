@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/skobkin/magnetico-web/internal/ingest/cache"
 	"github.com/skobkin/magnetico-web/internal/ingest/crawlerauth"
@@ -34,7 +35,9 @@ const (
 
 // Shutdown budgets (see Run). The documented guarantee is that Run returns
 // within max(HTTPGrace, ConsumerGrace+AbortGrace) + HandlerGrace plus at most
-// 5 s for the final summary: 28 s with the defaults.
+// 5 s for the final summary: 28 s with the defaults, plus up to 7 s for the
+// final statistics flush (5 s) and the closing of its connections (2 s) in the
+// normal case where nothing had to be abandoned.
 const (
 	DefaultHTTPGrace     = 20 * time.Second
 	DefaultConsumerGrace = 10 * time.Second
@@ -170,7 +173,11 @@ func Run(ctx context.Context, o Options) error {
 	var registered, enabled int64
 	if err := authPool.QueryRow(ctx,
 		`SELECT count(*), count(*) FILTER (WHERE enabled) FROM magnetico_ingest.crawlers`).Scan(&registered, &enabled); err != nil {
-		return ErrCrawlerRegistry
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42501" { // insufficient_privilege: the one cause the message names
+			return ErrCrawlerRegistry
+		}
+		return errors.New("ingest: reading the crawler registry at start-up failed (a database error or timeout); start again once PostgreSQL answers")
 	}
 	if enabled == 0 {
 		lg.Printf("WARNING: no enabled crawler is registered (%d registered); every request is refused with 401 "+

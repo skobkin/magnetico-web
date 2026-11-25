@@ -67,7 +67,7 @@ The crawler receives its token in `MAGNETICO_CRAWL_INGEST_TOKEN`. Names are 1–
 
 **The 60-second delay.** A running `ingest` keeps a positive authentication result for exactly 60 seconds from the moment it asked the database, never extended by use. Consequently `rotate-token` and `disable` take effect on every running instance **within 60 seconds** (the commands print this); a new or newly enabled credential works at once. During that window the old token still authenticates. If the database is unavailable, an uncached credential gets `503` (a crawler retries), never `401`.
 
-**A flood of invalid tokens** cannot exhaust the database: lookups are limited to 8 at a time with immediate `503 busy` beyond the bounds, and a legitimate cached crawler is unaffected.
+**A flood of invalid tokens** cannot exhaust the database: lookups are limited to 8 at a time with immediate `503 busy` beyond the bounds. Forged tokens may use only a share of those bounds, so a crawler that has authenticated before is still re-validated every 60 seconds during a flood (measured with a 90 s flood of ten million forged requests: no legitimate request failed); a brand-new credential used for the first time during a flood can still get `503 busy` and retries.
 
 ## When something looks wrong
 
@@ -78,6 +78,7 @@ The crawler receives its token in `MAGNETICO_CRAWL_INGEST_TOKEN`. Names are 1–
 | Crawlers page: "ingest schema … not compatible" | an older development `magnetico_ingest` without the registry: reinitialise it as in `UPGRADE.md` (only that schema is dropped) |
 | Crawlers page: privileges named | the `web` role lacks the column grants in `docs/web-deployment.md` |
 | a crawler is rejected with 401 right after `add` | the token was copied wrongly, or the crawler uses the removed shared variable `MAGNETICO_INGEST_TOKEN`; the service refuses to start with that variable set |
+| Queue and storage figures frozen as "up" or shown unavailable after a clock correction on the `ingest` host | an `ingest` clock that was far ahead for a while: since this version a shared sample from a clock ahead of the writer is refused and a pinned marker heals by itself; keep the host clock synchronised (the dashboard shows a source far in the future as unavailable) |
 | `ingest` refuses to start naming a missing table or privilege | the ingest schema is incomplete or the role lacks `SELECT` on the registry; nothing is repaired automatically |
 
 The statistics never repair, upgrade or delete anything on their own, and nothing removes old aggregates in 0.8.0: the measured growth is about 8 MiB per year.

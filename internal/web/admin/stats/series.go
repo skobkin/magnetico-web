@@ -188,7 +188,9 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 			if !a.Valid || a.N == 0 || !quotaMax.Valid || quotaMax.Value <= 0 {
 				return nil
 			}
-			return ratio(a.Sum, a.N*quotaMax.Value)
+			// a.N × the quota would overflow an int64 for a month bucket and a very large quota
+			v := float64(a.Sum) / (float64(a.N) * float64(quotaMax.Value))
+			return &v
 		})
 	case ChartTraffic:
 		line("Request bytes", "bytes", "Request bytes", "bytes", false, cnt(opstats.CBytesBody))

@@ -42,8 +42,10 @@ const (
 
 func classify(age, up, stale time.Duration) State {
 	switch {
+	case age < -RateWindowSkew:
+		return StateUnavailable // a source far "from the future" was written by a wrong clock: its value is not trusted
 	case age < 0:
-		return StateUp // a source "from the future" is a clock skew, not a stale reading
+		return StateUp // a small skew between hosts is not a stale reading
 	case age < up:
 		return StateUp
 	case age < stale:

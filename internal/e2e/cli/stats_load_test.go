@@ -727,7 +727,7 @@ func TestQualifyAuthFlood(t *testing.T) {
 	}
 	u, _ := url.Parse(s.dsn)
 	db := strings.TrimPrefix(u.Path, "/")
-	dur := scaled(30 * time.Second)
+	dur := scaled(90 * time.Second) // longer than the 60 s cache lifetime: the legitimate credential must be re-validated during the flood
 	stop := make(chan struct{})
 	time.AfterFunc(dur, func() { close(stop) })
 	var flood, floodOK, flood401, flood503, floodOther atomic.Int64

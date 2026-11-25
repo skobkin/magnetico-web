@@ -46,7 +46,7 @@ func (w *Writer) queueSamplerLoop(ctx context.Context) {
 		q, err := sampleQueue(ctx, w.samplePool, w.now(), queueLimits, w.opt.QuotaMaxBytes)
 		if err != nil {
 			if ctx.Err() == nil {
-				w.logChange("queue-sample", err.Error(), "statistics: sampling the queue failed (%v); the previous state stays and shows its age", err)
+				w.logChange("queue-sample", errClass(err), "statistics: sampling the queue failed (%s); the previous state stays and shows its age", safeErr(err))
 			}
 		} else {
 			w.logChange("queue-sample", "ok", "statistics: queue sampling works")

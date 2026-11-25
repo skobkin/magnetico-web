@@ -432,3 +432,45 @@ func TestMergeBoundsHoursAndKeepsTimestampAwareState(t *testing.T) {
 }
 
 var _ = context.Background
+
+// A sample taken while the ingest host's clock was far ahead must not pin the
+// shared state: it is refused, and a marker already pinned in the future gives
+// way to samples from a clock that agrees with the writer's.
+func TestASampleFromAClockAheadIsRefusedAndAPinnedMarkerHeals(t *testing.T) {
+	_, pool := newDB(t, true)
+	ref := base.Add(30 * time.Minute)
+	mk := func(at time.Time, rows int64) *Delta {
+		var d Delta
+		d.GuardRef = ref
+		d.AddQueueSample(queueSample(at, at.Unix()/10, rows, rows))
+		d.Hours = append(d.Hours, hourDelta(base, 1, 1, 1))
+		return &d
+	}
+	ahead := mk(ref.Add(24*time.Hour), 999) // one day ahead of the writer's clock
+	if r := apply(t, pool, ahead); r.QueueApplied || !r.QueueSkipped {
+		t.Fatalf("a sample from a clock a day ahead was applied: %+v", r)
+	}
+	if last := scanInt(t, pool, `SELECT gauge_last_slot FROM magnetico_stats.shared_state`); last != 0 {
+		t.Fatalf("the marker moved to %d", last)
+	}
+	if r := apply(t, pool, mk(ref, 5)); !r.QueueApplied {
+		t.Fatalf("a normal sample was refused after the bad one: %+v", r)
+	}
+	// A marker pinned in the future by an earlier, unguarded run gives way.
+	if _, err := pool.Exec(bg, `UPDATE magnetico_stats.shared_state SET gauge_last_slot = $1, queue_rows = 111`, ref.Add(24*time.Hour).Unix()/10); err != nil {
+		t.Fatal(err)
+	}
+	if r := apply(t, pool, mk(ref.Add(time.Minute), 7)); !r.QueueApplied {
+		t.Fatalf("a pinned marker was not healed: %+v", r)
+	}
+	if got := scanInt(t, pool, `SELECT queue_rows FROM magnetico_stats.shared_state`); got != 7 {
+		t.Fatalf("shared_state.queue_rows = %d, want 7", got)
+	}
+	// The same rule for the storage sample.
+	var d Delta
+	d.GuardRef = ref
+	d.AddStorageSample(storageSample(ref.Add(24*time.Hour), ref.Add(24*time.Hour).Unix()/300, 1000, 10, true))
+	if r := apply(t, pool, &d); r.StorageApplied || !r.StorageSkipped {
+		t.Fatalf("a storage sample from a clock a day ahead was applied: %+v", r)
+	}
+}
