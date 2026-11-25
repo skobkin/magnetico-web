@@ -608,3 +608,28 @@ func TestLogLinesNeverCarryDriverErrorDetails(t *testing.T) {
 		t.Fatalf("our own privilege message was lost: %q", got)
 	}
 }
+
+// TestRetryDelayNeverSkipsTheNextTick (found by the Task 09A production-rate sabotage
+// run): after a failed flush the next attempt was delayed by up to a minute counted from
+// the END of the failed attempt, so the next 60 s tick still fell inside the delay and
+// was skipped: under a sustained failure the statistics retried every 120 s, not every
+// tick, and a recovered database waited up to two minutes. Whatever a failed attempt cost
+// (its own deadline is 30 s), the delay that follows must end before the next tick.
+func TestRetryDelayNeverSkipsTheNextTick(t *testing.T) {
+	for _, interval := range []time.Duration{60 * time.Second, 10 * time.Second, 2 * time.Second} {
+		attemptDeadline := min(30*time.Second, interval/2)
+		for failures := 1; failures <= 40; failures++ {
+			d := retryDelay(failures, interval)
+			if d <= 0 {
+				t.Fatalf("interval %v, failure %d: delay %v", interval, failures, d)
+			}
+			if attemptDeadline+d >= interval {
+				t.Fatalf("interval %v, failure %d: an attempt of %v followed by a delay of %v ends after the next tick (%v): the tick would be skipped",
+					interval, failures, attemptDeadline, d, interval)
+			}
+		}
+	}
+	if retryDelay(1, time.Minute) >= retryDelay(3, time.Minute) {
+		t.Fatal("the delay does not grow with repeated failures")
+	}
+}

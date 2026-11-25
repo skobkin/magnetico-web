@@ -408,9 +408,18 @@ func (w *Writer) markOK() {
 	w.mu.Unlock()
 }
 
+// retryDelay is the pause after the failures-th consecutive failed attempt: 5 s,
+// doubling, and never more than a quarter of the flush interval. An attempt has its
+// own deadline (30 s) and the delay is counted from its end, so a longer delay would
+// reach past the next tick and that tick would be skipped (the effective retry cadence
+// would double); with the cap, deadline + delay stays below the interval.
+func retryDelay(failures int, interval time.Duration) time.Duration {
+	return min(5*time.Second<<min(max(failures-1, 0), 4), interval/4)
+}
+
 func (w *Writer) bumpFailure(err error) {
 	w.failures++
-	d := min(5*time.Second<<min(w.failures-1, 4), time.Minute)
+	d := retryDelay(w.failures, w.opt.FlushInterval)
 	w.nextAttemptAt = w.now().Add(d)
 	w.mu.Lock()
 	w.counters.FlushesFailed++

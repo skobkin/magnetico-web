@@ -268,10 +268,18 @@ func sabotageRateRun(t *testing.T, cond string, round int, rate float64, env []s
 		// statistics have caught up when the persisted acknowledged total equals what the
 		// producers saw acknowledged (the load has stopped and the queue is drained).
 		release := time.Now()
-		waitFor(t, "the persisted statistics to catch up after the release", func() bool {
-			return int64(s.sum("records_acknowledged")) >= sb.ok.Load()
-		})
+		caught := false
+		for time.Since(release) < 5*time.Minute { // recorded, not fatal: the admission figures above must survive
+			if int64(s.sum("records_acknowledged")) >= sb.ok.Load() {
+				caught = true
+				break
+			}
+			time.Sleep(time.Second)
+		}
 		res.StatsCatchUpS = time.Since(release).Seconds()
+		if !caught {
+			t.Errorf("the persisted statistics did not catch up within 5 minutes after the release")
+		}
 		s.stopIngest()
 		rec, ack, ref, enq, dup := s.sum("records_received"), s.sum("records_acknowledged"), s.sum("records_refused"), s.sum("records_enqueued"), s.sum("admission_duplicates")
 		ok := rec-ack-ref == 0 && ack == enq+dup && int64(ack) >= sb.ok.Load()
