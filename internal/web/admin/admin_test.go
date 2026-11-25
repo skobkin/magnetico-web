@@ -197,3 +197,33 @@ func TestCursorsAreStrictlyParsed(t *testing.T) {
 		t.Error("garbage accepted")
 	}
 }
+
+// TestCrawlersPageShowsWhenItWasReadAndWarnsWhenItIsCached (Task 09A): the
+// crawlers page is cached, and after a failed refresh it shows the last known
+// good page. It must say when the data was read, and that a refresh failed,
+// instead of looking current.
+func TestCrawlersPageShowsWhenItWasReadAndWarnsWhenItIsCached(t *testing.T) {
+	srv := newServer(t)
+	read := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
+	page := stats.CrawlerPage{Ingest: stats.IngestStatus{State: stats.IngestOK}, StatsAvailable: true,
+		Items: []stats.CrawlerRow{{ID: "11111111-1111-4111-8111-111111111111", Name: "alpha", Enabled: true, CreatedAt: read}}}
+	render := func(stale bool) string {
+		pg := buildCrawlersPage(chrome{Tab: "crawlers", IsAdmin: true, Tabs: tabs("crawlers")}, page, stats.Freshness{FetchedAt: read, Stale: stale})
+		rec := httptest.NewRecorder()
+		if err := srv.Renderer().Render(rec, http.StatusOK, "admin_crawlers", pg); err != nil {
+			t.Fatal(err)
+		}
+		return rec.Body.String()
+	}
+	fresh := render(false)
+	if !strings.Contains(fresh, "Read at 2026-11-25 10:00:00 UTC") {
+		t.Error("the page does not say when it was read")
+	}
+	if strings.Contains(fresh, "last known") {
+		t.Error("a fresh read must not claim to be the last known state")
+	}
+	stale := render(true)
+	if !strings.Contains(stale, "last known state from 2026-11-25 10:00:00 UTC") {
+		t.Error("a cached page after a failed refresh must say so, with the time it was read")
+	}
+}

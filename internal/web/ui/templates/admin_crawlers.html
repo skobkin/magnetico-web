@@ -4,6 +4,7 @@
 {{define "content"}}
 <div class="page-intro"><div class="page-title-wrap"><h1>Crawlers</h1><p>Registered crawlers and their last activity · read-only · times in UTC</p></div></div>
 {{template "admintabs" .}}
+{{if .Stale}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>The database could not be read just now; this is the last known state from {{.FetchedAt}}.</span></div>{{end}}
 {{if .Problem}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>{{.Problem}}</span></div>{{else}}
 {{if not .StatsAvailable}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>Statistics are unavailable, so only the registry is shown (no activity).</span></div>{{end}}
 <section class="section-card"><div class="section-card-body">
@@ -17,6 +18,6 @@
 {{if .NextHref}}<p><a class="btn small" href="{{.NextHref}}">Next page</a></p>{{end}}
 {{else}}<p class="subtext">No crawler is registered. Add one with <code>magnetico ingest crawler add &lt;name&gt;</code>.</p>{{end}}
 </div></section>
-<p class="subtext">Credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
+<p class="subtext">Read at {{.FetchedAt}} · credentials are managed with the <code>magnetico ingest crawler</code> commands; this page never shows a token or its digest.</p>
 {{end}}
 {{end}}

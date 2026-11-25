@@ -73,3 +73,44 @@ func ratio(num, den int64) *float64 {
 }
 
 func ptr(v int64) *float64 { f := float64(v); return &f }
+
+// aged returns a copy of o as it stands now, for an answer fetched at
+// fetchedAt: ages grow by the time that has passed and every state is
+// classified again (a sample that has expired in the meantime no longer shows
+// its numbers), the rolling rates are recomputed from the aged instances and a
+// count of an hour that has since closed is no longer "this hour". The receiver
+// is shared by every reader of the cache and is never modified.
+func (o Overview) aged(fetchedAt, now time.Time) Overview {
+	elapsed := now.Sub(fetchedAt)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if o.Schema != StateUp {
+		return o
+	}
+	out := o
+	out.Instances = make([]Instance, len(o.Instances))
+	for i, in := range o.Instances {
+		in.Age += elapsed
+		in.windowEndAge += elapsed
+		in.State = ClassifyIngest(in.Age)
+		out.Instances[i] = in
+	}
+	out.Rates = computeRates(out.Instances)
+	if q := &out.Queue; q.State == StateUp || q.State == StateStale {
+		q.Age += elapsed
+		if q.State = ClassifyQueue(q.Age); q.State == StateUnavailable {
+			*q = QueueView{State: StateUnavailable, Age: q.Age}
+		}
+	}
+	if s := &out.Storage; s.State == StateUp || s.State == StateStale {
+		s.Age += elapsed
+		if s.State = ClassifyStorage(s.Age); s.State == StateUnavailable {
+			*s = StorageView{State: StateUnavailable, Age: s.Age}
+		}
+	}
+	if !o.ThisHourAt.IsZero() && !now.UTC().Truncate(time.Hour).Equal(o.ThisHourAt.UTC().Truncate(time.Hour)) {
+		out.ThisHourAt, out.ThisHour = time.Time{}, [metricCount]int64{}
+	}
+	return out
+}

@@ -175,6 +175,8 @@ var (
 	errPanic = errors.New("statistics: a load panicked")
 	// ErrBadQuery: an unknown chart or granularity, or a malformed period.
 	ErrBadQuery = errors.New("statistics: invalid query")
+	// ErrBusy: too many reads are pending at once; retry shortly.
+	ErrBusy = errors.New("statistics: too many pending reads")
 	// ErrPeriodOutOfRange: a well-formed period with no data and none expected.
 	ErrPeriodOutOfRange = errors.New("statistics: period out of range")
 )

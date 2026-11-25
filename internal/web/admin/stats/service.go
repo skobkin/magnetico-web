@@ -71,6 +71,9 @@ func (s *Service) Overview(ctx context.Context, p access.Principal) (Overview, F
 	if err != nil {
 		return Overview{}, Freshness{}, err
 	}
+	// Ages and states were computed when the database was read; the answer
+	// (up to 10 s later, or much later after a failed refresh) is aged to now.
+	o = o.aged(at, s.now())
 	return o, s.freshness(o, at, stale), nil
 }
 

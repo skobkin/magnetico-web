@@ -104,6 +104,9 @@ func (h *Handlers) unavailable(w http.ResponseWriter, r *http.Request, err error
 	h.srv.ErrorPage(w, r, http.StatusServiceUnavailable)
 }
 
+// readAt formats the time a cached answer was read, in UTC to the second.
+func readAt(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05 UTC") }
+
 func ts(t time.Time) string { return t.UTC().Format("2006-01-02 15:04") }
 
 func optTS(t *time.Time) string {
@@ -129,6 +132,10 @@ type crawlersPage struct {
 	Items          []crawlerView
 	NextHref       string
 	StatsAvailable bool
+	// Stale and FetchedAt say how current the page is: the data may come from
+	// the cache, and after a failed refresh it is the last known good.
+	Stale     bool
+	FetchedAt string
 }
 
 func (h *Handlers) crawlersPage(w http.ResponseWriter, r *http.Request) {
@@ -148,16 +155,20 @@ func (h *Handlers) crawlersPage(w http.ResponseWriter, r *http.Request) {
 		}
 		after.Name = name
 	}
-	page, _, err := h.stats.Crawlers(r.Context(), p, after)
+	page, f, err := h.stats.Crawlers(r.Context(), p, after)
 	if err != nil {
 		h.unavailable(w, r, err)
 		return
 	}
-	pg := crawlersPage{chrome: h.chrome(r, "crawlers"), StatsAvailable: page.StatsAvailable}
+	h.render(w, r, http.StatusOK, "admin_crawlers", buildCrawlersPage(h.chrome(r, "crawlers"), page, f))
+}
+
+// buildCrawlersPage turns one page of the registry into its view.
+func buildCrawlersPage(c chrome, page stats.CrawlerPage, f stats.Freshness) crawlersPage {
+	pg := crawlersPage{chrome: c, StatsAvailable: page.StatsAvailable, Stale: f.Stale, FetchedAt: readAt(f.FetchedAt)}
 	if page.Ingest.State != stats.IngestOK {
 		pg.Problem = ingestProblem("crawler registry", page.Ingest)
-		h.render(w, r, http.StatusOK, "admin_crawlers", pg)
-		return
+		return pg
 	}
 	for _, c := range page.Items {
 		v := crawlerView{ID: c.ID, Name: c.Name, Created: ts(c.CreatedAt), Rotated: optTS(c.TokenRotatedAt), Disabled: optTS(c.DisabledAt),
@@ -176,7 +187,7 @@ func (h *Handlers) crawlersPage(w http.ResponseWriter, r *http.Request) {
 	if page.Next != nil {
 		pg.NextHref = "/admin/crawlers?after=" + encodeName(page.Next.Name)
 	}
-	h.render(w, r, http.StatusOK, "admin_crawlers", pg)
+	return pg
 }
 
 func orDash(s string) string {
