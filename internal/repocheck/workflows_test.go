@@ -20,7 +20,7 @@ import (
 // release tags); they are not a release system.
 
 const (
-	tagGrammar = `CI_COMMIT_TAG matches "^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?$"`
+	tagGrammar = `CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+(-rc[.][0-9]+)?$"`
 
 	branch080 = "refactor/0.8.0-unify-and-new-storage"
 )
@@ -258,6 +258,40 @@ func TestReleaseWorkflowDependsOnCIAndNeverOptionally(t *testing.T) {
 	}
 	if optional {
 		t.Error("the dependency on ci must not be optional: a verification that was not built must block the release")
+	}
+}
+
+// TestWorkflowsContainNoBackslash: Woodpecker substitutes variables over the whole file
+// before parsing it, and that pass consumes one level of backslashes. A `\\.` in the tag
+// expression reached the expression engine as `\.`, an invalid string escape, so neither
+// workflow compiled ("invalid char escape (1:32)"). Use a character class such as `[.]`.
+func TestWorkflowsContainNoBackslash(t *testing.T) {
+	for _, name := range []string{"ci.yaml", "release.yaml"} {
+		for i, line := range strings.Split(load(t, name).raw, "\n") {
+			if strings.Contains(line, `\`) {
+				t.Errorf("%s:%d contains a backslash, which Woodpecker's substitution alters: %s", name, i+1, line)
+			}
+		}
+	}
+}
+
+// TestTagGrammarAcceptsExactlyReleaseTags runs the pattern of the tag expression through Go's
+// regexp, which the expression engine's `matches` uses.
+func TestTagGrammarAcceptsExactlyReleaseTags(t *testing.T) {
+	m := regexp.MustCompile(`^CI_COMMIT_TAG matches "(.*)"$`).FindStringSubmatch(tagGrammar)
+	if m == nil {
+		t.Fatalf("unexpected tag expression %q", tagGrammar)
+	}
+	re := regexp.MustCompile(m[1])
+	for _, tag := range []string{"0.8.0", "0.8.0-rc.0", "10.20.30-rc.12"} {
+		if !re.MatchString(tag) {
+			t.Errorf("release tag %q is not accepted", tag)
+		}
+	}
+	for _, tag := range []string{"", "0.8", "v0.8.0", "0.8.0-rc", "0.8.0-rc1", "0.8.0-beta.1", "0x8x0", "0.8.0-rcX1", "0.8.0.1", "latest"} {
+		if re.MatchString(tag) {
+			t.Errorf("tag %q is accepted", tag)
+		}
 	}
 }
 
