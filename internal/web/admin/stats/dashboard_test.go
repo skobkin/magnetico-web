@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/skobkin/magnetico-web/internal/ingest/crawlers"
 )
 
@@ -186,4 +187,46 @@ VALUES ($1, now(), now() + interval '1 day', '192.0.2.1', 1)`, c.ID)
 	if !o.Crawlers.Active.Valid || o.Crawlers.Active.Value != 0 {
 		t.Fatalf("active = %+v, want 0: a last-seen a day ahead is a wrong clock, not activity", o.Crawlers.Active)
 	}
+}
+
+// TestAdminReadsDoNotWaitEightSecondsForLockedStatisticsTables (found by the Task 09A
+// soak): while the statistics tables were locked ACCESS EXCLUSIVE (a ten-minute outage
+// test) dashboard requests took 8 s and a chart request 16 s (a cache load waited for the
+// lock for its whole 8 s deadline, and a chart needs two loads in sequence) before the last
+// known good was served. A reader waiting on a lock is the least useful thing it can do:
+// a load is bounded by 3 s.
+func TestAdminReadsDoNotWaitEightSecondsForLockedStatisticsTables(t *testing.T) {
+	e := newEnv(t, flags{stats: true})
+	// something to serve stale: one successful read before the lock
+	if _, _, err := e.svc.Overview(bg, admin); err != nil {
+		t.Fatal(err)
+	}
+	locker, err := pgx.Connect(bg, e.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer locker.Close(bg)
+	for _, q := range []string{`BEGIN`, `LOCK TABLE magnetico_stats.agg_hour, magnetico_stats.snapshot, magnetico_stats.shared_state, magnetico_stats.crawler_activity IN ACCESS EXCLUSIVE MODE`} {
+		if _, err := locker.Exec(bg, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { _, _ = locker.Exec(bg, `ROLLBACK`) }()
+	e.clk.advance(time.Minute) // every cached answer is expired: the reads must go to the database
+
+	start := time.Now()
+	o, f, err := e.svc.Overview(bg, admin)
+	took := time.Since(start)
+	if err != nil || !f.Stale {
+		t.Fatalf("the overview must be served stale: err=%v stale=%v ingest=%v", err, f.Stale, o.Schema)
+	}
+	if took > 4*time.Second {
+		t.Fatalf("the overview waited %v for the locked tables (bound: 3 s per load)", took)
+	}
+	start = time.Now()
+	_, _, serr := e.svc.Series(bg, admin, Query{Chart: ChartThroughput, Granularity: GranDay})
+	if took := time.Since(start); took > 7*time.Second { // two loads in sequence at most
+		t.Fatalf("the chart waited %v for the locked tables (bound: 2 × 3 s)", took)
+	}
+	_ = serr // no series was ever cached here: an error is the honest answer
 }

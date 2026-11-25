@@ -32,6 +32,10 @@ type flight[V any] struct {
 const (
 	defaultMaxLoads   = 4  // loads running at once across every key
 	defaultMaxPending = 32 // loads running or waiting for a slot across every key
+	// defaultLoadTimeout bounds one load. A cold dashboard load takes milliseconds (p95 6 ms,
+	// docs/wip/09-measurements); 8 s let a request wait that long for a table the statistics
+	// outage had locked (Task 09A soak), and a chart needs two loads in sequence.
+	defaultLoadTimeout = 3 * time.Second
 )
 
 // cache is a bounded, TTL'd, least-recently-used cache with coalesced loads and
@@ -56,7 +60,7 @@ type cache[K comparable, V any] struct {
 }
 
 func newCache[K comparable, V any](ttl time.Duration, max int, now func() time.Time) *cache[K, V] {
-	return &cache[K, V]{ttl: ttl, max: max, now: now, loadTimeout: 8 * time.Second,
+	return &cache[K, V]{ttl: ttl, max: max, now: now, loadTimeout: defaultLoadTimeout,
 		maxLoads: defaultMaxLoads, maxPending: defaultMaxPending,
 		items: map[K]*list.Element{}, order: list.New(), inflight: map[K]*flight[V]{}}
 }
