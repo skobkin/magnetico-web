@@ -27,8 +27,10 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -106,10 +108,24 @@ func TestQualifySabotageAtProductionRate(t *testing.T) {
 		{"enabled", nil, nil},
 		{"enabled-locked", nil, lockStats},
 	}
+	// MAGNETICO_STATS_ONLY (comma list of condition names) re-runs part of the matrix; the
+	// control rows of an earlier run in the same output file then give the baseline.
+	only := map[string]bool{}
+	for _, n := range strings.Split(os.Getenv("MAGNETICO_STATS_ONLY"), ",") {
+		if n = strings.TrimSpace(n); n != "" {
+			only[n] = true
+		}
+	}
 	var all []sabotageRateResult
+	if len(only) > 0 {
+		all = earlierSabotageRows(t, only)
+	}
 	for round := 1; round <= rounds; round++ {
 		for k := range conds {
 			c := conds[(k+round-1)%len(conds)] // alternate the order between rounds
+			if len(only) > 0 && !only[c.name] {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s/%d", c.name, round), func(t *testing.T) {
 				r := sabotageRateRun(t, c.name, round, rate, c.env, c.apply)
 				qualOut(t, "sabotage_rate", r)
@@ -301,3 +317,21 @@ func sabotageRateRun(t *testing.T, cond string, round int, rate float64, env []s
 }
 
 func scaledMin(d, floor time.Duration) time.Duration { return max(scaled(d), floor) }
+
+// earlierSabotageRows reads the rows of an earlier run from $MAGNETICO_STATS_OUT for every
+// condition that is NOT being re-run.
+func earlierSabotageRows(t *testing.T, rerun map[string]bool) []sabotageRateResult {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(os.Getenv("MAGNETICO_STATS_OUT"), "sabotage_rate.jsonl"))
+	if err != nil {
+		return nil
+	}
+	var out []sabotageRateResult
+	for _, line := range strings.Split(string(b), "\n") {
+		var row sabotageRateResult
+		if json.Unmarshal([]byte(line), &row) == nil && row.Cond != "" && !rerun[row.Cond] {
+			out = append(out, row)
+		}
+	}
+	return out
+}
