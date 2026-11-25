@@ -135,7 +135,7 @@ func (s *Service) Series(ctx context.Context, p access.Principal, q Query) (Seri
 	q.Period = periodString(q.Granularity, start) // canonical key: "" and the current period share an entry
 
 	span, _, _, err := s.bounds.get(ctx, q.Granularity, func(ctx context.Context) ([2]time.Time, error) {
-		if state, err := s.r.schemaState(ctx); err != nil || state != StateUp {
+		if state, _, err := s.r.schemaState(ctx); err != nil || state != StateUp {
 			return [2]time.Time{}, err
 		}
 		f, l, ok, err := s.r.bounds(ctx, aggTableGran(q.Granularity))
@@ -157,7 +157,7 @@ func (s *Service) Series(ctx context.Context, p access.Principal, q Query) (Seri
 	}
 
 	out, at, stale, err := s.series.get(ctx, q, func(ctx context.Context) (Series, error) {
-		state, err := s.r.schemaState(ctx)
+		state, _, err := s.r.schemaState(ctx)
 		if err != nil {
 			return Series{}, err
 		}
@@ -209,7 +209,7 @@ func (s *Service) Crawlers(ctx context.Context, p access.Principal, after Cursor
 		if ing.State != IngestOK {
 			return CrawlerPage{Ingest: ing}, nil
 		}
-		state, err := s.r.schemaState(ctx)
+		state, _, err := s.r.schemaState(ctx)
 		if err != nil {
 			return CrawlerPage{}, err
 		}

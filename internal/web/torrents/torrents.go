@@ -107,11 +107,14 @@ func Install(srv *server.Server, d Deps) (*Handlers, error) {
 
 // ---- shared view pieces -----------------------------------------------------
 
-type chrome struct{ Username, CSRFToken string }
+type chrome struct {
+	Username, CSRFToken string
+	IsAdmin             bool
+}
 
 func (h *Handlers) chrome(r *http.Request) chrome {
 	p, _ := auth.Current(r.Context())
-	return chrome{Username: p.Username, CSRFToken: auth.SessionFormToken(r)}
+	return chrome{Username: p.Username, CSRFToken: auth.SessionFormToken(r), IsAdmin: p.Role == "admin"}
 }
 
 func (h *Handlers) render(w http.ResponseWriter, r *http.Request, status int, page string, data any) {

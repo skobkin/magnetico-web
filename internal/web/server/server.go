@@ -126,6 +126,17 @@ const (
 	// token) and need no CSRF protection because they carry no ambient
 	// credential. Failures are 401 application/problem+json.
 	APIToken
+	// Admin routes are the administrator pages: a session cookie of an enabled
+	// account whose role is admin (checked against the database on every
+	// request). API and RSS tokens are never read. They answer safe methods only
+	// (enforced at registration): the administrator section is read-only. An
+	// anonymous request is redirected to /login, a signed-in non-administrator
+	// gets 403.
+	Admin
+	// AdminJSON routes are the JSON endpoints of the administrator section: the
+	// Admin policy with application/problem+json failures (401 anonymous, 403
+	// not an administrator, 503 when the database cannot answer).
+	AdminJSON
 	// Feed routes are the RSS endpoints authenticated by an RSS token. They
 	// answer safe methods only (enforced at registration). The class carries
 	// no credential logic: each route binds its own fixed credential policy
@@ -146,6 +157,10 @@ func (a Access) String() string {
 		return "session-json"
 	case APIToken:
 		return "api-token"
+	case Admin:
+		return "admin"
+	case AdminJSON:
+		return "admin-json"
 	case Feed:
 		return "feed"
 	}
@@ -198,7 +213,7 @@ func safeMethod(m string) bool { return m == http.MethodGet || m == http.MethodH
 // GET/HEAD, or a guarded class whose guard was not installed.
 func (r *Router) Handle(pattern string, k Kind, a Access, h http.Handler) {
 	method, _, hasMethod := strings.Cut(pattern, " ")
-	if (a == Public || a == SessionJSON || a == APIToken || a == Feed) && (!hasMethod || !safeMethod(method)) {
+	if (a == Public || a == SessionJSON || a == APIToken || a == Feed || a == Admin || a == AdminJSON) && (!hasMethod || !safeMethod(method)) {
 		panic("server: " + a.String() + " route " + pattern + " must be GET or HEAD only; state-changing routes need PublicForm or Session")
 	}
 	if a != Public {

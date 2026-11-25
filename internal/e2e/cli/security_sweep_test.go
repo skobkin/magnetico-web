@@ -247,6 +247,21 @@ func TestRouteTableAnonymousAndMethodRestrictions(t *testing.T) {
 					t.Errorf("%s: 401 is not application/problem+json: %q", label, res.hdr.Get("Content-Type"))
 				}
 			}
+		case server.Admin:
+			// Like Session for an anonymous caller: sent to sign in; read-only, so GET only.
+			if method != "GET" {
+				t.Errorf("%s: an administrator route that is not GET", label)
+			}
+			if loc := res.hdr.Get("Location"); res.status != 303 || !strings.HasPrefix(loc, "/login") {
+				t.Errorf("%s: %d %q, want 303 to /login", label, res.status, loc)
+			}
+		case server.AdminJSON:
+			if method != "GET" {
+				t.Errorf("%s: an administrator JSON route that is not GET", label)
+			}
+			if res.status != 401 || !isProblemJSON(res) {
+				t.Errorf("%s: %d, want 401 application/problem+json", label, res.status)
+			}
 		default:
 			t.Errorf("%s: no expectation for access class %v", label, r.Access)
 		}
@@ -399,7 +414,7 @@ func TestRouteTableCSRFAndCrossOrigin(t *testing.T) {
 	}
 }
 
-// --- an administrator has no extra web capability ---
+// --- an administrator has no extra mutating web capability: /admin is read-only ---
 
 func TestAdministratorHasNoExtraWebCapability(t *testing.T) {
 	s := newHarnessSec(t, nil)
@@ -433,17 +448,36 @@ func TestAdministratorHasNoExtraWebCapability(t *testing.T) {
 			t.Errorf("%s: user %d %q vs admin %d %q", r.Pattern, us, ul, as, al)
 		}
 	}
-	// No route or page mentions an administration capability.
+	// The only administration surface is the read-only /admin section, linked
+	// for administrators and never for plain users; no other administration route
+	// exists and nothing in the section can change state.
 	for _, p := range []string{"/account", "/torrents"} {
 		admin.get(p)
-		if strings.Contains(strings.ToLower(admin.body), "administration") || strings.Contains(admin.body, "/admin") {
-			t.Errorf("%s shows an administration surface to an administrator", p)
+		if !strings.Contains(admin.body, `href="/admin"`) {
+			t.Errorf("%s does not link the administration section for an administrator", p)
+		}
+		user.get(p)
+		if strings.Contains(strings.ToLower(user.body), "administration") || strings.Contains(user.body, "/admin") {
+			t.Errorf("%s shows an administration surface to a plain user", p)
 		}
 	}
-	for _, p := range []string{"/admin", "/admin/", "/account/admin", "/users", "/api/v2/admin"} {
+	for _, p := range []string{"/admin/", "/account/admin", "/users", "/api/v2/admin"} {
 		if res := admin.get(p); res.StatusCode == 200 {
-			t.Errorf("admin GET %s: 200", p)
+			t.Errorf("admin GET %s: 200 (no such administration route exists)", p)
 		}
+	}
+	if res := admin.get("/admin"); res.StatusCode != 200 {
+		t.Errorf("admin GET /admin: %d", res.StatusCode)
+	}
+	if res := user.get("/admin"); res.StatusCode != 403 {
+		t.Errorf("user GET /admin: %d, want 403", res.StatusCode)
+	}
+	admin.get("/admin")
+	if n := strings.Count(admin.body, "<form"); n != 1 || !strings.Contains(admin.body, `action="/logout"`) {
+		t.Errorf("the administration page has %d forms; only the site header's sign-out form may exist (the section is read-only)", n)
+	}
+	if strings.Contains(strings.ToLower(admin.body), "<button") && strings.Count(strings.ToLower(admin.body), "<button") != 2 { // theme toggle + sign-out
+		t.Error("the administration page has a control beyond the site header's")
 	}
 }
 

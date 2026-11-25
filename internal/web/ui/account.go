@@ -78,6 +78,7 @@ type AccountPage struct {
 	Error  string // fixed failure text
 
 	Role          string
+	IsAdmin       bool // shows the Admin link
 	Email         string
 	EmailVerified bool
 	PendingEmail  string

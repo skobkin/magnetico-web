@@ -131,6 +131,8 @@ func Install(srv *server.Server, cfg Config) (*Auth, error) {
 		server.PublicForm:  a.formGuard,
 		server.Session:     a.sessionGuard,
 		server.SessionJSON: a.sessionJSONGuard,
+		server.Admin:       a.adminGuard,
+		server.AdminJSON:   a.adminJSONGuard,
 	})
 	rt.Handle("GET /login", server.KindRequest, server.PublicForm, http.HandlerFunc(a.getLogin))
 	rt.Handle("POST /login", server.KindRequest, server.PublicForm, http.HandlerFunc(a.postLogin))

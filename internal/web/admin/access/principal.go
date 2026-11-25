@@ -5,7 +5,10 @@
 // run time by every function that receives it.
 package access
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // ErrForbidden is returned by data-access functions given an invalid Principal.
 var ErrForbidden = errors.New("admin: forbidden")
@@ -40,4 +43,18 @@ func (p Principal) Check() error {
 		return ErrForbidden
 	}
 	return nil
+}
+
+type ctxKey struct{}
+
+// IntoContext stores p in ctx. Only the guard does this.
+func IntoContext(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, ctxKey{}, p)
+}
+
+// FromContext returns the Principal the guard stored, and false (with the
+// invalid zero Principal) for a request that did not pass the guard.
+func FromContext(ctx context.Context) (Principal, bool) {
+	p, ok := ctx.Value(ctxKey{}).(Principal)
+	return p, ok && p.Valid()
 }

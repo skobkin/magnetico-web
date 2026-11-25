@@ -158,7 +158,8 @@ type Users struct{ Total, Active, Admins Measured[int64] }
 
 // Overview is the dashboard's current state.
 type Overview struct {
-	Schema     State // StateUp, StateUninitialised or StateUnavailable (incompatible)
+	Schema     State  // StateUp, StateUninitialised or StateUnavailable (incompatible or unreadable)
+	Problem    string // what is wrong and the remedy, for a Schema other than StateUp
 	Instances  []Instance
 	Rates      Rates
 	Queue      QueueView

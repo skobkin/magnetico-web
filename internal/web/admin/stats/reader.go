@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/skobkin/magnetico-web/internal/opstats"
 )
 
@@ -17,18 +18,34 @@ type Reader struct{ db opstats.DB }
 func secs(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }
 
 // schemaState maps Verify to a State: StateUp, StateUninitialised (missing) or
-// StateUnavailable (structurally incompatible). Any other error is returned.
-func (r *Reader) schemaState(ctx context.Context) (State, error) {
+// StateUnavailable (structurally incompatible, or the web role lacks grants).
+// Any other error is returned. problem is the operator-facing explanation of a
+// state other than StateUp: names only, never SQL or a DSN.
+func (r *Reader) schemaState(ctx context.Context) (State, string, error) {
 	err := opstats.Verify(ctx, r.db)
 	switch {
 	case err == nil:
-		return StateUp, nil
+		if missing, merr := opstats.MissingPrivileges(ctx, r.db, opstats.RoleWeb); merr == nil && len(missing) > 0 {
+			return StateUnavailable, "The web database role lacks privileges on the statistics schema: " + strings.Join(missing, ", ") +
+				" (see docs/web-deployment.md).", nil
+		}
+		return StateUp, "", nil
 	case errors.Is(err, opstats.ErrSchemaMissing):
-		return StateUninitialised, nil
+		return StateUninitialised, "The statistics schema has not been created. Run `magnetico migrate stats-schema-init`.", nil
 	case errors.Is(err, opstats.ErrSchemaInvalid):
-		return StateUnavailable, nil
+		return StateUnavailable, "The statistics schema is not compatible with this version. Statistics are disposable: drop it " +
+			"(`DROP SCHEMA magnetico_stats CASCADE;`) and run `magnetico migrate stats-schema-init`.", nil
 	}
-	return 0, err
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "42501" { // insufficient_privilege: even looking is not allowed
+		missing, merr := opstats.MissingPrivileges(ctx, r.db, opstats.RoleWeb)
+		if merr == nil && len(missing) > 0 {
+			return StateUnavailable, "The web database role lacks privileges on the statistics schema: " + strings.Join(missing, ", ") +
+				" (see docs/web-deployment.md).", nil
+		}
+		return StateUnavailable, "The web database role may not read the statistics schema (see docs/web-deployment.md).", nil
+	}
+	return 0, "", err
 }
 
 func windowCols() []string {
@@ -160,11 +177,11 @@ func (r *Reader) users(ctx context.Context) Users {
 
 // overview assembles the dashboard state from one set of queries.
 func (r *Reader) overview(ctx context.Context) (Overview, error) {
-	state, err := r.schemaState(ctx)
+	state, problem, err := r.schemaState(ctx)
 	if err != nil {
 		return Overview{}, err
 	}
-	o := Overview{Schema: state, Users: r.users(ctx)}
+	o := Overview{Schema: state, Problem: problem, Users: r.users(ctx)}
 	if state != StateUp {
 		return o, nil
 	}

@@ -51,7 +51,10 @@ func Install(srv *server.Server) {
 	pub("/api", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		p, _ := auth.Current(r.Context())
-		page := struct{ Username, CSRFToken string }{p.Username, auth.SessionFormToken(r)}
+		page := struct {
+			Username, CSRFToken string
+			IsAdmin             bool
+		}{p.Username, auth.SessionFormToken(r), p.Role == "admin"}
 		if err := srv.Renderer().Render(w, http.StatusOK, "api_index", page); err != nil {
 			srv.ErrorPage(w, r, http.StatusInternalServerError)
 		}

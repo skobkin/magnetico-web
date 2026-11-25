@@ -13,6 +13,8 @@ import (
 	"github.com/skobkin/magnetico-web/codec"
 	webaccount "github.com/skobkin/magnetico-web/internal/web/account"
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
+	webadmin "github.com/skobkin/magnetico-web/internal/web/admin"
+	adminstats "github.com/skobkin/magnetico-web/internal/web/admin/stats"
 	webapidocs "github.com/skobkin/magnetico-web/internal/web/apidocs"
 	webapiv2 "github.com/skobkin/magnetico-web/internal/web/apiv2"
 	webauth "github.com/skobkin/magnetico-web/internal/web/auth"
@@ -161,6 +163,11 @@ func Web(o *opflags.WebOptions, backend *webdb.Backend, logger *slog.Logger, dia
 	}); err != nil {
 		return nil, err
 	}
+
+	// Administrator section (read-only): the ingestion statistics dashboard and
+	// listings. Its schemas are optional: the web service starts without them and
+	// the pages say what is missing.
+	webadmin.Install(srv, adminstats.NewService(backend.Pool()))
 
 	// Public API documentation (W7): landing page, the vendored interactive
 	// renderer and the embedded OpenAPI documents.

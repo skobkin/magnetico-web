@@ -17,6 +17,7 @@ const typePrefix = "urn:magnetico:problem:"
 // Stable problem type slugs.
 const (
 	Unauthenticated       = "unauthenticated"
+	Forbidden             = "forbidden"
 	NotFound              = "not-found"
 	InvalidParameter      = "invalid-parameter"
 	FullTreeUnavailable   = "full-tree-unavailable"

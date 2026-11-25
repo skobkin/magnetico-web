@@ -51,7 +51,7 @@ func (h *Handlers) fmtTimePtr(t *time.Time) string {
 // pageData loads what the tab shows. It never reads another user's rows: every
 // query is keyed by the principal's id.
 func (h *Handlers) pageData(ctx context.Context, p webauth.Principal, tab string) (ui.AccountPage, error) {
-	pg := ui.AccountPage{Username: p.Username, Tab: tab, MailEnabled: h.cfg.Mail != nil, Role: p.Role}
+	pg := ui.AccountPage{Username: p.Username, Tab: tab, MailEnabled: h.cfg.Mail != nil, Role: p.Role, IsAdmin: p.Role == "admin"}
 	switch tab {
 	case "profile":
 		u, err := h.cfg.Store.GetUserByID(ctx, p.UserID)

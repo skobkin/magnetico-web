@@ -1,6 +1,7 @@
 {{define "csrf"}}<input type="hidden" name="csrf_token" value="{{.}}">{{end}}
 {{define "icon"}}<svg class="icon" aria-hidden="true" focusable="false"><use href="#i-{{.}}"></use></svg>{{end}}
-{{define "navbar"}}<nav class="main-nav" aria-label="Main"><a href="/torrents">Search</a><a href="/account">Account</a></nav>{{end}}
+{{define "navbar"}}<nav class="main-nav" aria-label="Main"><a href="/torrents">Search</a><a href="/account">Account</a>{{if .IsAdmin}}<a href="/admin">Admin</a>{{end}}</nav>{{end}}
+{{define "admintabs"}}<nav class="tabs" aria-label="Administration sections">{{range .Tabs}}<a class="tab{{if .Active}} active{{end}}" href="{{.Href}}"{{if .Active}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>{{end}}
 {{define "userbox"}}<span class="header-user">{{.Username}}</span>
 <form method="post" action="/logout">{{template "csrf" .CSRFToken}}<button type="submit" class="header-action logout-link" title="Sign out" aria-label="Sign out">{{template "icon" "logout"}}</button></form>{{end}}
 {{define "segs"}}{{range .}}{{if .Marker}}<span class="marker">{{.Text}}</span>{{else}}{{.Text}}{{end}}{{end}}{{end}}

@@ -1,0 +1,63 @@
+{{define "title"}}Administration{{end}}
+{{define "nav"}}{{template "navbar" .}}{{end}}
+{{define "user"}}{{template "userbox" .}}{{end}}
+{{define "content"}}
+<div class="page-intro"><div class="page-title-wrap"><h1>Administration</h1><p>Read-only overview of the ingestion service · times in UTC</p></div></div>
+{{template "admintabs" .}}
+{{if .Problem}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>{{.Problem}}</span></div>{{end}}
+{{if .Stale}}<div class="notice warning" role="status">{{template "icon" "alert"}}<span>The database could not be read just now; this is the last known state from {{.FetchedAt}}.</span></div>{{end}}
+
+<section class="section-card"><div class="section-card-head"><div><h2>Status</h2></div></div><div class="section-card-body">
+<div class="kv"><span class="kv-label">Statistics schema</span><span><span class="status {{.SchemaClass}}">{{.Schema}}</span></span></div>
+<div class="kv"><span class="kv-label">Ingest instances</span><span><span class="status {{.IngestClass}}">{{.Ingest}}</span></span></div>
+<div class="kv"><span class="kv-label">Queue state</span><span><span class="status {{.QueueClass}}">{{.Queue}}</span></span></div>
+<div class="kv"><span class="kv-label">Storage sample</span><span><span class="status {{.StorageClass}}">{{.Storage}}</span></span></div>
+<div class="kv"><span class="kv-label">Read at</span><span>{{.FetchedAt}}</span></div>
+</div></section>
+
+<section class="section-card" id="instances"><div class="section-card-head"><div><h2>Ingest instances</h2><p class="subtext">Heartbeat of each running ingest process. Totals count since that process started.</p></div></div><div class="section-card-body">
+{{if .Instances}}
+<div class="table-wrap"><table class="data-table">
+<thead><tr><th>Instance</th><th>State</th><th>Started</th><th>Consumer</th><th class="num">In flight</th><th class="num">Received</th><th class="num">Acknowledged</th><th class="num">Settled</th><th>Notes</th></tr></thead>
+<tbody>{{range .Instances}}<tr><td><code>{{.ID}}</code></td><td><span class="status {{.StateClass}}">{{.State}}</span></td><td>{{.Started}}</td><td>{{if .Owns}}owner{{else}}standby{{end}}</td><td class="num">{{.InFlight}}</td><td class="num">{{.Received}}</td><td class="num">{{.Acknowledged}}</td><td class="num">{{.Settled}}</td><td>{{range .Warnings}}<span class="status warning">{{.}}</span> {{end}}</td></tr>{{end}}</tbody>
+</table></div>
+{{else}}<p class="subtext">No ingest instance has reported in the last 24 hours.</p>{{end}}
+</div></section>
+
+<section class="section-card" id="rates"><div class="section-card-head"><div><h2>Current rates</h2><p class="subtext">Records per second (last minute), per minute (last 15 minutes) and per hour (last hour), summed over the instances that reported recently and observed at least half of the window.</p></div></div><div class="section-card-body">
+<div class="table-wrap"><table class="data-table">
+<thead><tr><th>Window</th><th>Unit</th><th class="num">Received</th><th class="num">Enqueued</th><th class="num">Acknowledged</th><th class="num">Settled</th><th class="num">Existence hashes</th><th class="num">Request bytes</th><th class="num">Instances</th></tr></thead>
+<tbody>{{range .Rates}}<tr><td>{{.Window}}</td><td>{{.Unit}}</td><td class="num">{{.Received}}</td><td class="num">{{.Enqueued}}</td><td class="num">{{.Acknowledged}}</td><td class="num">{{.Settled}}</td><td class="num">{{.ExistsHashes}}</td><td class="num">{{.BodyBytes}}</td><td class="num">{{.Included}}</td></tr>{{range .ExcludedNotice}}<tr><td colspan="9" class="subtext">Not included: {{.}}</td></tr>{{end}}{{end}}</tbody>
+</table></div>
+<p class="subtext">So far this hour (partial): received {{.HourReceived}}, enqueued {{.HourEnqueued}}, acknowledged {{.HourAcknowledged}}, settled {{.HourSettled}}.</p>
+</div></section>
+
+<div class="profile-grid">
+<section class="section-card" id="queue"><div class="section-card-head"><div><h2>Queue and quota</h2></div></div><div class="section-card-body">
+<div class="kv"><span class="kv-label">Queued records</span><span>{{.QueueRows}}</span></div>
+<div class="kv"><span class="kv-label">Queued bytes</span><span>{{.QueueBytes}}</span></div>
+<div class="kv"><span class="kv-label">Quota used</span><span>{{.QuotaUsed}} of {{.QuotaMax}} ({{.Quota}})</span></div>
+<div class="kv"><span class="kv-label">Quarantine</span><span>{{.Quarantine}} records, {{.QuarantineBytes}}</span></div>
+<div class="kv"><span class="kv-label">Oldest queued record</span><span>{{.Oldest}}</span></div>
+{{if .Backoff}}<p class="subtext">Sampling is slowing down because the database is slow to answer.</p>{{end}}
+<p class="subtext">A dash means the value is unavailable, never zero. “≈” marks an estimate.</p>
+</div></section>
+<section class="section-card" id="storage"><div class="section-card-head"><div><h2>Storage</h2></div></div><div class="section-card-body">
+<div class="kv"><span class="kv-label">Torrents table</span><span>{{.Torrents}}</span></div>
+<div class="kv"><span class="kv-label">File lists table</span><span>{{.Blobs}}</span></div>
+<div class="kv"><span class="kv-label">Indexes</span><span>{{.Indexes}}</span></div>
+<div class="kv"><span class="kv-label">Other</span><span>{{.Other}}</span></div>
+<div class="kv"><span class="kv-label">magneticod total</span><span>{{.Magneticod}}</span></div>
+<div class="kv"><span class="kv-label">Ingest queue schema</span><span>{{.Ingestdb}}</span></div>
+<div class="kv"><span class="kv-label">Database</span><span>{{.Database}}</span></div>
+<div class="kv"><span class="kv-label">Indexed torrents</span><span>{{.Indexed}}</span></div>
+<div class="kv"><span class="kv-label">Bytes per torrent</span><span>{{.PerTorrent}}</span></div>
+{{if not .Reconciled}}<p class="subtext">The storage categories did not add up to the total in the last sample.</p>{{end}}
+<p class="subtext">Not counted: WAL, backups, other databases, total server disk.</p>
+</div></section>
+</div>
+
+<section class="section-card" id="library"><div class="section-card-head"><div><h2>Accounts</h2></div></div><div class="section-card-body">
+<div class="kv"><span class="kv-label">Accounts</span><span>{{.UsersTotal}} ({{.UsersActive}} active, {{.UsersAdmins}} administrators)</span></div>
+</div></section>
+{{end}}
