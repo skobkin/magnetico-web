@@ -6,12 +6,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/internal/web/accounts"
-	"github.com/skobkin/magnetico-web/internal/web/webschema"
 )
 
 // TrackerStore edits magnetico_web.trackers. Every write runs in one
-// transaction under webschema.TrackersAdvisoryKey (the same key the seed
+// transaction under advisory.TrackersWrite (the same key the seed
 // uses) and leaves positions dense, 1..n.
 type TrackerStore struct{ pool *pgxpool.Pool }
 
@@ -50,7 +50,7 @@ func (t *TrackerStore) write(ctx context.Context, fn func(tx pgx.Tx, cur []Track
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }() // after Commit this is a no-op by design
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, webschema.TrackersAdvisoryKey); err != nil {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, advisory.TrackersWrite); err != nil {
 		return err
 	}
 	cur, err := t.list(ctx, tx)

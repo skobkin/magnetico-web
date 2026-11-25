@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -27,7 +28,7 @@ const SchemaVersion = 1
 const FormatRecordV1 = 1
 
 // initAdvisoryKey serialises concurrent ingest-schema-init runs.
-const initAdvisoryKey int64 = 7881644658832750186
+const initAdvisoryKey = advisory.IngestSchemaInit
 
 // ErrSchemaMissing reports that magnetico_ingest is absent or not exactly
 // the expected version.

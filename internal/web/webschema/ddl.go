@@ -11,19 +11,17 @@
 // the torrent schema family, which is why the version table is web_version.
 package webschema
 
+import "github.com/skobkin/magnetico-web/internal/advisory"
+
 // Version is the only supported magnetico_web.web_version row.
 const Version = 1
 
-// Advisory-lock keys (transaction-scoped). Neighbours of the torrent-schema
-// (…185) and ingest (…186) initialization keys.
+// Advisory-lock keys (transaction-scoped) come from internal/advisory, the one
+// registry of every key in the project.
 const (
-	initAdvisoryKey     int64 = 7881644658832750187
-	trackersAdvisoryKey int64 = 7881644658832750188
+	initAdvisoryKey     = advisory.WebSchemaInit
+	trackersAdvisoryKey = advisory.TrackersWrite
 )
-
-// TrackersAdvisoryKey serializes every write to magnetico_web.trackers (the
-// seed and the operator CLI).
-const TrackersAdvisoryKey = trackersAdvisoryKey
 
 // ddl is the version-1 schema. It runs in one transaction. There are no
 // triggers and no PL/pgSQL: lifecycle rules (permanent revocation, set-once

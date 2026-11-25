@@ -8,13 +8,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/skobkin/magnetico-web/codec"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/internal/ingest/record"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
 // consumerLockKey is the session advisory-lock key of the single consumer.
 // It must stay a positive int64 (see ownsLockSQL).
-const consumerLockKey int64 = 7881644658832750187
+const consumerLockKey = advisory.IngestConsumer
 
 // Quarantine reason codes.
 const (

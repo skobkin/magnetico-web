@@ -14,6 +14,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+
+	"github.com/skobkin/magnetico-web/internal/advisory"
 )
 
 // Phase is the migration lifecycle phase recorded in progress.
@@ -86,7 +88,7 @@ func (e *StateError) Unwrap() error { return e.Err }
 // excluding concurrent migrator instances against one target. Session-level
 // (pg_advisory_lock), held for the run lifetime on a dedicated connection.
 // Distinct from the schema-init key in persistence.
-const migrationLockAdvisoryKey int64 = 4048864026886105453 // 'migrat08' little-endian
+const migrationLockAdvisoryKey = advisory.MigrationRun
 
 // NewRunID returns a fresh RFC 4122 v4 UUID string.
 func NewRunID() (string, error) {

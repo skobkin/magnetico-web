@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
 	"github.com/skobkin/magnetico-web/internal/pgtest"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -125,12 +126,12 @@ func TestInitSchemaTakesAdvisoryLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer consumer.Close(bg)
-	for _, key := range []int64{7881644658832750185, 7881644658832750186, 7881644658832750187, 7881644658832750188, 7881644658832750189, 7881644658832750190} {
+	for _, key := range []int64{advisory.TorrentSchemaInit, advisory.IngestSchemaInit, advisory.IngestConsumer, advisory.TrackersWrite, advisory.UsersMigration, advisory.DevSeed, advisory.WebSchemaInit, advisory.MigrationRun} {
 		if _, err := consumer.Exec(bg, "SELECT pg_advisory_lock($1)", key); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, k := range []int64{7881644658832750185, 7881644658832750186, 7881644658832750187, 7881644658832750188, 7881644658832750189, 7881644658832750190} {
+	for _, k := range []int64{advisory.TorrentSchemaInit, advisory.IngestSchemaInit, advisory.IngestConsumer, advisory.TrackersWrite, advisory.UsersMigration, advisory.DevSeed, advisory.WebSchemaInit, advisory.MigrationRun} {
 		if initAdvisoryKey == k {
 			t.Fatalf("the stats init key collides with the advisory key %d of another command", k)
 		}

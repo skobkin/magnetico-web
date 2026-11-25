@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -27,7 +28,7 @@ var (
 
 // advisoryKey serializes concurrent seed runs; a neighbour of the other
 // project-specific advisory keys.
-const advisoryKey int64 = 7881644658832750190
+const advisoryKey = advisory.DevSeed
 
 // State describes what the database looked like before the run.
 type State string

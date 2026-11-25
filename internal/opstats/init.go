@@ -7,14 +7,15 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
 // initAdvisoryKey serialises concurrent stats-schema-init runs. It must differ
-// from the keys of every other command (internal/ingest/pgqueue: schema-init ...186 and the
-// consumer's session lock ...187): the consumer holds its lock for as long as
-// ingest runs, and initialising statistics must never wait for it.
-const initAdvisoryKey int64 = 7881644658832750191
+// from the keys of every other command (internal/advisory is the registry): the
+// ingest consumer holds its session lock for as long as ingest runs, and
+// initialising statistics must never wait for it.
+const initAdvisoryKey = advisory.StatsSchemaInit
 
 // InitSchema creates magnetico_stats. It is non-destructive and idempotent,
 // runs under pg_advisory_xact_lock, requires a verified magneticod schema

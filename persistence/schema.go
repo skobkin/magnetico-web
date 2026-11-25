@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 )
 
 // schemaInitAdvisoryKey is the fixed, project-specific advisory-lock key that
 // serializes concurrent schema initializations on one database. The lock is
 // transaction-scoped (pg_advisory_xact_lock), so it is released automatically
 // at COMMIT/ROLLBACK.
-const schemaInitAdvisoryKey int64 = 7881644658832750185 // 'magneti' little-endian
+const schemaInitAdvisoryKey = advisory.TorrentSchemaInit
 
 // ErrLegacySchema reports a legacy magnetico layout. This tool never migrates
 // or alters such a database; conversion is the offline migrator's job.

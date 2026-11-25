@@ -10,13 +10,14 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/skobkin/magnetico-web/internal/advisory"
 	"github.com/skobkin/magnetico-web/internal/migration/pgidentity"
 	"github.com/skobkin/magnetico-web/internal/web/webschema"
 )
 
 // advisoryKey serializes concurrent `migrate users` runs; a neighbour of the
 // webschema initialization keys (…187, …188).
-const advisoryKey int64 = 7881644658832750189
+const advisoryKey = advisory.UsersMigration
 
 // lockTimeout bounds how long a final run waits for a user table (a variable
 // only so a test need not wait five seconds).
