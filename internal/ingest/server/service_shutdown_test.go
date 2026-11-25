@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/internal/ingest/pgqueue"
+	"github.com/skobkin/magnetico-web/internal/pgtest"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -131,6 +132,9 @@ func TestShutdownInterruptsStalledAddTorrent(t *testing.T) {
 // the pools under the stuck goroutine (which would block forever).
 func TestShutdownAbandonsUninterruptibleAddTorrent(t *testing.T) {
 	dsn := prepareDB(t, true)
+	// The abandoned instance keeps its pools open by design (the point of this
+	// test); the forced database drop ends those connections.
+	pgtest.AllowLeftoverConnections(t, dsn)
 	var st *stallStore
 	r := startService(t, dsn, shutdownOptions(&st, false))
 	t.Cleanup(func() { st.unblock() })

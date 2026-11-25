@@ -14,7 +14,7 @@
 ^(TestColdBuildReport|TestMeasureComplexityLimits|TestMeasureTreeSize|TestWarmNavigationAllocations)$	MAGNETICO_BENCH_LARGE=1	opt-in: expensive measurements
 ^(TestMeasureSearchPlans|TestMeasureTOASTIdentityAndHeader)$	MAGNETICO_MEASURE=1	opt-in: storage measurements
 ^TestFrontendSelfTestsInBrowser$	MAGNETICO_TEST_BROWSER	opt-in: needs a Chromium binary
-^(TestChildProcess|TestColdBuildChild|TestHostileNestingChild|TestHostilePeerChild|TestHelperNeedsDB)$	(child process helper|child of|helper of)	body of a subprocess helper: skips unless re-executed by its parent test
+^(TestChildProcess|TestColdBuildChild|TestHostileNestingChild|TestHostilePeerChild|TestHelperNeedsDB|TestHelperLeftover)$	(child process helper|child of|helper of)	body of a subprocess helper: skips unless re-executed by its parent test
 ^TestOpenRefusesFsyncOff$	will not change fsync on an external server	KNOWN COVERAGE GAP of the external-server mode: needs a locally controlled cluster (docker or initdb)
 ^TestIdentitySameDatabaseViaSocketAndTCP$	no Unix socket directory	KNOWN COVERAGE GAP of the external-server mode: needs a locally controlled cluster (docker or initdb)
 ^TestSSLCertFileIsHonoured$	system roots were already initialised	order-dependent skip: the process initialised the system roots before the test; it is only effective when run in isolation

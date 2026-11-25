@@ -313,6 +313,16 @@ func (c *Cluster) TestDatabase(t *testing.T) string {
 			return
 		}
 		defer dropConn.Close(context.Background())
+		if _, allowed := leftoverAllowed.Load(name); !allowed {
+			left, err := leftoverBackends(dropCtx, dropConn, name, leftoverGrace)
+			if err != nil {
+				t.Errorf("drop test database %s: list its connections: %v", name, err)
+			}
+			for _, b := range left {
+				t.Errorf("test database %s: a connection was left open after the test (pool or worker not closed): %s", name, b)
+			}
+		}
+		leftoverAllowed.Delete(name)
 		if _, err := dropConn.Exec(dropCtx,
 			fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, QuoteIdent(name))); err != nil {
 			t.Errorf("drop test database %s: %v", name, err)
@@ -325,6 +335,58 @@ func (c *Cluster) TestDatabase(t *testing.T) string {
 	}
 	parsed.Path = "/" + name
 	return parsed.String()
+}
+
+// leftoverGrace bounds how long the cleanup waits for the server to retire the
+// connections of a test that closed its pools (a backend exits shortly after
+// its client's Terminate) before it reports the rest as left open.
+const leftoverGrace = 10 * time.Second
+
+// leftoverAllowed holds the databases whose tests leave connections open on
+// purpose (AllowLeftoverConnections).
+var leftoverAllowed sync.Map
+
+// AllowLeftoverConnections declares that the test deliberately leaves
+// connections to its database open, typically an instance the test proves is
+// abandoned with its pools left open. The forced drop still terminates them;
+// only the leftover-connection failure is waived for that database.
+func AllowLeftoverConnections(t *testing.T, dsn string) {
+	t.Helper()
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatalf("parse test database DSN: %v", err)
+	}
+	leftoverAllowed.Store(strings.TrimPrefix(parsed.Path, "/"), true)
+}
+
+// leftoverBackends lists, after up to grace for them to disappear, the
+// backends still connected to the database: pid, state, application name
+// and their last statement.
+func leftoverBackends(ctx context.Context, conn *pgx.Conn, db string, grace time.Duration) ([]string, error) {
+	deadline := time.Now().Add(grace)
+	for {
+		rows, err := conn.Query(ctx, `SELECT format('pid %s, %s, application %L, last query: %s',
+                pid, COALESCE(state, '?'), application_name,
+                left(regexp_replace(COALESCE(query, ''), '\s+', ' ', 'g'), 200))
+            FROM pg_stat_activity
+            WHERE datname = $1 AND pid <> pg_backend_pid() AND backend_type = 'client backend'
+            ORDER BY pid`, db)
+		if err != nil {
+			return nil, err
+		}
+		left, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return nil, err
+		}
+		if len(left) == 0 || time.Now().After(deadline) {
+			return left, nil
+		}
+		select {
+		case <-ctx.Done():
+			return left, nil
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 // RandomSuffix is a collision-safe per-test suffix.
