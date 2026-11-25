@@ -97,6 +97,14 @@ func harnessCheckDataset(ctx context.Context, dsn, confirm string) error {
 	if err := harnessCheckTarget(dsn, confirm); err != nil {
 		return err
 	}
+	return harnessCheckContents(ctx, dsn, confirm)
+}
+
+// harnessCheckContents is the part of harnessCheckDataset that reads the database: the
+// connected database, the marker and the accounts. It does not check the host (that is
+// harnessCheckTarget, tested by TestCheckTarget), so its own test also runs where the
+// test database is not on this host, such as a CI service container.
+func harnessCheckContents(ctx context.Context, dsn, confirm string) error {
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -176,6 +184,9 @@ func TestCheckTarget(t *testing.T) {
 	}
 }
 
+// The content checks are tested on their own: the test database may be on another host
+// (in CI it is the postgres service container), which harnessCheckTarget rightly refuses,
+// and every refusal below would then pass for that reason instead of the one it names.
 func TestCheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	ctx := context.Background()
 	dsn := pgtest.IntegrationCluster(t).TestDatabase(t)
@@ -194,12 +205,12 @@ func TestCheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	}
 	refused := func(why string) {
 		t.Helper()
-		if err := harnessCheckDataset(ctx, dsn, name); err == nil {
+		if err := harnessCheckContents(ctx, dsn, name); err == nil {
 			t.Fatalf("accepted: %s", why)
 		}
 	}
 
-	if err := harnessCheckDataset(ctx, dsn, "other"); err == nil {
+	if err := harnessCheckContents(ctx, dsn, "other"); err == nil {
 		t.Fatal("accepted a mismatching confirmation")
 	}
 	refused("an empty, unmarked database")
@@ -217,14 +228,14 @@ func TestCheckDatasetRefusesAnythingButTheBenchmarkDatabase(t *testing.T) {
 	if err := harnessMarkDatabase(ctx, conn); err != nil {
 		t.Fatal(err)
 	}
-	if err := harnessCheckDataset(ctx, dsn, name); err != nil {
+	if err := harnessCheckContents(ctx, dsn, name); err != nil {
 		t.Fatalf("refused the marked database: %v", err)
 	}
 
 	exec(`CREATE SCHEMA magnetico_web`)
 	exec(`CREATE TABLE magnetico_web.users (id bigserial PRIMARY KEY, username text)`)
 	exec(`INSERT INTO magnetico_web.users (username) VALUES ('w9u00'), ('w9u07')`)
-	if err := harnessCheckDataset(ctx, dsn, name); err != nil {
+	if err := harnessCheckContents(ctx, dsn, name); err != nil {
 		t.Fatalf("refused a database that holds only generated identities: %v", err)
 	}
 	exec(`INSERT INTO magnetico_web.users (username) VALUES ('w9user-real')`) // matches the old LIKE 'w9u%' pattern
