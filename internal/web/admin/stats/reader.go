@@ -99,17 +99,18 @@ WHERE published_at > now() - make_interval(secs => $1) ORDER BY published_at DES
 
 func (r *Reader) shared(ctx context.Context) (QueueView, StorageView, error) {
 	var (
-		qAge, sAge                      *float64
-		rows, qbytes, used, qmax, qrows *int64
-		qby, oldest                     *int64
-		approxCounts, approxOldest, bo  bool
-		reconciled                      bool
-		st                              [opstats.NumMeasures]*int64
+		qAge, sAge                        *float64
+		rows, qbytes, used, qmax, qrows   *int64
+		qby, oldest                       *int64
+		rowsApprox, quarApprox, oldApprox *int64
+		bo                                bool
+		recon                             int16
+		st                                [opstats.NumMeasures]*int64
 	)
-	dest := []any{&qAge, &rows, &qbytes, &used, &qrows, &qby, &oldest, &qmax, &approxCounts, &approxOldest, &bo, &sAge, &reconciled}
+	dest := []any{&qAge, &rows, &qbytes, &used, &qrows, &qby, &oldest, &qmax, &rowsApprox, &quarApprox, &oldApprox, &bo, &sAge, &recon}
 	cols := []string{"EXTRACT(EPOCH FROM now() - queue_sampled_at)", "queue_rows", "queue_bytes", "quota_used_bytes", "quarantine_rows", "quarantine_bytes", "oldest_age_s",
-		"CASE WHEN quota_max_bytes > 0 THEN quota_max_bytes END", "queue_counts_approx", "oldest_age_approx", "queue_interval_backoff",
-		"EXTRACT(EPOCH FROM now() - storage_sampled_at)", "storage_reconciled"}
+		"CASE WHEN quota_max_bytes > 0 THEN quota_max_bytes END", "queue_rows_approx", "quarantine_rows_approx", "oldest_age_approx", "queue_interval_backoff",
+		"EXTRACT(EPOCH FROM now() - storage_sampled_at)", "storage_reconciliation"}
 	for m := opstats.Measure(0); m < opstats.NumMeasures; m++ {
 		cols = append(cols, "storage_"+m.Name())
 		dest = append(dest, &st[m])
@@ -127,16 +128,15 @@ func (r *Reader) shared(ctx context.Context) (QueueView, StorageView, error) {
 	}
 	if q.State != StateUnavailable { // an expired sample is not shown as a number
 		q.Rows, q.Bytes, q.QuotaUsed = nullInt(rows), nullInt(qbytes), nullInt(used)
-		if approxCounts && q.Rows.Valid {
-			q.Rows.Approx = true
-		}
+		q.Rows.Approx = q.Rows.Valid && rowsApprox != nil && *rowsApprox > 0 // each quantity carries its own flag
 		q.Quarantine, q.QuarantineBy, q.QuotaMax = nullInt(qrows), nullInt(qby), nullInt(qmax)
+		q.Quarantine.Approx = q.Quarantine.Valid && quarApprox != nil && *quarApprox > 0
 		if oldest != nil {
-			q.OldestAge = Measured[time.Duration]{Value: time.Duration(*oldest) * time.Second, Valid: true, Approx: approxOldest}
+			q.OldestAge = Measured[time.Duration]{Value: time.Duration(*oldest) * time.Second, Valid: true, Approx: oldApprox != nil && *oldApprox > 0}
 		}
 		q.Utilisation = utilisation(q.QuotaUsed, q.QuotaMax)
 	}
-	s := StorageView{State: StateUnavailable, Reconciled: reconciled}
+	s := StorageView{State: StateUnavailable, Reconciliation: opstats.Reconciliation(recon)}
 	if sAge != nil {
 		s.Age = secs(*sAge)
 		s.State = ClassifyStorage(s.Age)
@@ -267,7 +267,7 @@ func (r *Reader) aggRows(ctx context.Context, gran string, start, end time.Time)
 }
 
 func (r *Reader) storageRows(ctx context.Context, gran string, start, end time.Time) (map[time.Time]*storageRow, error) {
-	cols := []string{"bucket_start", "bpt_bytes_sum", "bpt_torrents_sum", "samples"}
+	cols := []string{"bucket_start", "bpt_bytes_sum", "bpt_torrents_sum", "samples", "reconciliation_mismatches", "unevaluated_samples"}
 	for m := opstats.Measure(0); m < opstats.NumMeasures; m++ {
 		cols = append(cols, m.Name()+"_last", m.Name()+"_max")
 	}
@@ -280,7 +280,7 @@ func (r *Reader) storageRows(ctx context.Context, gran string, start, end time.T
 	out := map[time.Time]*storageRow{}
 	for rows.Next() {
 		sr := &storageRow{}
-		dest := []any{&sr.start, &sr.bptB, &sr.bptT, &sr.samples}
+		dest := []any{&sr.start, &sr.bptB, &sr.bptT, &sr.samples, &sr.mismatches, &sr.unevaluated}
 		for m := range sr.last {
 			dest = append(dest, &sr.last[m], &sr.max[m])
 		}
@@ -303,12 +303,4 @@ func (r *Reader) bounds(ctx context.Context, gran string) (first, last time.Time
 		return time.Time{}, time.Time{}, false, nil
 	}
 	return f.UTC(), l.UTC(), true, nil
-}
-
-func (r *Reader) quotaMax(ctx context.Context) Measured[int64] {
-	var v *int64
-	if err := r.db.QueryRow(ctx, `SELECT CASE WHEN quota_max_bytes > 0 THEN quota_max_bytes END FROM magnetico_stats.shared_state WHERE id = 1`).Scan(&v); err != nil {
-		return Measured[int64]{}
-	}
-	return nullInt(v)
 }

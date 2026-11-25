@@ -34,10 +34,14 @@ func (s *StorageAgg) merge(src *StorageAgg) {
 		return
 	}
 	newer := !src.LastAt.Before(s.LastAt)
+	if newer {
+		// The last values are one bundle: all of them come from the newest sample, and
+		// a measure that sample could not read stays missing instead of being filled
+		// from an older sample (which would show categories from different times as
+		// one reconciled breakdown).
+		s.Last, s.LastValid = src.Last, src.LastValid
+	}
 	for m := Measure(0); m < NumMeasures; m++ {
-		if src.LastValid[m] && (newer || !s.LastValid[m]) {
-			s.Last[m], s.LastValid[m] = src.Last[m], true
-		}
 		if src.MaxValid[m] {
 			if !s.MaxValid[m] || src.Max[m] > s.Max[m] {
 				s.Max[m], s.MaxValid[m] = src.Max[m], true
@@ -47,6 +51,7 @@ func (s *StorageAgg) merge(src *StorageAgg) {
 	}
 	s.BPTBytes, s.BPTTorrents = AddSat(s.BPTBytes, src.BPTBytes), AddSat(s.BPTTorrents, src.BPTTorrents)
 	s.Samples, s.Mismatches = AddSat(s.Samples, src.Samples), AddSat(s.Mismatches, src.Mismatches)
+	s.Unevaluated = AddSat(s.Unevaluated, src.Unevaluated)
 	if newer {
 		s.LastAt = src.LastAt
 	}
@@ -201,8 +206,11 @@ func (d *Delta) AddStorageSample(s StorageState) {
 	if s.Valid[MMagneticodTotal] && s.Valid[MIndexedTorrents] && s.Values[MIndexedTorrents] > 0 {
 		one.BPTBytes, one.BPTTorrents = max(s.Values[MMagneticodTotal], 0), s.Values[MIndexedTorrents]
 	}
-	if !s.Reconciled {
+	switch s.Reconciliation {
+	case ReconMismatch:
 		one.Mismatches = 1
+	case ReconNotEvaluated:
+		one.Unevaluated = 1
 	}
 	h.Storage.merge(&one)
 	mergeSlots(&d.StorageFirstSlot, &d.StorageLastSlot, s.Slot, s.Slot)
@@ -294,11 +302,13 @@ func storageUpsertSQL(unit string) string {
 		n := m.Name()
 		cols = append(cols, n+"_last", n+"_max", n+"_sum", n+"_n")
 		sets = append(sets,
-			fmt.Sprintf("%[1]s_last = CASE WHEN EXCLUDED.%[1]s_last IS NOT NULL AND (%[2]s.last_sample_at IS NULL OR EXCLUDED.last_sample_at >= %[2]s.last_sample_at) THEN EXCLUDED.%[1]s_last ELSE %[2]s.%[1]s_last END", n, t),
+			// the bundle of last values comes from the newest sample as a whole: a NULL
+			// from that sample replaces an older value (it is missing, not carried over)
+			fmt.Sprintf("%[1]s_last = CASE WHEN %[2]s.last_sample_at IS NULL OR EXCLUDED.last_sample_at >= %[2]s.last_sample_at THEN EXCLUDED.%[1]s_last ELSE %[2]s.%[1]s_last END", n, t),
 			fmt.Sprintf("%[1]s_max = GREATEST(%[2]s.%[1]s_max, EXCLUDED.%[1]s_max)", n, t),
 			n+"_sum = "+sat(t, n+"_sum"), n+"_n = "+sat(t, n+"_n"))
 	}
-	for _, c := range []string{"bpt_bytes_sum", "bpt_torrents_sum", "samples", "reconciliation_mismatches"} {
+	for _, c := range []string{"bpt_bytes_sum", "bpt_torrents_sum", "samples", "reconciliation_mismatches", "unevaluated_samples"} {
 		cols = append(cols, c)
 		sets = append(sets, c+" = "+sat(t, c))
 	}
@@ -317,7 +327,7 @@ func storageArgs(bucket time.Time, s *StorageAgg) []any {
 	for m := Measure(0); m < NumMeasures; m++ {
 		args = append(args, nullInt(s.LastValid[m], s.Last[m]), nullInt(s.MaxValid[m], s.Max[m]), s.Sum[m], s.N[m])
 	}
-	return append(args, s.BPTBytes, s.BPTTorrents, s.Samples, s.Mismatches, nullTime(s.LastAt))
+	return append(args, s.BPTBytes, s.BPTTorrents, s.Samples, s.Mismatches, s.Unevaluated, nullTime(s.LastAt))
 }
 
 var (
@@ -403,8 +413,8 @@ func Apply(ctx context.Context, tx pgx.Tx, d *Delta) (ApplyResult, error) {
 
 	if d.LatestQueue != nil {
 		q := d.LatestQueue
-		args := []any{d.QueueFirstSlot, d.QueueLastSlot, q.At, q.QuotaMax, q.CountsApprox, q.OldestApprox, q.Backoff}
-		sets := []string{"gauge_last_slot = $2", "queue_sampled_at = $3", "quota_max_bytes = $4", "queue_counts_approx = $5", "oldest_age_approx = $6", "queue_interval_backoff = $7"}
+		args := []any{d.QueueFirstSlot, d.QueueLastSlot, q.At, q.QuotaMax, q.Backoff}
+		sets := []string{"gauge_last_slot = $2", "queue_sampled_at = $3", "quota_max_bytes = $4", "queue_interval_backoff = $5"}
 		for g := Gauge(0); g < NumGauges; g++ {
 			args = append(args, nullInt(q.Valid[g], q.Values[g]))
 			sets = append(sets, fmt.Sprintf("%s = $%d", g.Name(), len(args)))
@@ -422,8 +432,8 @@ func Apply(ctx context.Context, tx pgx.Tx, d *Delta) (ApplyResult, error) {
 	}
 	if d.LatestStorage != nil {
 		s := d.LatestStorage
-		args := []any{d.StorageFirstSlot, d.StorageLastSlot, s.At, s.Reconciled}
-		sets := []string{"storage_last_slot = $2", "storage_sampled_at = $3", "storage_reconciled = $4"}
+		args := []any{d.StorageFirstSlot, d.StorageLastSlot, s.At, int16(s.Reconciliation)}
+		sets := []string{"storage_last_slot = $2", "storage_sampled_at = $3", "storage_reconciliation = $4"}
 		for m := Measure(0); m < NumMeasures; m++ {
 			args = append(args, nullInt(s.Valid[m], s.Values[m]))
 			sets = append(sets, fmt.Sprintf("storage_%s = $%d", m.Name(), len(args)))

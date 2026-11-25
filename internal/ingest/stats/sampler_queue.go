@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"math/bits"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -153,6 +155,10 @@ func sampleQueue(ctx context.Context, pool *pgxpool.Pool, at time.Time, lim samp
 			return err
 		}
 		q.Values[opstats.GQuotaUsedBytes], q.Valid[opstats.GQuotaUsedBytes] = used, true
+		// The utilisation is stored per observation with the quota in force now.
+		if ppm, ok := utilisationPPM(used, quotaMax); ok {
+			q.Values[opstats.GQuotaUtilisationPPM], q.Valid[opstats.GQuotaUtilisationPPM] = ppm, true
+		}
 
 		var rows, bytes, age int64
 		if err := s.try(`SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint,
@@ -160,25 +166,31 @@ COALESCE(EXTRACT(EPOCH FROM now() - min(received_at)), 0)::bigint FROM magnetico
 			q.Values[opstats.GQueueRows], q.Valid[opstats.GQueueRows] = rows, true
 			q.Values[opstats.GQueueBytes], q.Valid[opstats.GQueueBytes] = bytes, true
 			q.Values[opstats.GOldestAgeSeconds], q.Valid[opstats.GOldestAgeSeconds] = max(age, 0), true
+			flag(&q, opstats.GQueueRowsApprox, false)
+			flag(&q, opstats.GOldestAgeApprox, false)
 		} else if s.cycle.Err() == nil {
 			var est *int64
 			if err := s.try(`SELECT CASE WHEN reltuples >= 0 THEN reltuples::bigint END FROM pg_class WHERE oid = 'magnetico_ingest.queue'::regclass`, nil, &est); err == nil && est != nil {
-				q.Values[opstats.GQueueRows], q.Valid[opstats.GQueueRows], q.CountsApprox = *est, true, true
+				q.Values[opstats.GQueueRows], q.Valid[opstats.GQueueRows] = *est, true
+				flag(&q, opstats.GQueueRowsApprox, true)
 			}
 			// Bytes have no estimate: they stay unavailable.
 			var lowest *int64
 			if err := s.try(`SELECT COALESCE((SELECT EXTRACT(EPOCH FROM now() - received_at)::bigint FROM magnetico_ingest.queue ORDER BY id LIMIT 1), 0)`, nil, &lowest); err == nil && lowest != nil {
-				q.Values[opstats.GOldestAgeSeconds], q.Valid[opstats.GOldestAgeSeconds], q.OldestApprox = max(*lowest, 0), true, true
+				q.Values[opstats.GOldestAgeSeconds], q.Valid[opstats.GOldestAgeSeconds] = max(*lowest, 0), true
+				flag(&q, opstats.GOldestAgeApprox, true)
 			}
 		}
 		var qrows, qbytes int64
 		if err := s.try(`SELECT count(*), COALESCE(sum(payload_bytes), 0)::bigint FROM magnetico_ingest.quarantine`, nil, &qrows, &qbytes); err == nil {
 			q.Values[opstats.GQuarantineRows], q.Valid[opstats.GQuarantineRows] = qrows, true
 			q.Values[opstats.GQuarantineBytes], q.Valid[opstats.GQuarantineBytes] = qbytes, true
+			flag(&q, opstats.GQuarantineRowsApprox, false)
 		} else if s.cycle.Err() == nil {
 			var est *int64
 			if err := s.try(`SELECT CASE WHEN reltuples >= 0 THEN reltuples::bigint END FROM pg_class WHERE oid = 'magnetico_ingest.quarantine'::regclass`, nil, &est); err == nil && est != nil {
-				q.Values[opstats.GQuarantineRows], q.Valid[opstats.GQuarantineRows], q.CountsApprox = *est, true, true
+				q.Values[opstats.GQuarantineRows], q.Valid[opstats.GQuarantineRows] = *est, true
+				flag(&q, opstats.GQuarantineRowsApprox, true)
 			}
 		}
 		return nil
@@ -187,4 +199,33 @@ COALESCE(EXTRACT(EPOCH FROM now() - min(received_at)), 0)::bigint FROM magnetico
 		return opstats.QueueState{}, errors.New("queue sample failed")
 	}
 	return q, nil
+}
+
+// flag records, as a 0/1 gauge of this sample, whether a quantity is an estimate.
+func flag(q *opstats.QueueState, g opstats.Gauge, estimated bool) {
+	q.Values[g], q.Valid[g] = 0, true
+	if estimated {
+		q.Values[g] = 1
+	}
+}
+
+// utilisationPPM is used ÷ quota in parts per million, computed with a 128-bit
+// intermediate so that a usage of terabytes cannot overflow, and saturating at
+// the largest int64. Unavailable when no quota is configured.
+func utilisationPPM(used, quota int64) (int64, bool) {
+	if quota <= 0 {
+		return 0, false
+	}
+	if used <= 0 {
+		return 0, true
+	}
+	hi, lo := bits.Mul64(uint64(used), 1_000_000)
+	if hi >= uint64(quota) { // the quotient does not fit in 64 bits
+		return math.MaxInt64, true
+	}
+	q, _ := bits.Div64(hi, lo, uint64(quota))
+	if q > math.MaxInt64 {
+		return math.MaxInt64, true
+	}
+	return int64(q), true
 }

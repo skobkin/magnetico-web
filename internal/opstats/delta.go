@@ -16,6 +16,7 @@ type StorageAgg struct {
 	BPTBytes, BPTTorrents int64
 	Samples               int64
 	Mismatches            int64 // samples whose categories did not reconcile with the total
+	Unevaluated           int64 // samples in which a measure was unavailable, so the check could not run
 	LastAt                time.Time
 }
 
@@ -30,19 +31,32 @@ type QueueState struct {
 	Values   [NumGauges]int64
 	Valid    [NumGauges]bool
 	QuotaMax int64
-	// CountsApprox: row counts are planner estimates; OldestApprox: the oldest
-	// age came from the lowest id; Backoff: the sampling interval was widened.
-	CountsApprox, OldestApprox, Backoff bool
+	// Backoff: the sampling interval was widened. Whether a count or the oldest age
+	// is an estimate is recorded per sample in the GQueueRowsApprox,
+	// GQuarantineRowsApprox and GOldestAgeApprox gauges.
+	Backoff bool
 }
 
 // StorageState is the newest sampled storage state.
 type StorageState struct {
-	At         time.Time
-	Slot       int64
-	Values     [NumMeasures]int64
-	Valid      [NumMeasures]bool
-	Reconciled bool
+	At     time.Time
+	Slot   int64
+	Values [NumMeasures]int64
+	Valid  [NumMeasures]bool
+	// Reconciliation says whether measures 1–4 add up to 5: ReconNotEvaluated
+	// when one of the five was unavailable (not a mismatch), ReconOK or
+	// ReconMismatch.
+	Reconciliation Reconciliation
 }
+
+// Reconciliation is the outcome of the storage reconciliation check.
+type Reconciliation int
+
+const (
+	ReconNotEvaluated Reconciliation = iota
+	ReconOK
+	ReconMismatch
+)
 
 // HourDelta is what one UTC hour accumulated since the last drain: event
 // counters, gauge aggregates and the minutes in which the process was running.

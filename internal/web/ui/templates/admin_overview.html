@@ -53,7 +53,7 @@
 <div class="kv"><span class="kv-label">Database</span><span>{{.Database}}</span></div>
 <div class="kv"><span class="kv-label">Indexed torrents</span><span>{{.Indexed}}</span></div>
 <div class="kv"><span class="kv-label">Bytes per torrent</span><span>{{.PerTorrent}}</span></div>
-{{if not .Reconciled}}<p class="subtext">The storage categories did not add up to the total in the last sample.</p>{{end}}
+{{if .ReconNote}}<p class="subtext">{{.ReconNote}}</p>{{end}}
 <p class="subtext">Not counted: WAL, backups, other databases, total server disk.</p>
 </div></section>
 </div>

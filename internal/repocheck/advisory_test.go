@@ -40,7 +40,7 @@ func productionGoFiles(t *testing.T) []sourceFile {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case ".git", ".superpowers", "third_party", "dist", "node_modules":
+			case ".git", ".superpowers", ".claude", "third_party", "dist", "node_modules":
 				return filepath.SkipDir
 			}
 			return nil

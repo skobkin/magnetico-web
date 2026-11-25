@@ -7,6 +7,8 @@ package stats
 import (
 	"errors"
 	"time"
+
+	"github.com/skobkin/magnetico-web/internal/opstats"
 )
 
 // State is the freshness of one data source.
@@ -152,7 +154,9 @@ type StorageView struct {
 	Database     Measured[int64]
 	IndexedCount Measured[int64]   // always approximate
 	BytesPerItem Measured[float64] // magneticod total ÷ indexed estimate, from this one sample
-	Reconciled   bool
+	// Reconciliation says whether the four categories added up to the total in
+	// this sample: not evaluated (a measure was unavailable) is not a mismatch.
+	Reconciliation opstats.Reconciliation
 }
 
 // Users counts accounts (optional: unavailable when the web schema cannot be read).

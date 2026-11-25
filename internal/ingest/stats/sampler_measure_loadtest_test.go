@@ -32,7 +32,7 @@ SELECT decode(lpad(to_hex(g + %d), 40, '0'), 'hex'), 1, decode(repeat('ab', %d),
 			start := time.Now()
 			q := e.sampleQueue(samplerLimits{statement: 30 * time.Second, lock: time.Second, cycle: 60 * time.Second})
 			d = append(d, time.Since(start))
-			if q.CountsApprox || q.OldestApprox {
+			if anyApprox(q) {
 				t.Fatalf("the exact path was not taken at %d rows", n)
 			}
 		}

@@ -27,6 +27,18 @@ const (
 // Query selects a chart, a granularity and a period ("2026-11-25", "2026-11", "2026").
 type Query struct{ Chart, Granularity, Period string }
 
+// Notes a bucket can carry.
+const (
+	// NoteApproximateCounts: at least one queue or quarantine row count of the bucket is a planner estimate.
+	NoteApproximateCounts = "approximate_counts"
+	// NoteReconciliationMismatch: a storage sample's categories did not add up to its total (a genuine inconsistency).
+	NoteReconciliationMismatch = "reconciliation_mismatch"
+	// NoteReconciliationNotEvaluated: the check could not run because a measure was unavailable (not an inconsistency).
+	NoteReconciliationNotEvaluated = "reconciliation_not_evaluated"
+	// NoteIncompleteBreakdown: the bucket's newest storage sample lacks a category, so no stack is drawn.
+	NoteIncompleteBreakdown = "incomplete_breakdown"
+)
+
 // Line is one plotted series. A nil value is a gap (no observation); a zero is
 // a measured zero.
 type Line struct {
@@ -43,7 +55,10 @@ type Series struct {
 	Query   Query
 	Buckets []time.Time // the start of every bucket of the period (missing ones included)
 	Partial []bool      // bucket observed for less than its length, or still open
-	Lines   []Line
+	// Notes lists, per bucket, what a reader must know about its values (the Note
+	// constants); it is as long as Buckets and an entry is nil when there is nothing to say.
+	Notes [][]string
+	Lines []Line
 	// Previous and Next are the neighbouring periods that have data ("" when none).
 	Previous, Next string
 }
@@ -105,6 +120,9 @@ type storageRow struct {
 	last, max  [opstats.NumMeasures]*int64
 	bptB, bptT int64
 	samples    int64
+	// mismatches and unevaluated count the samples of the bucket whose
+	// reconciliation failed and whose reconciliation could not run.
+	mismatches, unevaluated int64
 }
 
 func bucketMinutes(gran string, start time.Time) int {
@@ -117,10 +135,12 @@ func bucketMinutes(gran string, start time.Time) int {
 	return int(start.AddDate(0, 1, 0).Sub(start) / time.Minute)
 }
 
-// buildSeries turns stored rows into the lines of a chart. quotaMax converts
-// the average quota usage into a utilisation.
-func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, srows map[time.Time]*storageRow, quotaMax Measured[int64], now time.Time) Series {
-	s := Series{Query: q, Buckets: buckets, Partial: make([]bool, len(buckets))}
+// buildSeries turns stored rows into the lines of a chart. Every figure comes
+// from what was stored with the observation: the quota utilisation was recorded
+// with the quota in force at that moment, so nothing here depends on today's
+// configuration.
+func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, srows map[time.Time]*storageRow, now time.Time) Series {
+	s := Series{Query: q, Buckets: buckets, Partial: make([]bool, len(buckets)), Notes: make([][]string, len(buckets))}
 	for i, b := range buckets {
 		if r := rows[b]; r != nil {
 			s.Partial[i] = r.covered < bucketMinutes(q.Granularity, b)
@@ -184,14 +204,31 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 		line("Queue depth", "queue_max", "Queue depth (maximum)", "records", false, gaugeMax(opstats.GQueueRows))
 		line("Queue depth", "quarantine", "Quarantine (maximum)", "records", false, gaugeMax(opstats.GQuarantineRows))
 		line("Quota used", "quota", "Quota used (average)", "ratio", false, func(r *bucketRow) *float64 {
-			a := r.g[opstats.GQuotaUsedBytes]
-			if !a.Valid || a.N == 0 || !quotaMax.Valid || quotaMax.Value <= 0 {
-				return nil
+			if a := r.g[opstats.GQuotaUtilisationPPM]; a.Valid && a.N > 0 {
+				v := float64(a.Sum) / float64(a.N) / 1e6
+				return &v
 			}
-			// a.N × the quota would overflow an int64 for a month bucket and a very large quota
-			v := float64(a.Sum) / (float64(a.N) * float64(quotaMax.Value))
-			return &v
+			return nil
 		})
+		line("Quota used", "quota_peak", "Quota used (peak)", "ratio", false, func(r *bucketRow) *float64 {
+			if a := r.g[opstats.GQuotaUtilisationPPM]; a.Valid {
+				v := float64(a.Max) / 1e6
+				return &v
+			}
+			return nil
+		})
+		for i, b := range buckets {
+			r := rows[b]
+			if r == nil {
+				continue
+			}
+			for _, g := range []opstats.Gauge{opstats.GQueueRowsApprox, opstats.GQuarantineRowsApprox} {
+				if a := r.g[g]; a.Valid && a.Max > 0 {
+					s.Notes[i] = append(s.Notes[i], NoteApproximateCounts)
+					break
+				}
+			}
+		}
 	case ChartTraffic:
 		line("Request bytes", "bytes", "Request bytes", "bytes", false, cnt(opstats.CBytesBody))
 		line("Mean record size", "record_size", "Mean record size", "bytes", false, func(r *bucketRow) *float64 {
@@ -238,10 +275,43 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 				return nil
 			}
 		}
-		sline("Size", "torrents_table", "Torrents table", "bytes", true, last(opstats.MTorrentsTable))
-		sline("Size", "blobs_table", "File lists table", "bytes", true, last(opstats.MBlobsTable))
-		sline("Size", "indexes", "Indexes", "bytes", true, last(opstats.MIndexes))
-		sline("Size", "other", "Other", "bytes", true, last(opstats.MOther))
+		// The stack is drawn only when the bucket's newest sample has all four categories:
+		// a partial stack would read as a smaller database.
+		complete := func(r *storageRow) bool {
+			for _, m := range []opstats.Measure{opstats.MTorrentsTable, opstats.MBlobsTable, opstats.MIndexes, opstats.MOther} {
+				if r.last[m] == nil {
+					return false
+				}
+			}
+			return true
+		}
+		stacked := func(m opstats.Measure) func(r *storageRow) *float64 {
+			return func(r *storageRow) *float64 {
+				if !complete(r) {
+					return nil
+				}
+				return last(m)(r)
+			}
+		}
+		sline("Size", "torrents_table", "Torrents table", "bytes", true, stacked(opstats.MTorrentsTable))
+		sline("Size", "blobs_table", "File lists table", "bytes", true, stacked(opstats.MBlobsTable))
+		sline("Size", "indexes", "Indexes", "bytes", true, stacked(opstats.MIndexes))
+		sline("Size", "other", "Other", "bytes", true, stacked(opstats.MOther))
+		for i, b := range buckets {
+			r := srows[b]
+			if r == nil || r.samples == 0 {
+				continue
+			}
+			if !complete(r) {
+				s.Notes[i] = append(s.Notes[i], NoteIncompleteBreakdown)
+			}
+			if r.mismatches > 0 {
+				s.Notes[i] = append(s.Notes[i], NoteReconciliationMismatch)
+			}
+			if r.unevaluated > 0 {
+				s.Notes[i] = append(s.Notes[i], NoteReconciliationNotEvaluated)
+			}
+		}
 		sline("Size", "magneticod_total", "magneticod total", "bytes", false, last(opstats.MMagneticodTotal))
 		sline("Size", "ingest_total", "Ingest queue schema", "bytes", false, last(opstats.MIngestTotal))
 		sline("Size", "database_total", "Database", "bytes", false, last(opstats.MDatabaseTotal))

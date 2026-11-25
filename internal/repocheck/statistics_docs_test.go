@@ -192,7 +192,7 @@ func TestTheRemovedSharedIngestTokenAppearsInNoExample(t *testing.T) {
 		rel, _ := filepath.Rel(root, path)
 		if fi.IsDir() {
 			switch rel {
-			case ".git", ".superpowers", "third_party", filepath.Join("docs", "wip") + "/", "docs/wip":
+			case ".git", ".superpowers", ".claude", "third_party", filepath.Join("docs", "wip") + "/", "docs/wip":
 				return filepath.SkipDir
 			}
 			return nil

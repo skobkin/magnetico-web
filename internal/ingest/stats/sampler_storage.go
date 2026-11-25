@@ -73,38 +73,67 @@ var storageQueries = [opstats.NumMeasures]string{
 	opstats.MDatabaseTotal: sqlDatabaseTotal, opstats.MIndexedTorrents: sqlIndexedTorrents,
 }
 
-// sampleStorage measures the eight storage quantities. Each runs in its own
-// savepoint, so one failure makes only that measure unavailable. The
-// reconciliation (1+2+3+4 = 5) is evaluated only when those five are all valid;
-// a mismatch (concurrent DDL between the reads) is retried once.
+// sampleStorage measures the eight storage quantities (see sampleStorageQueries).
 func sampleStorage(ctx context.Context, pool *pgxpool.Pool, at time.Time, lim samplerLimits) (opstats.StorageState, error) {
-	s := opstats.StorageState{At: at, Slot: at.Unix() / storageSlotSeconds, Reconciled: true}
+	return sampleStorageQueries(ctx, pool, at, lim, storageQueries)
+}
+
+// sampleStorageQueries measures the eight storage quantities with the given
+// queries. Each runs in its own savepoint, so one failure makes only that
+// measure unavailable. The reconciliation (1+2+3+4 = 5) is evaluated only when
+// those five are all valid: otherwise it is "not evaluated", which is neither a
+// success nor a mismatch. A mismatch (concurrent DDL between the reads) is
+// retried once, but the whole sample, retry included, shares ONE deadline
+// (lim.cycle): a first read that did not reconcile is kept, flagged, when the
+// retry does not finish in time, and a half-finished retry is never used.
+func sampleStorageQueries(ctx context.Context, pool *pgxpool.Pool, at time.Time, lim samplerLimits, queries [opstats.NumMeasures]string) (opstats.StorageState, error) {
+	total, cancel := context.WithTimeout(ctx, lim.cycle)
+	defer cancel()
+	var best opstats.StorageState
+	have := false
 	for attempt := 0; attempt < 2; attempt++ {
-		s.Values, s.Valid = [opstats.NumMeasures]int64{}, [opstats.NumMeasures]bool{}
-		err := runSampled(ctx, pool, lim, func(t *sampledTx) error {
-			ok := 0
-			for m := opstats.Measure(0); m < opstats.NumMeasures; m++ {
-				var v *int64
-				if err := t.try(storageQueries[m], nil, &v); err == nil && v != nil {
-					s.Values[m], s.Valid[m] = *v, true
-					ok++
-				}
-			}
-			if ok == 0 {
-				return errors.New("no storage measure could be read")
-			}
-			return nil
-		})
+		s, err := storageAttempt(total, pool, at, lim, queries)
+		if attempt > 0 && (err != nil || total.Err() != nil) {
+			break // the retry did not complete inside the deadline: keep the first read
+		}
 		if err != nil {
 			return opstats.StorageState{}, err
 		}
-		s.Reconciled = true
-		if s.Valid[opstats.MTorrentsTable] && s.Valid[opstats.MBlobsTable] && s.Valid[opstats.MIndexes] && s.Valid[opstats.MOther] && s.Valid[opstats.MMagneticodTotal] {
-			sum := s.Values[opstats.MTorrentsTable] + s.Values[opstats.MBlobsTable] + s.Values[opstats.MIndexes] + s.Values[opstats.MOther]
-			s.Reconciled = sum == s.Values[opstats.MMagneticodTotal]
-		}
-		if s.Reconciled {
+		best, have = s, true
+		if s.Reconciliation != opstats.ReconMismatch {
 			break
+		}
+	}
+	if !have {
+		return opstats.StorageState{}, errors.New("storage sample failed")
+	}
+	return best, nil
+}
+
+func storageAttempt(ctx context.Context, pool *pgxpool.Pool, at time.Time, lim samplerLimits, queries [opstats.NumMeasures]string) (opstats.StorageState, error) {
+	s := opstats.StorageState{At: at, Slot: at.Unix() / storageSlotSeconds}
+	err := runSampled(ctx, pool, lim, func(t *sampledTx) error {
+		ok := 0
+		for m := opstats.Measure(0); m < opstats.NumMeasures; m++ {
+			var v *int64
+			if err := t.try(queries[m], nil, &v); err == nil && v != nil {
+				s.Values[m], s.Valid[m] = *v, true
+				ok++
+			}
+		}
+		if ok == 0 {
+			return errors.New("no storage measure could be read")
+		}
+		return nil
+	})
+	if err != nil {
+		return opstats.StorageState{}, err
+	}
+	if s.Valid[opstats.MTorrentsTable] && s.Valid[opstats.MBlobsTable] && s.Valid[opstats.MIndexes] && s.Valid[opstats.MOther] && s.Valid[opstats.MMagneticodTotal] {
+		sum := s.Values[opstats.MTorrentsTable] + s.Values[opstats.MBlobsTable] + s.Values[opstats.MIndexes] + s.Values[opstats.MOther]
+		s.Reconciliation = opstats.ReconOK
+		if sum != s.Values[opstats.MMagneticodTotal] {
+			s.Reconciliation = opstats.ReconMismatch
 		}
 	}
 	return s, nil

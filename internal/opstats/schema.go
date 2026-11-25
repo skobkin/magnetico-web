@@ -89,7 +89,7 @@ func storageColumns() []colSpec {
 		cols = append(cols, nullable(n+"_last", "bigint"), nullable(n+"_max", "bigint"), bigint(n+"_sum"), bigint(n+"_n"))
 	}
 	cols = append(cols,
-		bigint("bpt_bytes_sum"), bigint("bpt_torrents_sum"), bigint("samples"), bigint("reconciliation_mismatches"),
+		bigint("bpt_bytes_sum"), bigint("bpt_torrents_sum"), bigint("samples"), bigint("reconciliation_mismatches"), bigint("unevaluated_samples"),
 		nullable("last_sample_at", "timestamp with time zone"))
 	return cols
 }
@@ -103,7 +103,7 @@ func storageChecks(unit string) []string {
 		n := m.Name()
 		nonneg = append(nonneg, n+"_sum >= 0", n+"_n >= 0", "("+n+"_last IS NULL OR "+n+"_last >= 0)", "("+n+"_max IS NULL OR "+n+"_max >= 0)")
 	}
-	nonneg = append(nonneg, "bpt_bytes_sum >= 0", "bpt_torrents_sum >= 0", "samples >= 0", "reconciliation_mismatches >= 0")
+	nonneg = append(nonneg, "bpt_bytes_sum >= 0", "bpt_torrents_sum >= 0", "samples >= 0", "reconciliation_mismatches >= 0", "unevaluated_samples >= 0")
 	return append(checks, fmt.Sprintf("CONSTRAINT storage_%s_nonneg CHECK (%s)", unit, strings.Join(nonneg, " AND ")))
 }
 
@@ -154,12 +154,10 @@ func sharedStateColumns() []colSpec {
 		cols = append(cols, nullable(g.Name(), "bigint")) // NULL: unavailable, never zero
 	}
 	cols = append(cols,
-		colSpec{"queue_counts_approx", "boolean", true, "false"},
-		colSpec{"oldest_age_approx", "boolean", true, "false"},
 		colSpec{"queue_interval_backoff", "boolean", true, "false"},
 		nullable("storage_sampled_at", "timestamp with time zone"),
 		bigint("storage_last_slot"),
-		colSpec{"storage_reconciled", "boolean", true, "true"},
+		colSpec{"storage_reconciliation", "smallint", true, "0"}, // 0 not evaluated, 1 reconciled, 2 mismatch
 	)
 	for m := Measure(0); m < NumMeasures; m++ {
 		cols = append(cols, nullable("storage_"+m.Name(), "bigint"))
@@ -192,7 +190,8 @@ func buildTables() []tableSpec {
 		}, checks: []string{"CONSTRAINT ingest_instances_seq CHECK (last_flush_seq >= 0)"}},
 		{name: "snapshot", hot: true, pk: []string{"instance_id"}, cols: snapshotColumns()},
 		{name: "shared_state", hot: true, pk: []string{"id"}, cols: sharedStateColumns(),
-			checks: []string{"CONSTRAINT shared_state_single CHECK (id = 1)"}},
+			checks: []string{"CONSTRAINT shared_state_single CHECK (id = 1)",
+				"CONSTRAINT shared_state_reconciliation CHECK (storage_reconciliation BETWEEN 0 AND 2)"}},
 		{name: "crawler_activity", pk: []string{"crawler_id"}, cols: activityColumns, checks: []string{
 			"CONSTRAINT crawler_activity_nonneg CHECK (records_received >= 0 AND records_enqueued >= 0 AND records_duplicate >= 0 AND bytes_body >= 0 AND exists_requests >= 0 AND exists_hashes >= 0 AND rejected_requests >= 0)",
 		}},

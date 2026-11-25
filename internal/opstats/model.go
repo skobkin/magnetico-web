@@ -117,12 +117,24 @@ const (
 	GQuarantineRows
 	GQuarantineBytes
 	GOldestAgeSeconds
+	// GQuotaUtilisationPPM is quota used ÷ the quota configured WHEN the sample
+	// was taken, in parts per million; it is not recorded for a sample taken with
+	// no quota configured. Storing the ratio per observation keeps its meaning
+	// when the configured quota changes later.
+	GQuotaUtilisationPPM
+	// The three approximation flags are 0/1 per sample, so a bucket knows how many
+	// of its samples used an estimate (sum) and whether any did (max).
+	GQueueRowsApprox
+	GQuarantineRowsApprox
+	GOldestAgeApprox
 	NumGauges
 )
 
 var gaugeNames = [NumGauges]string{
 	GQueueRows: "queue_rows", GQueueBytes: "queue_bytes", GQuotaUsedBytes: "quota_used_bytes",
 	GQuarantineRows: "quarantine_rows", GQuarantineBytes: "quarantine_bytes", GOldestAgeSeconds: "oldest_age_s",
+	GQuotaUtilisationPPM: "quota_utilisation_ppm", GQueueRowsApprox: "queue_rows_approx",
+	GQuarantineRowsApprox: "quarantine_rows_approx", GOldestAgeApprox: "oldest_age_approx",
 }
 
 // Name is the column-name stem of the gauge.

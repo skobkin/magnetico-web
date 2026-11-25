@@ -91,8 +91,14 @@ Gauges describe the **one database**, not an instance; they are sampled by the e
 | `quarantine_rows` | rows in `magnetico_ingest.quarantine` |
 | `quarantine_bytes` | payload bytes of the quarantine rows |
 | `oldest_age_s` | age in seconds of the oldest queue row (`min(received_at)`; the lowest-`id` row when the scan times out, flagged approximate) |
+| `quota_utilisation_ppm` | `quota_used_bytes` ÷ the quota **configured when the sample was taken**, in parts per million (128-bit arithmetic, saturating); not recorded for a sample taken with no quota configured. The ratio is stored per observation, so reconfiguring the quota never rewrites the meaning of history; a bucket's average is `sum ÷ n`, its peak is `max` |
+| `queue_rows_approx` | 0 or 1 per sample: the queue row count is a planner estimate (the exact count did not finish in its budget); a bucket's `sum` is the number of estimated samples and `max` says whether any was |
+| `quarantine_rows_approx` | the same for the quarantine row count (flagged separately: one count can be exact while the other is not) |
+| `oldest_age_approx` | the same for the oldest age (lowest-`id` fallback) |
 
 Storage is sampled every 5 minutes into `storage_hour`, `storage_day` and `storage_month` (`last`, `max`, `sum`, `n` per measure). The categories do not overlap and reconcile: measure 5 equals measures 1 + 2 + 3 + 4 exactly (a difference is flagged, not hidden).
+
+**One sample, one breakdown.** The `last` values of a bucket are one bundle: they all come from the newest sample of that bucket, and a measure that sample could not read stays missing (`NULL`) instead of being filled from an older sample. Categories measured at different times are therefore never shown as one breakdown; the chart draws the stack of measures 1–4 only for a bucket whose newest sample has all four, and the totals of the same sample are still drawn. **Reconciliation has three outcomes, stored per sample:** *reconciled*, *mismatch* (all five measures were read and 1 + 2 + 3 + 4 ≠ 5 — a genuine inconsistency, `reconciliation_mismatches`) and *not evaluated* (a measure was unavailable, so the check could not run — not an inconsistency, `unevaluated_samples`). A mismatch is retried once; **the whole sample, retry included, shares one deadline of 20 s**, and a first read that did not reconcile is kept, flagged, when the retry does not finish in time (a half-finished retry is never used). The chart carries a per-bucket note for an approximate count, an incomplete breakdown, a mismatch and a check that was not evaluated.
 
 | Storage measure | Definition |
 |---|---|

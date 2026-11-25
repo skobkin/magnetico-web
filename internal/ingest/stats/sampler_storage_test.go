@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -39,8 +40,8 @@ SELECT id, convert_to((SELECT string_agg(md5(random()::text || g::text), '') FRO
 		}
 	}
 	v := s.Values
-	if !s.Reconciled || v[opstats.MTorrentsTable]+v[opstats.MBlobsTable]+v[opstats.MIndexes]+v[opstats.MOther] != v[opstats.MMagneticodTotal] {
-		t.Fatalf("categories do not sum to the total: %v (reconciled %v)", v, s.Reconciled)
+	if s.Reconciliation != opstats.ReconOK || v[opstats.MTorrentsTable]+v[opstats.MBlobsTable]+v[opstats.MIndexes]+v[opstats.MOther] != v[opstats.MMagneticodTotal] {
+		t.Fatalf("categories do not sum to the total: %v (reconciliation %v)", v, s.Reconciliation)
 	}
 	// Independent computation straight from PostgreSQL's own functions.
 	if want := e.n(`SELECT sum(pg_total_relation_size(c.oid)) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -85,7 +86,7 @@ func TestOtherBytesExcludesIndexesAlreadyInIndexesBytes(t *testing.T) {
 	if after.Values[opstats.MIndexes] <= before.Values[opstats.MIndexes] {
 		t.Fatal("indexes_bytes did not grow with a new index")
 	}
-	if !after.Reconciled {
+	if after.Reconciliation != opstats.ReconOK {
 		t.Fatal("not reconciled")
 	}
 }
@@ -102,7 +103,7 @@ func TestStorageReconcilesWithAdditionalIndexedTablesMatviewsAndSequences(t *tes
 	e.exec(`SELECT nextval('magneticod.standalone_seq')`)
 	s := e.sampleStorage()
 	v := s.Values
-	if !s.Reconciled {
+	if s.Reconciliation != opstats.ReconOK {
 		t.Fatalf("not reconciled: %v", v)
 	}
 	if sum := v[opstats.MTorrentsTable] + v[opstats.MBlobsTable] + v[opstats.MIndexes] + v[opstats.MOther]; sum != v[opstats.MMagneticodTotal] {
@@ -145,8 +146,51 @@ func TestStorageMeasuresFailIndependently(t *testing.T) {
 			t.Errorf("measure %s was lost because another one failed", m.Name())
 		}
 	}
-	// The reconciliation is judged only when its five inputs are all valid: no false alarm here.
-	if !s.Reconciled {
-		t.Fatal("a missing input made the sample look unreconciled")
+	// The reconciliation is judged only when its five inputs are all valid. A missing input
+	// is neither a mismatch (no false alarm) nor a success (never claimed as reconciled):
+	// it is "not evaluated".
+	if s.Reconciliation != opstats.ReconNotEvaluated {
+		t.Fatalf("a missing input gave %v, want not-evaluated", s.Reconciliation)
 	}
+}
+
+// TestStorageSampleKeepsTheFlaggedFirstReadWhenTheRetryDoesNotFitTheDeadline
+// (Task 09A): the whole sample, retry included, is bounded by one deadline. A
+// first read that did not reconcile is kept, flagged, when there is no time to
+// repeat it; it is not replaced by an error or by a half-finished second read.
+func TestStorageSampleKeepsTheFlaggedFirstReadWhenTheRetryDoesNotFitTheDeadline(t *testing.T) {
+	e := newWEnv(t, nil)
+	e.seedTorrents(10)
+	var qs [opstats.NumMeasures]string
+	for m := opstats.Measure(0); m < opstats.NumMeasures; m++ {
+		qs[m] = storageQueries[m]
+	}
+	// the total is always one byte off: a genuine mismatch on every attempt
+	qs[opstats.MMagneticodTotal] = "SELECT (" + sqlMagneticodTotal + ") + 1"
+	// four measures pause 0.5 s each: one attempt takes about 2 s, two would take 4 s
+	for _, m := range []opstats.Measure{opstats.MTorrentsTable, opstats.MBlobsTable, opstats.MIndexes, opstats.MOther} {
+		qs[m] = pausedMeasure(storageQueries[m], 0.5)
+	}
+	lim := samplerLimits{statement: 10 * time.Second, lock: time.Second, cycle: 3 * time.Second}
+	start := time.Now()
+	s, err := sampleStorageQueries(bg, e.w.samplePool, e.clock.Now(), lim, qs)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("a flagged first read must be returned, not an error: %v", err)
+	}
+	if elapsed > lim.cycle+500*time.Millisecond {
+		t.Fatalf("the sample took %v: the retry ran past the %v deadline of the whole sample", elapsed, lim.cycle)
+	}
+	if s.Reconciliation != opstats.ReconMismatch {
+		t.Fatalf("reconciliation = %v, want the mismatch of the first read kept", s.Reconciliation)
+	}
+	for _, m := range []opstats.Measure{opstats.MTorrentsTable, opstats.MBlobsTable, opstats.MIndexes, opstats.MOther, opstats.MMagneticodTotal} {
+		if !s.Valid[m] {
+			t.Errorf("measure %s of the first read was dropped", m.Name())
+		}
+	}
+}
+
+func pausedMeasure(q string, pause float64) string {
+	return fmt.Sprintf("SELECT v FROM (SELECT pg_sleep(%v)) s, LATERAL (%s) AS t(v)", pause, strings.TrimSuffix(strings.TrimSpace(q), ";"))
 }

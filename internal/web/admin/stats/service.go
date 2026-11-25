@@ -178,7 +178,7 @@ func (s *Service) Series(ctx context.Context, p access.Principal, q Query) (Seri
 		if err != nil {
 			return Series{}, err
 		}
-		sr := buildSeries(q, buckets, rows, srows, s.r.quotaMax(ctx), s.now().UTC())
+		sr := buildSeries(q, buckets, rows, srows, s.now().UTC())
 		if start.After(earliest) {
 			sr.Previous = periodString(q.Granularity, nextPeriod(q.Granularity, start, -1))
 		}

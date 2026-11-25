@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skobkin/magnetico-web/internal/opstats"
 	"github.com/skobkin/magnetico-web/internal/web/admin/access"
 	"github.com/skobkin/magnetico-web/internal/web/admin/data"
 	"github.com/skobkin/magnetico-web/internal/web/admin/stats"
@@ -148,7 +149,7 @@ type overviewPage struct {
 	Torrents, Blobs, Indexes             string
 	Other, Magneticod, Ingestdb          string
 	Database, Indexed, PerTorrent        string
-	Reconciled                           bool
+	ReconNote                            string
 	HourReceived, HourEnqueued           string
 	HourAcknowledged, HourSettled        string
 	UsersTotal, UsersActive, UsersAdmins string
@@ -230,7 +231,14 @@ func buildOverview(c chrome, o stats.Overview, f stats.Freshness) overviewPage {
 	} else {
 		pg.PerTorrent = dash
 	}
-	pg.Reconciled = s.Reconciled || s.State != stats.StateUp
+	if s.State == stats.StateUp {
+		switch s.Reconciliation {
+		case opstats.ReconMismatch:
+			pg.ReconNote = "The storage categories did not add up to the total in the last sample."
+		case opstats.ReconNotEvaluated:
+			pg.ReconNote = "The storage categories were not checked against the total in the last sample because a measure was unavailable."
+		}
+	}
 	if o.ThisHourAt.IsZero() {
 		pg.HourReceived, pg.HourEnqueued, pg.HourAcknowledged, pg.HourSettled = dash, dash, dash, dash
 	} else {

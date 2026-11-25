@@ -375,7 +375,10 @@ func TestUpsertSizeIsBoundedByTheCap(t *testing.T) {
 }
 
 func storageSample(at time.Time, slot int64, total, est int64, reconciled bool) StorageState {
-	s := StorageState{At: at, Slot: slot, Reconciled: reconciled}
+	s := StorageState{At: at, Slot: slot, Reconciliation: ReconOK}
+	if !reconciled {
+		s.Reconciliation = ReconMismatch
+	}
 	for m := Measure(0); m < NumMeasures; m++ {
 		s.Valid[m] = true
 		s.Values[m] = total / 10
@@ -472,5 +475,54 @@ func TestASampleFromAClockAheadIsRefusedAndAPinnedMarkerHeals(t *testing.T) {
 	d.AddStorageSample(storageSample(ref.Add(24*time.Hour), ref.Add(24*time.Hour).Unix()/300, 1000, 10, true))
 	if r := apply(t, pool, &d); r.StorageApplied || !r.StorageSkipped {
 		t.Fatalf("a storage sample from a clock a day ahead was applied: %+v", r)
+	}
+}
+
+// TestStorageLastValuesAreOneBundleFromTheNewestSample (Task 09A): when the
+// newest sample could not read a measure, the stored "last" of that measure is
+// missing; it is not filled from an older sample, which would present
+// categories measured at different times as one breakdown.
+func TestStorageLastValuesAreOneBundleFromTheNewestSample(t *testing.T) {
+	_, pool := newDB(t, true)
+	var d Delta
+	d.AddStorageSample(storageSample(base.Add(1*time.Minute), 1, 1000, 10, true))
+	apply(t, pool, &d)
+	newer := storageSample(base.Add(6*time.Minute), 2, 5000, 10, true)
+	newer.Valid[MBlobsTable] = false // this one could not be read in the newer sample
+	newer.Reconciliation = ReconNotEvaluated
+	var d2 Delta
+	d2.AddStorageSample(newer)
+	apply(t, pool, &d2)
+	for _, unit := range []string{"hour", "day", "month"} {
+		var torrents, blobs, total *int64
+		var unevaluated int64
+		if err := pool.QueryRow(bg, `SELECT torrents_table_bytes_last, blobs_table_bytes_last, magneticod_total_bytes_last, unevaluated_samples FROM magnetico_stats.storage_`+unit).
+			Scan(&torrents, &blobs, &total, &unevaluated); err != nil {
+			t.Fatalf("%s: %v", unit, err)
+		}
+		if torrents == nil || *torrents != 500 || total == nil || *total != 5000 {
+			t.Fatalf("%s: the newest sample's values must win: torrents=%v total=%v", unit, torrents, total)
+		}
+		if blobs != nil {
+			t.Fatalf("%s: blobs last = %d, want missing (NULL): the older sample's value must not be carried over", unit, *blobs)
+		}
+		if unevaluated != 1 {
+			t.Fatalf("%s: unevaluated_samples = %d, want 1", unit, unevaluated)
+		}
+	}
+	// The in-memory merge agrees with the stored result.
+	var m Delta
+	m.AddStorageSample(storageSample(base.Add(1*time.Minute), 1, 1000, 10, true))
+	m.AddStorageSample(newer)
+	if st := m.Hours[0].Storage; st.LastValid[MBlobsTable] || !st.LastValid[MTorrentsTable] || st.Unevaluated != 1 {
+		t.Fatalf("merged bundle %+v", st)
+	}
+	// An older sample arriving later does not replace the bundle.
+	var o Delta
+	o.AddStorageSample(storageSample(base.Add(2*time.Minute), 0, 100, 10, true))
+	apply(t, pool, &o)
+	var blobs *int64
+	if err := pool.QueryRow(bg, `SELECT blobs_table_bytes_last FROM magnetico_stats.storage_hour`).Scan(&blobs); err != nil || blobs != nil {
+		t.Fatalf("a delayed older sample overwrote the newest bundle: %v %v", blobs, err)
 	}
 }

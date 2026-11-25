@@ -407,7 +407,7 @@ func TestSeriesRatiosAreWeighted(t *testing.T) {
 }
 
 func storageSample(at time.Time, slot int64, total, est int64) opstats.StorageState {
-	s := opstats.StorageState{At: at, Slot: slot, Reconciled: true}
+	s := opstats.StorageState{At: at, Slot: slot, Reconciliation: opstats.ReconOK}
 	for m := opstats.Measure(0); m < opstats.NumMeasures; m++ {
 		s.Valid[m], s.Values[m] = true, total/10
 	}

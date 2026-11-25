@@ -37,7 +37,7 @@ VALUES ('\x01', 1, '\x0000', 2, 'invalid_record', 1, now())`)
 	q := e.sampleQueue(testLimits)
 	v := q.Values
 	if !q.Valid[opstats.GQueueRows] || v[opstats.GQueueRows] != 5 || v[opstats.GQueueBytes] != 5 || v[opstats.GQuotaUsedBytes] != 7 ||
-		v[opstats.GQuarantineRows] != 1 || v[opstats.GQuarantineBytes] != 2 || q.CountsApprox || q.OldestApprox {
+		v[opstats.GQuarantineRows] != 1 || v[opstats.GQuarantineBytes] != 2 || anyApprox(q) {
 		t.Fatalf("sample = %+v", q)
 	}
 	for g := opstats.Gauge(0); g < opstats.NumGauges; g++ {
@@ -91,8 +91,8 @@ func TestOldestIsTheTrueMinimumOfReceivedAtNotTheLowestID(t *testing.T) {
 	e.exec(`UPDATE magnetico_ingest.queue SET received_at = now() - interval '3 hours' WHERE id = (SELECT max(id) FROM magnetico_ingest.queue)`)
 	q := e.sampleQueue(testLimits)
 	age := q.Values[opstats.GOldestAgeSeconds]
-	if !q.Valid[opstats.GOldestAgeSeconds] || age < 3*3600-60 || age > 3*3600+60 || q.OldestApprox {
-		t.Fatalf("oldest age = %d s (approx %v), want about 3 h: the true minimum of received_at, not the age of the lowest id", age, q.OldestApprox)
+	if !q.Valid[opstats.GOldestAgeSeconds] || age < 3*3600-60 || age > 3*3600+60 || approx(q, opstats.GOldestAgeApprox) {
+		t.Fatalf("oldest age = %d s (approx %v), want about 3 h: the true minimum of received_at, not the age of the lowest id", age, approx(q, opstats.GOldestAgeApprox))
 	}
 	// An empty queue has no pending record: age 0, exact.
 	e.exec(`DELETE FROM magnetico_ingest.queue`)
@@ -117,11 +117,11 @@ func TestFallbacksAreIndependentPerQuantityAndAStatementTimeoutDoesNotAbortTheTr
 	var q opstats.QueueState
 	for attempt := 0; attempt < 3; attempt++ { // the aggregate must really be slower than the budget
 		q = e.sampleQueue(lim)
-		if q.CountsApprox {
+		if approx(q, opstats.GQueueRowsApprox) {
 			break
 		}
 	}
-	if !q.CountsApprox {
+	if !approx(q, opstats.GQueueRowsApprox) {
 		t.Skip("the aggregate over 700k rows finished within 15 ms on this machine")
 	}
 	if !q.Valid[opstats.GQueueRows] || q.Values[opstats.GQueueRows] < 600_000 {
@@ -130,8 +130,12 @@ func TestFallbacksAreIndependentPerQuantityAndAStatementTimeoutDoesNotAbortTheTr
 	if q.Valid[opstats.GQueueBytes] {
 		t.Fatal("a byte total was reported although the exact query timed out: bytes are never estimated")
 	}
-	if !q.Valid[opstats.GOldestAgeSeconds] || !q.OldestApprox {
-		t.Fatalf("oldest age: valid %v approx %v, want the flagged fallback", q.Valid[opstats.GOldestAgeSeconds], q.OldestApprox)
+	if !q.Valid[opstats.GOldestAgeSeconds] || !approx(q, opstats.GOldestAgeApprox) {
+		t.Fatalf("oldest age: valid %v approx %v, want the flagged fallback", q.Valid[opstats.GOldestAgeSeconds], approx(q, opstats.GOldestAgeApprox))
+	}
+	// The flags are per quantity: the quarantine was counted exactly and says so.
+	if !q.Valid[opstats.GQuarantineRowsApprox] || approx(q, opstats.GQuarantineRowsApprox) {
+		t.Fatalf("the exact quarantine count must carry its own, unset flag: valid %v set %v", q.Valid[opstats.GQuarantineRowsApprox], approx(q, opstats.GQuarantineRowsApprox))
 	}
 	if !q.Valid[opstats.GQuotaUsedBytes] || q.Values[opstats.GQuotaUsedBytes] != 700_000 || !q.Valid[opstats.GQuarantineRows] || q.Values[opstats.GQuarantineRows] != 0 {
 		t.Fatalf("the quota and the quarantine were not answered after the timeout: %+v", q)
@@ -352,4 +356,45 @@ func TestFirstHeartbeatIsPublishedImmediatelyOnceReady(t *testing.T) {
 	go func() { defer close(done); e.w.heartbeatLoop(ctx) }()
 	defer func() { cancel(); <-done }()
 	waitFor(t, "a snapshot long before the first tick", func() bool { return e.n(`SELECT count(*) FROM magnetico_stats.snapshot`) == 1 })
+}
+
+// approx reports whether the sample flagged a quantity as an estimate.
+func approx(q opstats.QueueState, g opstats.Gauge) bool { return q.Valid[g] && q.Values[g] == 1 }
+
+func anyApprox(q opstats.QueueState) bool {
+	return approx(q, opstats.GQueueRowsApprox) || approx(q, opstats.GQuarantineRowsApprox) || approx(q, opstats.GOldestAgeApprox)
+}
+
+// TestQueueSampleStoresTheUtilisationOfTheQuotaInForceAtSampleTime (Task 09A):
+// the utilisation is recorded per observation, with the quota configured when
+// the sample was taken, so changing the quota later cannot rewrite history.
+func TestQueueSampleStoresTheUtilisationOfTheQuotaInForceAtSampleTime(t *testing.T) {
+	e := newWEnv(t, nil)
+	e.insertQueue(7, "") // 7 bytes used
+	cases := []struct {
+		quota int64
+		ppm   int64
+		valid bool
+	}{{14, 500_000, true}, {7, 1_000_000, true}, {3, 2_333_333, true}, {1 << 40, 0, true}, {0, 0, false}, {-5, 0, false}}
+	for _, c := range cases {
+		q, err := sampleQueue(bg, e.w.samplePool, e.clock.Now(), testLimits, c.quota)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if q.Valid[opstats.GQuotaUtilisationPPM] != c.valid || (c.valid && q.Values[opstats.GQuotaUtilisationPPM] != c.ppm) {
+			t.Errorf("quota %d: utilisation valid=%v ppm=%d, want valid=%v ppm=%d", c.quota, q.Valid[opstats.GQuotaUtilisationPPM], q.Values[opstats.GQuotaUtilisationPPM], c.valid, c.ppm)
+		}
+	}
+}
+
+func TestUtilisationPPMDoesNotOverflowForLargeQuotas(t *testing.T) {
+	if got, ok := utilisationPPM(1<<61, 1<<62); !ok || got != 500_000 {
+		t.Fatalf("(2^61 of 2^62) = %d %v, want 500000", got, ok)
+	}
+	if got, ok := utilisationPPM(1<<62, 1); !ok || got <= 0 {
+		t.Fatalf("a usage far above the quota must saturate, not wrap: %d %v", got, ok)
+	}
+	if _, ok := utilisationPPM(5, 0); ok {
+		t.Fatal("no quota configured: unavailable")
+	}
 }
