@@ -58,7 +58,7 @@ for arch in amd64 arm64; do
 		fail "cannot read $archive"
 		continue
 	}
-	for f in magnetico COPYING README.md UPGRADE.md licenses/swagger-ui-LICENSE licenses/swagger-ui-NOTICE licenses/swagger-ui-bundle.js.LICENSE.txt; do
+	for f in magnetico COPYING README.md UPGRADE.md licenses/swagger-ui-LICENSE licenses/swagger-ui-NOTICE licenses/swagger-ui-bundle.js.LICENSE.txt licenses/uplot-LICENSE; do
 		if printf '%s\n' "$listing" | grep -qx "$f"; then :; else fail "$archive lacks $f"; fi
 	done
 	mkdir -p "$work/$arch"

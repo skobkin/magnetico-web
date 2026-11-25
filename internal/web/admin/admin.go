@@ -117,8 +117,17 @@ type rateRow struct {
 	ExcludedNotice []string
 }
 
+type chartCard struct{ Key, Title string }
+
+// charts are the five chart groups of the dashboard (docs/specs/statistics-v1.md §9).
+var charts = []chartCard{
+	{stats.ChartThroughput, "Throughput"}, {stats.ChartOutcomes, "Outcomes of processing"}, {stats.ChartQueue, "Queue and quota"},
+	{stats.ChartTraffic, "Traffic and efficiency"}, {stats.ChartStorage, "Storage"},
+}
+
 type overviewPage struct {
 	chrome
+	Charts                               []chartCard
 	Schema, SchemaClass, Problem         string
 	Ingest, IngestClass                  string
 	Queue, QueueClass                    string
@@ -161,7 +170,7 @@ func (h *Handlers) overview(w http.ResponseWriter, r *http.Request) {
 func errType(err error) string { return strings.TrimPrefix(strings.TrimPrefix(typeName(err), "*"), "") }
 
 func buildOverview(c chrome, o stats.Overview, f stats.Freshness) overviewPage {
-	pg := overviewPage{chrome: c, Problem: o.Problem, Stale: f.Stale, FetchedAt: f.FetchedAt.UTC().Format("2006-01-02 15:04:05 UTC")}
+	pg := overviewPage{chrome: c, Charts: charts, Problem: o.Problem, Stale: f.Stale, FetchedAt: f.FetchedAt.UTC().Format("2006-01-02 15:04:05 UTC")}
 	pg.Schema = stateText(o.Schema, 0)
 	pg.SchemaClass = stateClass(o.Schema)
 	pg.Ingest, pg.IngestClass = stateText(f.Ingest, 0), stateClass(f.Ingest)
@@ -406,6 +415,7 @@ type seriesJSON struct {
 		Key    string     `json:"key"`
 		Label  string     `json:"label"`
 		Unit   string     `json:"unit"`
+		Group  string     `json:"group"`
 		Stack  bool       `json:"stack,omitempty"`
 		Values []*float64 `json:"values"`
 	} `json:"lines"`
@@ -464,9 +474,10 @@ func (h *Handlers) seriesJSON(w http.ResponseWriter, r *http.Request) {
 			Key    string     `json:"key"`
 			Label  string     `json:"label"`
 			Unit   string     `json:"unit"`
+			Group  string     `json:"group"`
 			Stack  bool       `json:"stack,omitempty"`
 			Values []*float64 `json:"values"`
-		}{l.Key, l.Label, l.Unit, l.Stack, l.Values})
+		}{l.Key, l.Label, l.Unit, l.Group, l.Stack, l.Values})
 	}
 	out.Freshness = freshJSON(f)
 	writeJSON(w, out)

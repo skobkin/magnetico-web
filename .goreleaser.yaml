@@ -64,6 +64,10 @@ archives:
         dst: licenses/swagger-ui-bundle.js.LICENSE.txt
         info:
           mtime: "{{ .CommitDate }}"
+      - src: third_party/uplot-1.6.32/LICENSE
+        dst: licenses/uplot-LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: checksums.txt

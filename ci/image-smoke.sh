@@ -119,7 +119,7 @@ case "$ID" in *"uid=10001"*"gid=10001"*) pass "id: $ID" ;; *) fail "id reports: 
 check "no Go toolchain or source tree in the image" sh_in '! command -v go && ! test -e /usr/local/go && ! test -e /src && ! test -e /go'
 check "system CA bundle present" sh_in 'test -s /etc/ssl/certs/ca-certificates.crt'
 check "/data and /reports exist and belong to 10001:10001" sh_in '[ "$(stat -c %u:%g /data)" = 10001:10001 ] && [ "$(stat -c %u:%g /reports)" = 10001:10001 ]'
-check "licence files present" sh_in 'test -s /usr/share/licenses/magnetico/COPYING && test -s /usr/share/licenses/magnetico/swagger-ui-LICENSE && test -s /usr/share/licenses/magnetico/swagger-ui-NOTICE'
+check "licence files present" sh_in 'test -s /usr/share/licenses/magnetico/COPYING && test -s /usr/share/licenses/magnetico/swagger-ui-LICENSE && test -s /usr/share/licenses/magnetico/swagger-ui-NOTICE && test -s /usr/share/licenses/magnetico/uplot-LICENSE'
 check "IANA time zone data is embedded in the executable (no zoneinfo in the image)" sh_in '! test -d /usr/share/zoneinfo && grep -q Europe/Moscow /usr/local/bin/magnetico'
 check "Swagger UI bundle is embedded in the executable" sh_in 'grep -q SwaggerUIBundle /usr/local/bin/magnetico'
 check "executable is not writable by the runtime user" sh_in '! test -w /usr/local/bin/magnetico'

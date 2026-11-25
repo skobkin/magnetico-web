@@ -75,6 +75,15 @@ The container smoke test, the image scan, the native archive smoke test and the 
 
 ## Explicit manual execution only
 
+**Front-end self-tests** (`internal/web/ui/jstest/admin_test.js`: gaps, no-data and error states, summary table, untrusted
+strings against a fake DOM). The repository has no JavaScript toolchain, so they are not part of `go test` (the Go suite pins
+the source invariants of `admin.js` and the vendored uPlot statically, `internal/web/ui/admin_assets_test.go`). Run them with
+any Node 20+ (no packages):
+
+```sh
+docker run --rm -v "$PWD":/w -w /w node:22-alpine node internal/web/ui/jstest/admin_test.js
+```
+
 None of these is run by CI. Each needs a disposable target; the load and dataset harnesses additionally refuse any
 database that is not the confirmed, local, benchmark-shaped one.
 

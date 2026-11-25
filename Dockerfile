@@ -65,6 +65,7 @@ COPY COPYING /usr/share/licenses/magnetico/COPYING
 COPY third_party/swagger-ui-dist-5.34.1/LICENSE /usr/share/licenses/magnetico/swagger-ui-LICENSE
 COPY third_party/swagger-ui-dist-5.34.1/NOTICE /usr/share/licenses/magnetico/swagger-ui-NOTICE
 COPY third_party/swagger-ui-dist-5.34.1/swagger-ui-bundle.js.LICENSE.txt /usr/share/licenses/magnetico/swagger-ui-bundle.js.LICENSE.txt
+COPY third_party/uplot-1.6.32/LICENSE /usr/share/licenses/magnetico/uplot-LICENSE
 
 LABEL org.opencontainers.image.title="Magnetico Web" \
       org.opencontainers.image.description="Magnetico: DHT crawler, ingest service, private web UI and API, and the migration tooling, in one executable" \

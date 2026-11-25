@@ -31,8 +31,11 @@ type Query struct{ Chart, Granularity, Period string }
 // a measured zero.
 type Line struct {
 	Key, Label, Unit string
-	Stack            bool // drawn stacked with the other Stack lines
-	Values           []*float64
+	// Group says which plot of the chart the line belongs to: lines of one chart
+	// with different units or magnitudes are never drawn on one axis.
+	Group  string
+	Stack  bool // drawn stacked with the other Stack lines of its group
+	Values []*float64
 }
 
 // Series is the answer to a Query.
@@ -135,8 +138,8 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 			s.Partial[i] = true
 		}
 	}
-	line := func(key, label, unit string, stack bool, f func(r *bucketRow) *float64) {
-		l := Line{Key: key, Label: label, Unit: unit, Stack: stack, Values: make([]*float64, len(buckets))}
+	line := func(group, key, label, unit string, stack bool, f func(r *bucketRow) *float64) {
+		l := Line{Key: key, Label: label, Unit: unit, Group: group, Stack: stack, Values: make([]*float64, len(buckets))}
 		for i, b := range buckets {
 			if r := rows[b]; r != nil {
 				l.Values[i] = f(r)
@@ -149,17 +152,17 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 	}
 	switch q.Chart {
 	case ChartThroughput:
-		line("received", "Received", "records", false, cnt(opstats.CRecordsReceived))
-		line("acknowledged", "Acknowledged", "records", false, cnt(opstats.CRecordsAcknowledged))
-		line("enqueued", "Enqueued", "records", false, cnt(opstats.CRecordsEnqueued))
-		line("settled", "Settled", "records", false, func(r *bucketRow) *float64 {
+		line("Records", "received", "Received", "records", false, cnt(opstats.CRecordsReceived))
+		line("Records", "acknowledged", "Acknowledged", "records", false, cnt(opstats.CRecordsAcknowledged))
+		line("Records", "enqueued", "Enqueued", "records", false, cnt(opstats.CRecordsEnqueued))
+		line("Records", "settled", "Settled", "records", false, func(r *bucketRow) *float64 {
 			return ptr(r.c[opstats.CSettledStoredNew] + r.c[opstats.CSettledStoredExisting] + r.c[opstats.CSettledQuarantined])
 		})
 	case ChartOutcomes:
-		line("stored_new", "Stored (new)", "records", true, cnt(opstats.CSettledStoredNew))
-		line("stored_existing", "Stored (already present)", "records", true, cnt(opstats.CSettledStoredExisting))
-		line("quarantined", "Quarantined", "records", true, cnt(opstats.CSettledQuarantined))
-		line("torrents_created", "Torrents created", "records", false, cnt(opstats.CTorrentsCreated))
+		line("Settled records", "stored_new", "Stored (new)", "records", true, cnt(opstats.CSettledStoredNew))
+		line("Settled records", "stored_existing", "Stored (already present)", "records", true, cnt(opstats.CSettledStoredExisting))
+		line("Settled records", "quarantined", "Quarantined", "records", true, cnt(opstats.CSettledQuarantined))
+		line("Settled records", "torrents_created", "Torrents created", "records", false, cnt(opstats.CTorrentsCreated))
 	case ChartQueue:
 		gaugeAvg := func(g opstats.Gauge) func(r *bucketRow) *float64 {
 			return func(r *bucketRow) *float64 {
@@ -177,10 +180,10 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 				return nil
 			}
 		}
-		line("queue_avg", "Queue depth (average)", "records", false, gaugeAvg(opstats.GQueueRows))
-		line("queue_max", "Queue depth (maximum)", "records", false, gaugeMax(opstats.GQueueRows))
-		line("quarantine", "Quarantine (maximum)", "records", false, gaugeMax(opstats.GQuarantineRows))
-		line("quota", "Quota used (average)", "ratio", false, func(r *bucketRow) *float64 {
+		line("Queue depth", "queue_avg", "Queue depth (average)", "records", false, gaugeAvg(opstats.GQueueRows))
+		line("Queue depth", "queue_max", "Queue depth (maximum)", "records", false, gaugeMax(opstats.GQueueRows))
+		line("Queue depth", "quarantine", "Quarantine (maximum)", "records", false, gaugeMax(opstats.GQuarantineRows))
+		line("Quota used", "quota", "Quota used (average)", "ratio", false, func(r *bucketRow) *float64 {
 			a := r.g[opstats.GQuotaUsedBytes]
 			if !a.Valid || a.N == 0 || !quotaMax.Valid || quotaMax.Value <= 0 {
 				return nil
@@ -188,36 +191,36 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 			return ratio(a.Sum, a.N*quotaMax.Value)
 		})
 	case ChartTraffic:
-		line("bytes", "Request bytes", "bytes", false, cnt(opstats.CBytesBody))
-		line("record_size", "Mean record size", "bytes", false, func(r *bucketRow) *float64 {
+		line("Request bytes", "bytes", "Request bytes", "bytes", false, cnt(opstats.CBytesBody))
+		line("Mean record size", "record_size", "Mean record size", "bytes", false, func(r *bucketRow) *float64 {
 			return ratio(r.c[opstats.CBytesAccepted], r.c[opstats.CRecordsEnqueued])
 		})
-		line("hashes_per_request", "Mean hashes per existence request", "hashes", false, func(r *bucketRow) *float64 {
+		line("Mean batch size", "hashes_per_request", "Mean hashes per existence request", "hashes", false, func(r *bucketRow) *float64 {
 			return ratio(r.c[opstats.CExistsHashes], r.c[opstats.CExistsRequests])
 		})
-		line("records_per_request", "Mean records per submit request", "records", false, func(r *bucketRow) *float64 {
+		line("Mean batch size", "records_per_request", "Mean records per submit request", "records", false, func(r *bucketRow) *float64 {
 			return ratio(r.c[opstats.CRecordsReceived], r.c[opstats.CSubmitValidated])
 		})
-		line("cache_hit_rate", "Existence cache hit rate", "ratio", false, func(r *bucketRow) *float64 {
+		line("Hit rates", "cache_hit_rate", "Existence cache hit rate", "ratio", false, func(r *bucketRow) *float64 {
 			h := r.c[opstats.CCacheHitPositive] + r.c[opstats.CCacheHitNegative]
 			return ratio(h, h+r.c[opstats.CCacheMiss])
 		})
-		line("auth_hit_rate", "Authentication cache hit rate", "ratio", false, func(r *bucketRow) *float64 {
+		line("Hit rates", "auth_hit_rate", "Authentication cache hit rate", "ratio", false, func(r *bucketRow) *float64 {
 			return ratio(r.c[opstats.CAuthCacheHits], r.c[opstats.CAuthCacheHits]+r.c[opstats.CAuthCacheMisses])
 		})
-		line("rejected", "Rejected requests", "requests", false, func(r *bucketRow) *float64 {
+		line("Rejected requests", "rejected", "Rejected requests", "requests", false, func(r *bucketRow) *float64 {
 			var n int64
 			for c := opstats.CRejectedAuth; c <= opstats.CRejectedInternal; c++ {
 				n = opstats.AddSat(n, r.c[c])
 			}
 			return ptr(n)
 		})
-		line("processing_ms", "Mean processing time", "ms", false, func(r *bucketRow) *float64 {
+		line("Mean processing time", "processing_ms", "Mean processing time", "ms", false, func(r *bucketRow) *float64 {
 			return ratio(r.c[opstats.CProcessingMsSum], r.c[opstats.CProcessingMsCount])
 		})
 	case ChartStorage:
-		sline := func(key, label, unit string, stack bool, f func(r *storageRow) *float64) {
-			l := Line{Key: key, Label: label, Unit: unit, Stack: stack, Values: make([]*float64, len(buckets))}
+		sline := func(group, key, label, unit string, stack bool, f func(r *storageRow) *float64) {
+			l := Line{Key: key, Label: label, Unit: unit, Group: group, Stack: stack, Values: make([]*float64, len(buckets))}
 			for i, b := range buckets {
 				if r := srows[b]; r != nil && r.samples > 0 {
 					l.Values[i] = f(r)
@@ -233,14 +236,14 @@ func buildSeries(q Query, buckets []time.Time, rows map[time.Time]*bucketRow, sr
 				return nil
 			}
 		}
-		sline("torrents_table", "Torrents table", "bytes", true, last(opstats.MTorrentsTable))
-		sline("blobs_table", "File lists table", "bytes", true, last(opstats.MBlobsTable))
-		sline("indexes", "Indexes", "bytes", true, last(opstats.MIndexes))
-		sline("other", "Other", "bytes", true, last(opstats.MOther))
-		sline("magneticod_total", "magneticod total", "bytes", false, last(opstats.MMagneticodTotal))
-		sline("ingest_total", "Ingest queue schema", "bytes", false, last(opstats.MIngestTotal))
-		sline("database_total", "Database", "bytes", false, last(opstats.MDatabaseTotal))
-		sline("bytes_per_torrent", "Bytes per torrent (ratio of sums)", "bytes", false, func(r *storageRow) *float64 { return ratio(r.bptB, r.bptT) })
+		sline("Size", "torrents_table", "Torrents table", "bytes", true, last(opstats.MTorrentsTable))
+		sline("Size", "blobs_table", "File lists table", "bytes", true, last(opstats.MBlobsTable))
+		sline("Size", "indexes", "Indexes", "bytes", true, last(opstats.MIndexes))
+		sline("Size", "other", "Other", "bytes", true, last(opstats.MOther))
+		sline("Size", "magneticod_total", "magneticod total", "bytes", false, last(opstats.MMagneticodTotal))
+		sline("Size", "ingest_total", "Ingest queue schema", "bytes", false, last(opstats.MIngestTotal))
+		sline("Size", "database_total", "Database", "bytes", false, last(opstats.MDatabaseTotal))
+		sline("Bytes per torrent", "bytes_per_torrent", "Bytes per torrent (ratio of sums)", "bytes", false, func(r *storageRow) *float64 { return ratio(r.bptB, r.bptT) })
 	}
 	return s
 }

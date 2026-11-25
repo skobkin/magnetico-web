@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -368,4 +369,71 @@ func TestWebStartsWithoutTheStatsSchemaAndSaysSo(t *testing.T) {
 	default:
 	}
 	_ = io.Discard
+}
+
+// The Content-Security-Policy of the administrator pages is byte-identical to the site's
+// and to the value this milestone started from: the charts needed no relaxation.
+func TestCSPHeaderIsUnchanged(t *testing.T) {
+	w := adminWorld(t)
+	bob := w.browserFor("bob")
+	const want = "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+	for _, p := range []string{"/admin", "/admin/api/overview", "/torrents"} {
+		if got := bob.get(p).Header.Get("Content-Security-Policy"); got != want {
+			t.Errorf("%s: CSP %q, want %q", p, got, want)
+		}
+	}
+}
+
+var assetRef = regexp.MustCompile(`(?:src|href)="(/static/[^"]+)"`)
+
+func TestAdminPagesLoadOnlySameOriginAssets(t *testing.T) {
+	w := adminWorld(t)
+	bob := w.browserFor("bob")
+	bob.get("/admin")
+	body := bob.body
+	if regexp.MustCompile(`(?i)<script[^>]*>[^<]|\son[a-z]+\s*=|\sstyle\s*=|<style`).MatchString(body) {
+		t.Error("the rendered page has inline script, inline style or an event handler (the CSP would block them)")
+	}
+	for _, m := range regexp.MustCompile(`(?:src|href|action)="([^"]*)"`).FindAllStringSubmatch(body, -1) {
+		u := m[1]
+		if strings.HasPrefix(u, "http") || strings.HasPrefix(u, "//") {
+			if !strings.HasPrefix(u, "https://git.skobk.in/") && !strings.HasPrefix(u, "https://github.com/skobkin/") { // the footer's source links
+				t.Errorf("the page references another origin: %s", u)
+			}
+		}
+	}
+	refs := assetRef.FindAllStringSubmatch(body, -1)
+	seen := map[string]bool{}
+	for _, m := range refs {
+		seen[m[1][strings.LastIndex(m[1], "/")+1:]] = true
+		resp := bob.get(m[1])
+		if resp.StatusCode != 200 {
+			t.Errorf("%s: %d", m[1], resp.StatusCode)
+		}
+		if !strings.Contains(resp.Header.Get("Cache-Control"), "immutable") {
+			t.Errorf("%s is not served immutable", m[1])
+		}
+	}
+	var js, css int
+	for name := range seen {
+		switch {
+		case strings.HasPrefix(name, "uPlot.iife.min.") && strings.HasSuffix(name, ".js"), strings.HasPrefix(name, "admin.") && strings.HasSuffix(name, ".js"):
+			js++
+		case strings.HasPrefix(name, "uPlot.min.") && strings.HasSuffix(name, ".css"), strings.HasPrefix(name, "admin.") && strings.HasSuffix(name, ".css"):
+			css++
+		}
+	}
+	if js != 2 || css != 2 {
+		t.Errorf("the page references %d chart scripts and %d chart stylesheets (assets: %v), want 2 and 2", js, css, seen)
+	}
+	// Five chart cards with a text alternative each; the data is fetched, never embedded.
+	if n := strings.Count(body, `data-chart="`); n != 5 {
+		t.Errorf("%d chart cards, want 5", n)
+	}
+	if n := strings.Count(body, `<details class="chart-summary">`); n != 5 {
+		t.Errorf("%d text summaries, want one per chart", n)
+	}
+	if strings.Contains(body, `"buckets"`) {
+		t.Error("chart data is embedded in the page")
+	}
 }

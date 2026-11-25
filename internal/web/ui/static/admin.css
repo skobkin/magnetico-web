@@ -1,0 +1,35 @@
+/* Administrator section: chart cards. First-party CSS; the colours are the
+   Okabe-Ito colour-blind-safe palette, lightened for the dark theme. */
+:root {
+  --chart-1:#56b4e9; --chart-2:#e69f00; --chart-3:#2fc79a; --chart-4:#f08a5d; --chart-5:#d9a0c8; --chart-6:#f0e442;
+  --chart-grid:#2b393f; --chart-text:#adbfc5; --chart-partial:rgba(160,175,180,0.14);
+}
+:root[data-theme="light"] {
+  --chart-1:#0072b2; --chart-2:#b87800; --chart-3:#008060; --chart-4:#c4501a; --chart-5:#a8527f; --chart-6:#7a6b00;
+  --chart-grid:#dce6e1; --chart-text:#526c6a; --chart-partial:rgba(70,90,85,0.10);
+}
+@media (prefers-color-scheme:light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) {
+    --chart-1:#0072b2; --chart-2:#b87800; --chart-3:#008060; --chart-4:#c4501a; --chart-5:#a8527f; --chart-6:#7a6b00;
+    --chart-grid:#dce6e1; --chart-text:#526c6a; --chart-partial:rgba(70,90,85,0.10);
+  }
+}
+.chart-grid { display:grid; gap:16px; grid-template-columns:repeat(auto-fit, minmax(min(100%, 520px), 1fr)); }
+.chart-card { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface); padding:12px 14px 14px; min-width:0; }
+.chart-card header { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.chart-card h3 { margin:0; font-size:1rem; }
+.chart-controls { display:flex; flex-wrap:wrap; align-items:center; gap:4px; }
+.chart-controls .btn[aria-pressed="true"] { background:var(--accent-bg); border-color:var(--accent); }
+.chart-controls .btn[disabled] { opacity:.45; cursor:default; }
+.chart-period { min-width:6.5em; text-align:center; color:var(--subtext); font-variant-numeric:tabular-nums; }
+.chart-status { margin:8px 0; color:var(--subtext); }
+.chart-status.error { color:var(--danger); }
+.chart-plot { margin-top:10px; }
+.chart-plot-title { margin:0 0 4px; font-size:.85rem; font-weight:600; color:var(--subtext); }
+.chart-canvas { width:100%; min-width:0; overflow:hidden; }
+.chart-card .u-legend { color:var(--chart-text); font-size:.8rem; }
+.chart-summary { margin-top:10px; }
+.chart-summary summary { cursor:pointer; color:var(--subtext); }
+.chart-text { max-height:16em; overflow:auto; margin:6px 0 0; padding:8px; border:1px solid var(--border); border-radius:var(--radius); background:var(--raised);
+  font-size:.78rem; line-height:1.4; tab-size:14; white-space:pre; }
+@media (prefers-reduced-motion:reduce) { .chart-card * { transition:none !important; animation:none !important; } }

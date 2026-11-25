@@ -1,6 +1,7 @@
 {{define "title"}}Administration{{end}}
 {{define "nav"}}{{template "navbar" .}}{{end}}
 {{define "user"}}{{template "userbox" .}}{{end}}
+{{define "head"}}<link rel="stylesheet" href="{{asset "uPlot.min.css"}}"><link rel="stylesheet" href="{{asset "admin.css"}}">{{end}}
 {{define "content"}}
 <div class="page-intro"><div class="page-title-wrap"><h1>Administration</h1><p>Read-only overview of the ingestion service · times in UTC</p></div></div>
 {{template "admintabs" .}}
@@ -57,7 +58,19 @@
 </div></section>
 </div>
 
+<section class="section-card" id="charts"><div class="section-card-head"><div><h2>History</h2><p class="subtext">Counts per bucket and ratios computed from sums, in UTC. Shaded buckets are partial: the process was observed for only part of them, or they are still open. Gaps are periods without data, not zeros.</p></div></div><div class="section-card-body">
+<div class="chart-grid">
+{{range .Charts}}<article class="chart-card" data-chart="{{.Key}}" aria-labelledby="chart-{{.Key}}-title">
+<header><h3 id="chart-{{.Key}}-title">{{.Title}}</h3><div class="chart-controls" role="group" aria-label="Period of {{.Title}}"></div></header>
+<p class="chart-status" role="status" aria-live="polite">Loading…</p>
+<div class="chart-plots"></div>
+<noscript><p class="subtext">Charts need JavaScript. The tables above show the current values.</p></noscript>
+<details class="chart-summary"><summary>Data as text</summary><pre class="chart-text" tabindex="0"></pre></details>
+</article>{{end}}
+</div></div></section>
+
 <section class="section-card" id="library"><div class="section-card-head"><div><h2>Accounts</h2></div></div><div class="section-card-body">
 <div class="kv"><span class="kv-label">Accounts</span><span>{{.UsersTotal}} ({{.UsersActive}} active, {{.UsersAdmins}} administrators)</span></div>
 </div></section>
+<script src="{{asset "uPlot.iife.min.js"}}" defer></script><script src="{{asset "admin.js"}}" defer></script>
 {{end}}

@@ -186,7 +186,7 @@ tar -C .ci/image -cf - . | docker load && sh ci/image-smoke.sh --platform linux/
 
 `goreleaser release --clean` (run by `release-forgejo`) produces `magnetico-web_<version>_linux_{amd64,arm64}.tar.gz`
 and `checksums.txt` (SHA-256), attached to the Forgejo release; each archive holds the `magnetico` executable,
-`COPYING`, `README.md`, `UPGRADE.md` and the Swagger UI licence files under `licenses/`. The executables are static
+`COPYING`, `README.md`, `UPGRADE.md` and the licence files of the vendored front-end libraries under `licenses/` (the Swagger UI files and `uplot-LICENSE`; the image carries the same under `/usr/share/licenses/magnetico/`). A missing licence file fails `ci/native-smoke.sh`, `ci/image-smoke.sh` and `internal/repocheck`. The executables are static
 (`CGO_ENABLED=0`), built with `-trimpath` and no build tags, with the version, commit, Go version and platform printed by
 `magnetico --version` (the same linker values as the image). **Only Linux amd64 and arm64** are built: the crawler's
 queue lock has Unix and "other" implementations, and no behaviour of the UDP crawler, queue locking or the cgroup-based

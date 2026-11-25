@@ -93,7 +93,7 @@ func writeArchive(t *testing.T, path, binary string, omit string) {
 		t.Fatal(err)
 	}
 	add("magnetico", bin, 0o755)
-	for _, n := range []string{"COPYING", "README.md", "UPGRADE.md", "licenses/swagger-ui-LICENSE", "licenses/swagger-ui-NOTICE", "licenses/swagger-ui-bundle.js.LICENSE.txt"} {
+	for _, n := range []string{"COPYING", "README.md", "UPGRADE.md", "licenses/swagger-ui-LICENSE", "licenses/swagger-ui-NOTICE", "licenses/swagger-ui-bundle.js.LICENSE.txt", "licenses/uplot-LICENSE"} {
 		add(n, []byte("text of "+n), 0o644)
 	}
 	_ = tw.Close()
@@ -177,7 +177,7 @@ func TestNativeSmokeFailsOnAChecksumMismatch(t *testing.T) {
 }
 
 func TestNativeSmokeFailsWhenALicenceFileIsMissing(t *testing.T) {
-	for _, f := range []string{"COPYING", "licenses/swagger-ui-NOTICE", "UPGRADE.md"} {
+	for _, f := range []string{"COPYING", "licenses/swagger-ui-NOTICE", "licenses/uplot-LICENSE", "UPGRADE.md"} {
 		if out, code := nativeSmoke(t, makeDist(t, "0.8.0-rc.0", distOpts{omitLicence: f}), "0.8.0-rc.0"); code == 0 {
 			t.Fatalf("missing %s must fail:\n%s", f, out)
 		}
