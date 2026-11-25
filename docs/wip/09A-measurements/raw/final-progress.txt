@@ -1,0 +1,20 @@
+2026-11-25T12:43:04Z commit 6f33f1670448cd25421f8246fff7828d091c4fc6
+2026-11-25T12:43:04Z build
+2026-11-25T12:43:06Z build exit 0
+2026-11-25T12:43:06Z vet
+2026-11-25T12:43:07Z vet exit 0
+2026-11-25T12:43:07Z lint
+2026-11-25T12:43:11Z lint exit 0
+2026-11-25T12:43:11Z test
+2026-11-25T12:49:15Z test exit 1
+2026-11-25T12:49:15Z census exit 0
+2026-11-25T12:49:15Z race
+2026-11-25T12:56:27Z race exit 1
+2026-11-25T12:56:28Z race census exit 0
+2026-11-25T12:56:28Z govulncheck
+2026-11-25T12:56:38Z govulncheck exit 0
+2026-11-25T12:56:38Z default-parallelism test
+2026-11-25T13:02:16Z default-parallelism test exit 1
+2026-11-25T13:02:16Z default-parallelism race
+2026-11-25T13:08:49Z default-parallelism race exit 1
+2026-11-25T13:08:49Z done

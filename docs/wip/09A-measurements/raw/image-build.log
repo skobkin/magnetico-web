@@ -1,0 +1,214 @@
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 5.10kB done
+#1 DONE 0.0s
+
+#2 resolve image config for docker-image://docker.io/docker/dockerfile:1
+#2 DONE 1.1s
+
+#3 docker-image://docker.io/docker/dockerfile:1@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
+#3 resolve docker.io/docker/dockerfile:1@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183 done
+#3 sha256:03f648a05b5780c2a0e4b43c93eb1838c6b9b32131b25f4199f42a788d106315 3.15MB / 15.19MB 0.2s
+#3 sha256:03f648a05b5780c2a0e4b43c93eb1838c6b9b32131b25f4199f42a788d106315 15.19MB / 15.19MB 0.3s done
+#3 extracting sha256:03f648a05b5780c2a0e4b43c93eb1838c6b9b32131b25f4199f42a788d106315 0.1s done
+#3 DONE 0.3s
+
+#4 resolve image config for docker-image://docker.io/docker/buildkit-syft-scanner:stable-1
+#4 DONE 1.1s
+
+#5 [linux/arm64 internal] load metadata for docker.io/library/alpine:3.24
+#5 ...
+
+#6 [linux/amd64 internal] load metadata for docker.io/library/golang:1.27.4-alpine3.24
+#6 DONE 1.1s
+
+#5 [linux/arm64 internal] load metadata for docker.io/library/alpine:3.24
+#5 DONE 1.1s
+
+#7 [linux/amd64 internal] load metadata for docker.io/library/alpine:3.24
+#7 DONE 1.1s
+
+#8 [internal] load .dockerignore
+#8 transferring context: 544B done
+#8 DONE 0.0s
+
+#9 [internal] load build context
+#9 transferring context: 4.25MB 0.0s done
+#9 DONE 0.0s
+
+#10 [linux/amd64 rootfs 1/2] FROM docker.io/library/alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+#10 resolve docker.io/library/alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf done
+#10 extracting sha256:881fc932939efef04ca120ad44bbd2c0917851eb247aa4995428afb1e80ede17 0.0s done
+#10 DONE 0.1s
+
+#11 [linux/arm64 stage-2  1/11] FROM docker.io/library/alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+#11 resolve docker.io/library/alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf done
+#11 ...
+
+#12 docker-image://docker.io/docker/buildkit-syft-scanner:stable-1
+#12 resolve docker.io/docker/buildkit-syft-scanner:stable-1 0.2s done
+#12 DONE 0.2s
+
+#11 [linux/arm64 stage-2  1/11] FROM docker.io/library/alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
+#11 sha256:b90627b8f4292fd3cb63f0f27f0b11c37f04ba88ef3b78d4948ea0ace18c85e9 2.10MB / 4.19MB 0.2s
+#11 sha256:b90627b8f4292fd3cb63f0f27f0b11c37f04ba88ef3b78d4948ea0ace18c85e9 4.19MB / 4.19MB 0.2s done
+#11 extracting sha256:b90627b8f4292fd3cb63f0f27f0b11c37f04ba88ef3b78d4948ea0ace18c85e9 0.1s done
+#11 DONE 0.2s
+
+#13 [linux/amd64 rootfs 2/2] RUN set -eu;     mkdir -p /out/etc /out/data /out/reports;     cp /etc/passwd /etc/group /out/etc/;     echo 'magnetico:x:10001:10001:magnetico:/nonexistent:/sbin/nologin' >> /out/etc/passwd;     echo 'magnetico:x:10001:' >> /out/etc/group
+#13 DONE 0.1s
+
+#14 [linux/amd64 stage-2  2/11] COPY --from=rootfs /out/etc/passwd /out/etc/group /etc/
+#14 DONE 0.0s
+
+#15 [linux/amd64 stage-2  3/11] COPY --from=rootfs --chown=10001:10001 /out/data /data
+#15 DONE 0.0s
+
+#16 [linux/amd64 stage-2  4/11] COPY --from=rootfs --chown=10001:10001 /out/reports /reports
+#16 DONE 0.0s
+
+#17 [linux/arm64 stage-2  2/11] COPY --from=rootfs /out/etc/passwd /out/etc/group /etc/
+#17 DONE 0.0s
+
+#18 [linux/arm64 stage-2  3/11] COPY --from=rootfs --chown=10001:10001 /out/data /data
+#18 DONE 0.0s
+
+#19 [linux/arm64 stage-2  4/11] COPY --from=rootfs --chown=10001:10001 /out/reports /reports
+#19 DONE 0.0s
+
+#20 [linux/amd64 build 1/7] FROM docker.io/library/golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280
+#20 resolve docker.io/library/golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 done
+#20 sha256:c050182f513fb753ca709ec66cab639c3c37a5356e5d597ca81bcddcf2aaee91 126B / 126B 0.1s done
+#20 sha256:1d88fd0fb393f123f061aada1719163fe157015d4f15ab0a77954f6b499de6de 244.47kB / 244.47kB 0.2s done
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 0B / 71.22MB 0.2s
+#20 extracting sha256:1d88fd0fb393f123f061aada1719163fe157015d4f15ab0a77954f6b499de6de
+#20 extracting sha256:1d88fd0fb393f123f061aada1719163fe157015d4f15ab0a77954f6b499de6de 0.0s done
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 5.24MB / 71.22MB 0.5s
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 14.68MB / 71.22MB 0.6s
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 23.07MB / 71.22MB 0.8s
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 32.51MB / 71.22MB 0.9s
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 59.77MB / 71.22MB 1.2s
+#20 ...
+
+#12 docker-image://docker.io/docker/buildkit-syft-scanner:stable-1
+#12 sha256:114c69ab61a7183a9760230837f905a72711cd9ad7dbbf6939e8e39830c25dbf 49.59MB / 49.59MB 0.9s done
+#12 extracting sha256:114c69ab61a7183a9760230837f905a72711cd9ad7dbbf6939e8e39830c25dbf 0.2s done
+#12 DONE 1.3s
+
+#20 [linux/amd64 build 1/7] FROM docker.io/library/golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280
+#20 sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 71.22MB / 71.22MB 1.3s done
+#20 extracting sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f
+#20 extracting sha256:83d129a974dd319fef9f5f496bf3a04194c14ba0fbf95635c2d5577185dd0b2f 1.6s done
+#20 DONE 2.9s
+
+#20 [linux/amd64 build 1/7] FROM docker.io/library/golang:1.27.4-alpine3.24@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280
+#20 extracting sha256:c050182f513fb753ca709ec66cab639c3c37a5356e5d597ca81bcddcf2aaee91 done
+#20 extracting sha256:4f4fb700ef54461cfa02571ae0db9a0dc1e0cdb5577484a6d75e68dc38e8acc1 done
+#20 DONE 2.9s
+
+#21 [linux/amd64->arm64 build 2/7] WORKDIR /src
+#21 DONE 0.3s
+
+#22 [linux/amd64->arm64 build 3/7] COPY go.mod go.sum ./
+#22 DONE 0.0s
+
+#23 [linux/amd64->arm64 build 4/7] RUN want="$(sed -n 's/^toolchain go//p' go.mod)"  && have="$(go env GOVERSION | sed 's/^go//')"  && [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n 1)" = "$want" ]  || { echo "the build image has Go $have, go.mod requires at least $want (the security floor)"; exit 1; }
+#23 DONE 0.2s
+
+#24 [linux/amd64 build 4/7] RUN want="$(sed -n 's/^toolchain go//p' go.mod)"  && have="$(go env GOVERSION | sed 's/^go//')"  && [ "$(printf '%s\n%s\n' "$want" "$have" | sort -V | head -n 1)" = "$want" ]  || { echo "the build image has Go $have, go.mod requires at least $want (the security floor)"; exit 1; }
+#24 DONE 0.2s
+
+#25 [linux/amd64 build 5/7] RUN --mount=type=cache,target=/go/pkg/mod go mod download
+#25 DONE 3.9s
+
+#26 [linux/amd64->arm64 build 5/7] RUN --mount=type=cache,target=/go/pkg/mod go mod download
+#26 DONE 3.9s
+
+#27 [linux/amd64->arm64 build 6/7] COPY . .
+#27 DONE 0.0s
+
+#28 [linux/amd64 build 6/7] COPY . .
+#28 DONE 0.0s
+
+#29 [linux/amd64->arm64 build 7/7] RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build     GOOS=linux GOARCH=arm64 go build -trimpath       -ldflags "-s -w -X github.com/skobkin/magnetico-web/internal/buildinfo.Version=0.0.0-qual -X github.com/skobkin/magnetico-web/internal/buildinfo.Commit=3c1d7875eb23f9885f010e7e51a380697a10917c"       -o /out/magnetico ./cmd/magnetico  && go version -m /out/magnetico >/tmp/buildinfo.txt  && grep -q 'CGO_ENABLED=0' /tmp/buildinfo.txt
+#29 ...
+
+#30 [linux/amd64 build 7/7] RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build     GOOS=linux GOARCH=amd64 go build -trimpath       -ldflags "-s -w -X github.com/skobkin/magnetico-web/internal/buildinfo.Version=0.0.0-qual -X github.com/skobkin/magnetico-web/internal/buildinfo.Commit=3c1d7875eb23f9885f010e7e51a380697a10917c"       -o /out/magnetico ./cmd/magnetico  && go version -m /out/magnetico >/tmp/buildinfo.txt  && grep -q 'CGO_ENABLED=0' /tmp/buildinfo.txt
+#30 ...
+
+#29 [linux/amd64->arm64 build 7/7] RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build     GOOS=linux GOARCH=arm64 go build -trimpath       -ldflags "-s -w -X github.com/skobkin/magnetico-web/internal/buildinfo.Version=0.0.0-qual -X github.com/skobkin/magnetico-web/internal/buildinfo.Commit=3c1d7875eb23f9885f010e7e51a380697a10917c"       -o /out/magnetico ./cmd/magnetico  && go version -m /out/magnetico >/tmp/buildinfo.txt  && grep -q 'CGO_ENABLED=0' /tmp/buildinfo.txt
+#29 DONE 22.6s
+
+#31 [linux/arm64 stage-2  5/11] COPY --from=build /out/magnetico /usr/local/bin/magnetico
+#31 DONE 0.0s
+
+#32 [linux/arm64 stage-2  6/11] COPY COPYING /usr/share/licenses/magnetico/COPYING
+#32 DONE 0.0s
+
+#33 [linux/arm64 stage-2  7/11] COPY third_party/swagger-ui-dist-5.34.1/LICENSE /usr/share/licenses/magnetico/swagger-ui-LICENSE
+#33 DONE 0.0s
+
+#34 [linux/arm64 stage-2  8/11] COPY third_party/swagger-ui-dist-5.34.1/NOTICE /usr/share/licenses/magnetico/swagger-ui-NOTICE
+#34 DONE 0.0s
+
+#35 [linux/arm64 stage-2  9/11] COPY third_party/swagger-ui-dist-5.34.1/swagger-ui-bundle.js.LICENSE.txt /usr/share/licenses/magnetico/swagger-ui-bundle.js.LICENSE.txt
+#35 DONE 0.0s
+
+#36 [linux/arm64 stage-2 10/11] COPY third_party/uplot-1.6.32/LICENSE /usr/share/licenses/magnetico/uplot-LICENSE
+#36 DONE 0.0s
+
+#37 [linux/arm64 stage-2 11/11] WORKDIR /data
+#37 DONE 0.0s
+
+#38 [linux/arm64] generating sbom using docker.io/docker/buildkit-syft-scanner:stable-1
+#38 0.168 time="2026-11-25T05:22:04Z" level=info msg="starting syft scanner for buildkit v1.12.1"
+#38 ...
+
+#30 [linux/amd64 build 7/7] RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build     GOOS=linux GOARCH=amd64 go build -trimpath       -ldflags "-s -w -X github.com/skobkin/magnetico-web/internal/buildinfo.Version=0.0.0-qual -X github.com/skobkin/magnetico-web/internal/buildinfo.Commit=3c1d7875eb23f9885f010e7e51a380697a10917c"       -o /out/magnetico ./cmd/magnetico  && go version -m /out/magnetico >/tmp/buildinfo.txt  && grep -q 'CGO_ENABLED=0' /tmp/buildinfo.txt
+#30 DONE 22.9s
+
+#39 [linux/amd64 stage-2  5/11] COPY --from=build /out/magnetico /usr/local/bin/magnetico
+#39 DONE 0.0s
+
+#40 [linux/amd64 stage-2  6/11] COPY COPYING /usr/share/licenses/magnetico/COPYING
+#40 DONE 0.0s
+
+#41 [linux/amd64 stage-2  7/11] COPY third_party/swagger-ui-dist-5.34.1/LICENSE /usr/share/licenses/magnetico/swagger-ui-LICENSE
+#41 DONE 0.0s
+
+#42 [linux/amd64 stage-2  8/11] COPY third_party/swagger-ui-dist-5.34.1/NOTICE /usr/share/licenses/magnetico/swagger-ui-NOTICE
+#42 DONE 0.0s
+
+#43 [linux/amd64 stage-2  9/11] COPY third_party/swagger-ui-dist-5.34.1/swagger-ui-bundle.js.LICENSE.txt /usr/share/licenses/magnetico/swagger-ui-bundle.js.LICENSE.txt
+#43 DONE 0.0s
+
+#44 [linux/amd64 stage-2 10/11] COPY third_party/uplot-1.6.32/LICENSE /usr/share/licenses/magnetico/uplot-LICENSE
+#44 DONE 0.0s
+
+#45 [linux/amd64 stage-2 11/11] WORKDIR /data
+#45 DONE 0.0s
+
+#46 [linux/amd64] generating sbom using docker.io/docker/buildkit-syft-scanner:stable-1
+#46 0.134 time="2026-11-25T05:22:04Z" level=info msg="starting syft scanner for buildkit v1.12.1"
+#46 ...
+
+#38 [linux/arm64] generating sbom using docker.io/docker/buildkit-syft-scanner:stable-1
+#38 DONE 0.7s
+
+#46 [linux/amd64] generating sbom using docker.io/docker/buildkit-syft-scanner:stable-1
+#46 DONE 0.7s
+
+#47 exporting to oci image format
+#47 exporting layers
+#47 exporting layers 0.8s done
+#47 exporting manifest sha256:c55d07aa2f05050d2e6c195ccbd18537b87fe837497e373450c823325185d62e done
+#47 exporting config sha256:c41cb7febf2c47c9c152a9a24a1ea2cde8303d0c636093444e40cc73fb5c6aeb done
+#47 exporting attestation manifest sha256:b8a713e4a4dcb6b86866d5a2a7a59df72377e8210f677963eb8e39ec1d225515
+#47 exporting attestation manifest sha256:b8a713e4a4dcb6b86866d5a2a7a59df72377e8210f677963eb8e39ec1d225515 done
+#47 exporting manifest sha256:41577fdede57831cba64363e342bfca988469a07855b257780f2f6deefae2400 done
+#47 exporting config sha256:d2375261afab64c4e9d0e54d68429ca2e318c8749e05b2c7009c17f6395cb75d done
+#47 exporting attestation manifest sha256:97facd285280963aa16e29c5ad0d60b291793064727d334cc8afc7bbef4a1cec
+#47 exporting attestation manifest sha256:97facd285280963aa16e29c5ad0d60b291793064727d334cc8afc7bbef4a1cec done
+#47 exporting manifest list sha256:1771ec9d7c7d155af87e81a9b03301bb1b8d3816a791bbd132ffb27b40d7fe80 done
+#47 DONE 1.1s

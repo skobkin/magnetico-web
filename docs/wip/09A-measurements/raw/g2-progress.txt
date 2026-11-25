@@ -1,0 +1,14 @@
+2026-11-25T05:20:40Z commit 3c1d7875eb23f9885f010e7e51a380697a10917c; disk: /dev/sda1        14G  4.6G  8.6G  35% /
+2026-11-25T05:20:40Z goreleaser snapshot
+2026-11-25T05:20:51Z goreleaser check exit 0
+2026-11-25T05:21:29Z goreleaser snapshot exit 0
+2026-11-25T05:21:29Z sha256sum -c exit 0
+2026-11-25T05:21:29Z native-smoke exit 0
+2026-11-25T05:21:29Z image build
+2026-11-25T05:22:06Z image build exit 0; disk: /dev/sda1        14G  7.9G  5.4G  60% /
+2026-11-25T05:22:06Z check-attestations exit 0
+2026-11-25T05:22:06Z docker load exit 0
+2026-11-25T05:22:24Z image-smoke exit 0
+2026-11-25T05:22:39Z trivy linux/amd64 exit 0
+2026-11-25T05:22:39Z trivy linux/arm64 exit 0
+2026-11-25T05:22:40Z done

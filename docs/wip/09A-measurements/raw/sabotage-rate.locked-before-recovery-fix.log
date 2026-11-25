@@ -1,0 +1,11 @@
+=== RUN   TestQualifySabotageAtProductionRate
+=== RUN   TestQualifySabotageAtProductionRate/enabled-locked/1
+    stats_sabotage_rate_test.go:314: enabled-locked #1: 199.5 rec/s admitted (target 200), p95 4.3 ms, queue max 49, drain 0 s, tx age max 300 s, dead tuples queue/usage 59855/61028, autovacuums 5, stats catch-up 89 s
+=== RUN   TestQualifySabotageAtProductionRate/enabled-locked/2
+    stats_sabotage_rate_test.go:314: enabled-locked #2: 199.5 rec/s admitted (target 200), p95 4.4 ms, queue max 50, drain 0 s, tx age max 300 s, dead tuples queue/usage 59853/61013, autovacuums 5, stats catch-up 89 s
+--- PASS: TestQualifySabotageAtProductionRate (843.65s)
+    --- PASS: TestQualifySabotageAtProductionRate/enabled-locked/1 (422.55s)
+    --- PASS: TestQualifySabotageAtProductionRate/enabled-locked/2 (421.10s)
+PASS
+ok  	github.com/skobkin/magnetico-web/internal/e2e/cli	843.661s
+exit 0

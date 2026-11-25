@@ -1,0 +1,49 @@
+== image metadata (staged.invalid/magnetico-web:staged)
+ok    runs as 10001:10001
+ok    exec-form entrypoint
+ok    no default command
+ok    no universal healthcheck
+ok    no VOLUME declared
+ok    label title
+ok    label description
+ok    label source
+ok    label licenses
+ok    label version
+ok    label revision
+ok    no secret-like environment variable in the image
+ok    no secret-like word in the image history
+== runtime user and filesystem
+ok    id: uid=10001(magnetico) gid=10001(magnetico) groups=10001(magnetico)
+ok    no Go toolchain or source tree in the image
+ok    system CA bundle present
+ok    /data and /reports exist and belong to 10001:10001
+ok    licence files present
+ok    IANA time zone data is embedded in the executable (no zoneinfo in the image)
+ok    Swagger UI bundle is embedded in the executable
+ok    uPlot (the administrator charts) is embedded in the executable
+ok    executable is not writable by the runtime user
+== executable behaviour (no network, read-only root, all capabilities dropped)
+ok    --version: magnetico 0.0.0-qual (commit 3c1d7875eb23, go1.27.4, linux/amd64)
+ok    no arguments: usage and exit 1
+ok    no arguments: nothing was created in /data
+ok    magnetico web --help exits 0
+ok    magnetico ingest --help exits 0
+ok    magnetico crawl --help exits 0
+ok    magnetico migrate --help exits 0
+ok    magnetico dev --help exits 0
+== writable /data for the runtime user
+ok    fresh named volume at /data is writable
+ok    bind mount owned by 10001:10001 is writable
+touch: /data/probe: Permission denied
+ok    a root-owned bind mount is refused (chown 10001:10001 is required, as documented)
+== web service against a throwaway PostgreSQL
+ok    migrate schema-init and web-schema-init succeeded in the container
+ok    web /healthz answers
+ok    web /readyz answers (database reachable)
+ok    embedded static assets are served (3)
+ok    SIGTERM: web exits 0 (graceful shutdown)
+ok    ingest crawler add registers a crawler and prints its token once
+ok    ingest starts with the image's default environment (MAGNETICO_CRAWL_QUEUE_DIR is tolerated)
+ok    SIGTERM: ingest exits 0 (graceful shutdown)
+
+image smoke test: all checks passed (staged.invalid/magnetico-web:staged)

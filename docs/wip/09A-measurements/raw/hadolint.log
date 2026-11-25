@@ -1,0 +1,11 @@
+Unable to find image 'hadolint/hadolint:v2.14.0-alpine' locally
+v2.14.0-alpine: Pulling from hadolint/hadolint
+c8f581594091: Pulling fs layer
+9824c27679d3: Pulling fs layer
+9824c27679d3: Download complete
+c8f581594091: Download complete
+9824c27679d3: Pull complete
+4f2ae31847c5: Download complete
+c8f581594091: Pull complete
+Digest: sha256:7aba693c1442eb31c0b015c129697cb3b6cb7da589d85c7562f9deb435a6657c
+Status: Downloaded newer image for hadolint/hadolint:v2.14.0-alpine

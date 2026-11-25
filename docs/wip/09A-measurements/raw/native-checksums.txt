@@ -1,0 +1,2 @@
+6a92afc20cefc9bcaab9f57f1470c46ccbfdd7ea13df741355bd6804eb12bbda  magnetico-web_0.7.0-rc2-SNAPSHOT-3c1d7875_linux_amd64.tar.gz
+65e4392d4bf9425117750c05f8a11a80ecaecb254ba9c46563ace24d0c33e5f8  magnetico-web_0.7.0-rc2-SNAPSHOT-3c1d7875_linux_arm64.tar.gz

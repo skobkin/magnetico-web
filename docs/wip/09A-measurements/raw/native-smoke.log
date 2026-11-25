@@ -1,0 +1,12 @@
+ok    checksums.txt verifies every archive
+ok    amd64: the uPlot script is embedded in the executable
+ok    amd64: CGO_ENABLED=0
+ok    amd64: GOARCH=amd64
+ok    amd64: no build tags
+ok    amd64: magnetico 0.7.0-rc2-SNAPSHOT-3c1d7875 (commit 3c1d7875eb23, go1.27.4, linux/amd64)
+ok    amd64: built with Go 1.27.4 (>= 1.27.4)
+ok    arm64: the uPlot script is embedded in the executable
+ok    arm64: CGO_ENABLED=0
+ok    arm64: GOARCH=arm64
+ok    arm64: no build tags
+native smoke test: all checks passed (0.7.0-rc2-SNAPSHOT-3c1d7875)

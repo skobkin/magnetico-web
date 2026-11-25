@@ -73,6 +73,8 @@ The crawler receives its token in `MAGNETICO_CRAWL_INGEST_TOKEN`. Names are 1–
 
 **A flood of invalid tokens** cannot exhaust the database: lookups are limited to 8 at a time with immediate `503 busy` beyond the bounds. Forged tokens may use only a share of those bounds, so a crawler that has authenticated before is still re-validated every 60 seconds during a flood (measured with a 90 s flood of ten million forged requests: no legitimate request failed); a brand-new credential used for the first time during a flood can still get `503 busy` and retries.
 
+**Long open transactions.** Any transaction left open on the database — a forgotten session, a stuck backup job — pins PostgreSQL's vacuum horizon. At production-like rates this raised admission latency by about a millisecond in the measurements (`docs/wip/09A-pre-rc-qualification-report.md`, section 8) and let the hot `magnetico_ingest.usage` row and the queue bloat; it is **not** a property of the statistics (an unrelated idle transaction produced identical numbers) and the statistics themselves tolerate their tables being locked: admission and processing are unaffected, and after the lock is released the persisted totals catch up within one flush tick (about 30 s measured after five minutes of lock).
+
 ## When something looks wrong
 
 | Symptom | Likely cause |

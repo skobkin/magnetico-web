@@ -1,0 +1,32 @@
+=== RUN   TestQualifySabotageAtProductionRate
+=== RUN   TestQualifySabotageAtProductionRate/control/1
+    stats_sabotage_rate_test.go:290: control #1: 199.5 rec/s admitted (target 200), p95 2.6 ms, queue max 50, drain 0 s, tx age max 0 s, dead tuples queue/usage 10212/194, autovacuums 5, stats catch-up 0 s
+=== RUN   TestQualifySabotageAtProductionRate/control-idle-tx/1
+    stats_sabotage_rate_test.go:290: control-idle-tx #1: 199.5 rec/s admitted (target 200), p95 4.3 ms, queue max 50, drain 0 s, tx age max 300 s, dead tuples queue/usage 60046/61211, autovacuums 5, stats catch-up 0 s
+=== RUN   TestQualifySabotageAtProductionRate/enabled/1
+    stats_sabotage_rate_test.go:290: enabled #1: 199.5 rec/s admitted (target 200), p95 2.5 ms, queue max 49, drain 0 s, tx age max 0 s, dead tuples queue/usage 10887/201, autovacuums 5, stats catch-up 29 s
+=== RUN   TestQualifySabotageAtProductionRate/enabled-locked/1
+    stats_sabotage_rate_test.go:271: timed out waiting for the persisted statistics to catch up after the release
+=== RUN   TestQualifySabotageAtProductionRate/control-idle-tx/2
+    stats_sabotage_rate_test.go:290: control-idle-tx #2: 199.5 rec/s admitted (target 200), p95 4.4 ms, queue max 48, drain 0 s, tx age max 300 s, dead tuples queue/usage 59906/61073, autovacuums 5, stats catch-up 0 s
+=== RUN   TestQualifySabotageAtProductionRate/enabled/2
+    stats_sabotage_rate_test.go:290: enabled #2: 199.5 rec/s admitted (target 200), p95 2.6 ms, queue max 48, drain 0 s, tx age max 0 s, dead tuples queue/usage 11897/296, autovacuums 5, stats catch-up 29 s
+=== RUN   TestQualifySabotageAtProductionRate/enabled-locked/2
+    stats_sabotage_rate_test.go:271: timed out waiting for the persisted statistics to catch up after the release
+=== RUN   TestQualifySabotageAtProductionRate/control/2
+    stats_sabotage_rate_test.go:290: control #2: 199.5 rec/s admitted (target 200), p95 2.6 ms, queue max 50, drain 0 s, tx age max 0 s, dead tuples queue/usage 9426/260, autovacuums 5, stats catch-up 0 s
+=== NAME  TestQualifySabotageAtProductionRate
+    stats_sabotage_rate_test.go:148: admitted rate with the statistics locked 0.0 rec/s is 0 % of the control 199.5 rec/s (criterion: at least 90 %)
+--- FAIL: TestQualifySabotageAtProductionRate (2894.59s)
+    --- PASS: TestQualifySabotageAtProductionRate/control/1 (333.27s)
+    --- PASS: TestQualifySabotageAtProductionRate/control-idle-tx/1 (331.75s)
+    --- PASS: TestQualifySabotageAtProductionRate/enabled/1 (360.86s)
+    --- FAIL: TestQualifySabotageAtProductionRate/enabled-locked/1 (422.17s)
+    --- PASS: TestQualifySabotageAtProductionRate/control-idle-tx/2 (331.76s)
+    --- PASS: TestQualifySabotageAtProductionRate/enabled/2 (360.86s)
+    --- FAIL: TestQualifySabotageAtProductionRate/enabled-locked/2 (422.19s)
+    --- PASS: TestQualifySabotageAtProductionRate/control/2 (331.74s)
+FAIL
+FAIL	github.com/skobkin/magnetico-web/internal/e2e/cli	2894.601s
+FAIL
+exit 1

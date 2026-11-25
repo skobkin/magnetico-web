@@ -1,0 +1,20 @@
+2026-11-25T05:22:39Z	INFO	[vuln] Vulnerability scanning is enabled
+2026-11-25T05:22:39Z	INFO	Detected OS	family="alpine" version="3.24.4"
+2026-11-25T05:22:39Z	INFO	[alpine] Detecting vulnerabilities...	os_version="3.24" repository="3.24" pkg_num=16
+2026-11-25T05:22:39Z	INFO	Number of language-specific files	num=1
+2026-11-25T05:22:39Z	INFO	[gobinary] Detecting vulnerabilities...
+2026-11-25T05:22:39Z	WARN	Using severities from other vendors for some vulnerabilities. Read https://trivy.dev/docs/v0.76/guide/scanner/vulnerability#severity-selection for details.
+
+Report Summary
+
+┌─────────────────────────┬──────────┬─────────────────┐
+│         Target          │   Type   │ Vulnerabilities │
+├─────────────────────────┼──────────┼─────────────────┤
+│ /image (alpine 3.24.4)  │  alpine  │        0        │
+├─────────────────────────┼──────────┼─────────────────┤
+│ usr/local/bin/magnetico │ gobinary │        0        │
+└─────────────────────────┴──────────┴─────────────────┘
+Legend:
+- '-': Not scanned
+- '0': Clean (no security findings detected)
+

@@ -1,0 +1,7 @@
+FAIL github.com/skobkin/magnetico-web/internal/repocheck TestStatisticsDocumentLinksResolve
+    === RUN   TestStatisticsDocumentLinksResolve
+        statistics_docs_test.go:265: docs/wip/README.md links to 09A-pre-rc-qualification-report.md, which does not exist
+    --- FAIL: TestStatisticsDocumentLinksResolve (0.00s)
+FAIL package github.com/skobkin/magnetico-web/internal/repocheck
+    FAIL
+    FAIL	github.com/skobkin/magnetico-web/internal/repocheck	3.894s
