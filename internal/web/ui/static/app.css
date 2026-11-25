@@ -247,6 +247,14 @@ code {
   align-self:stretch;
   align-items:center;
   gap:4px;
+  /* may shrink below its content and scroll (an administrator's navigation has an extra link
+     that did not fit a 360 px header, which widened every signed-in page) */
+  min-width:0;
+  overflow-x:auto;
+  scrollbar-width:none;
+}
+.main-nav a {
+  white-space:nowrap;
 }
 .main-nav a {
   padding:8px 12px;
@@ -1479,6 +1487,8 @@ a.table-sort:hover{text-decoration:none}
 .btn.danger{color:var(--danger);border-color:var(--danger);background:transparent}
 .btn.danger:hover{background:var(--danger-bg)}
 .btn[disabled],.btn[aria-disabled="true"]{opacity:.5;pointer-events:none}
+/* Tables of the administrator section are wider than a phone: they scroll inside their card instead of widening the page. */
+.table-wrap{overflow-x:auto;max-width:100%}
 .tabs{display:flex;align-items:center;gap:4px;border-bottom:1px solid var(--border);margin-bottom:16px;overflow-x:auto;scrollbar-width:thin}
 .tab{white-space:nowrap;color:var(--subtext);padding:9px 14px;background:transparent;border:0;border-bottom:2px solid transparent;font-weight:600;text-decoration:none}
 .tab:hover{color:var(--text);text-decoration:none}
