@@ -284,7 +284,13 @@ func TestStatsFailuresNeverAffectAdmissionOrAuthentication(t *testing.T) {
 			}
 			for _, topic := range []string{"statistics: persisting failed", "statistics: publishing the heartbeat failed", "statistics: sampling the queue failed"} {
 				if n := strings.Count(log, topic); n > 1 {
-					t.Errorf("%q logged %d times, want at most once per state change", topic, n)
+					var lines []string
+					for _, l := range strings.Split(log, "\n") {
+						if strings.Contains(l, topic) {
+							lines = append(lines, l)
+						}
+					}
+					t.Errorf("%q logged %d times, want at most once per state change:\n%s", topic, n, strings.Join(lines, "\n"))
 				}
 			}
 			if strings.Contains(log, "mgc_") {

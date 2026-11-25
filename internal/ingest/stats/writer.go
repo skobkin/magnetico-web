@@ -306,6 +306,11 @@ func errClass(err error) string {
 	// is one state and is logged once.
 	var pgErr *pgconn.PgError
 	switch {
+	case errors.As(err, &pgErr) && pgErr.Code == "57014":
+		// query_canceled: the server answered the cancellation of a statement that outran its
+		// deadline before the client's own context expired. The same condition as the
+		// context deadline below; two classes would log one outage twice.
+		return "timeout"
 	case errors.As(err, &pgErr):
 		return "pg:" + pgErr.Code
 	case errors.Is(err, context.DeadlineExceeded):

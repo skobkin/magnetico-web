@@ -656,3 +656,21 @@ func TestRecoveryAppliesTheSealedBatchAndTheCarryInOneFlush(t *testing.T) {
 		t.Fatalf("persisted %d after ONE recovery flush, want 24 (1 + 5 sealed + 7 + 11 carried)", got)
 	}
 }
+
+// A statement that outruns its deadline fails in one of two ways depending on which side
+// notices first: the client's context expires (context.DeadlineExceeded) or the server's
+// cancellation answers first (SQLSTATE 57014, query_canceled). It is one condition and is
+// logged once per state change; the e2e test "statements exceed their timeout" saw the two
+// classes alternate under load and log the failure twice.
+func TestErrClassTreatsAStatementCancelAndAContextDeadlineAsOneCondition(t *testing.T) {
+	t.Parallel()
+	deadline := fmt.Errorf("timeout: %w", context.DeadlineExceeded)
+	cancelled := fmt.Errorf("ERROR: canceling statement due to user request: %w", &pgconn.PgError{Code: "57014"})
+	if a, b := errClass(deadline), errClass(cancelled); a != b {
+		t.Fatalf("the same condition has two classes: %q and %q", a, b)
+	}
+	// other server errors keep their own class
+	if got := errClass(&pgconn.PgError{Code: "42501"}); got != "pg:42501" {
+		t.Fatalf("class of an unrelated server error = %q", got)
+	}
+}
