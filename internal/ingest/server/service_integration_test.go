@@ -211,9 +211,9 @@ func TestServiceRefusesAMissingOrIncompatibleIngestSchema(t *testing.T) {
 
 func TestNoCrawlerRegisteredWarningAtStart(t *testing.T) {
 	dsn := prepareDB(t, true)
-	var logs strings.Builder
+	var logs syncBuffer
 	r := startServiceWithToken(t, dsn, "mgc_"+strings.Repeat("a", 43), func(o *Options) {
-		o.Logger = log.New(&syncWriter{w: &logs}, "", 0)
+		o.Logger = log.New(&logs, "", 0)
 	})
 	if st, _, err := r.post("/torrents", records(recJSON(t, 1))); err != nil || st != http.StatusUnauthorized {
 		t.Fatalf("with no crawler registered: %v %d, want 401", err, st)

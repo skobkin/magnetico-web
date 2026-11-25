@@ -101,17 +101,17 @@ type env struct {
 	srv   *Server
 	ts    *httptest.Server
 	q     *fakeQueue
-	logs  *bytes.Buffer
+	logs  *syncBuffer
 	woken atomic.Int64
 }
 
 func newEnv(t *testing.T, mutate func(*Config)) *env {
 	t.Helper()
-	e := &env{q: &fakeQueue{}, logs: &bytes.Buffer{}}
+	e := &env{q: &fakeQueue{}, logs: &syncBuffer{}}
 	cfg := Config{
 		Auth: okAuth(), Queue: e.q,
 		Exist:      fakeChecker{fn: func(h [][20]byte) existence.Result { return existence.Result{Missing: h} }},
-		Logger:     log.New(&syncWriter{w: e.logs}, "", 0),
+		Logger:     log.New(e.logs, "", 0),
 		OnAdmitted: func() { e.woken.Add(1) },
 	}
 	if mutate != nil {
@@ -127,15 +127,24 @@ func newEnv(t *testing.T, mutate func(*Config)) *env {
 	return e
 }
 
-type syncWriter struct {
+// syncBuffer is a log sink that is safe to read while the service (its statistics writer, its
+// request handlers) is still logging: a plain strings.Builder or bytes.Buffer read in the test
+// races with the writers (found by -race under load, Task 09B).
+type syncBuffer struct {
 	mu sync.Mutex
-	w  io.Writer
+	b  bytes.Buffer
 }
 
-func (s *syncWriter) Write(p []byte) (int, error) {
+func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.w.Write(p)
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func (e *env) post(t *testing.T, path, token, ctype string, body []byte) (*http.Response, []byte) {
