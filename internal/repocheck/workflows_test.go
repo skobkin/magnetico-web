@@ -22,7 +22,9 @@ import (
 const (
 	tagGrammar = `CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+"`
 
-	branch080 = "refactor/0.8.0-unify-and-new-storage"
+	// migrationE2E selects the migration end-to-end tests: the test step skips them and the
+	// migration-e2e step runs them, with the same pattern.
+	migrationE2E = `'^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)'`
 )
 
 type workflowFile struct {
@@ -174,20 +176,23 @@ func TestCIWorkflowRunsOnEveryRequiredEvent(t *testing.T) {
 			t.Errorf("ci.yaml does not run on %s", want)
 		}
 	}
-	// Pushes only on the default branch and the active 0.8.0 branch: every other
-	// branch is verified by its pull request alone (no duplicate pipelines).
+	// Pushes only on master: every other branch is verified by its pull request alone, so
+	// no branch gets two pipelines (owner decision).
 	var branches []string
 	for _, e := range w.doc["when"].([]any) {
 		m := e.(map[string]any)
 		if m["event"] == "push" {
-			for _, b := range m["branch"].([]any) {
-				branches = append(branches, b.(string))
+			switch b := m["branch"].(type) {
+			case string:
+				branches = append(branches, b)
+			case []any:
+				branches = append(branches, toStrings(b)...)
 			}
 		}
 	}
 	sort.Strings(branches)
-	if strings.Join(branches, ",") != "master,"+branch080 {
-		t.Errorf("push branches = %v, want master and %s", branches, branch080)
+	if strings.Join(branches, ",") != "master" {
+		t.Errorf("push branches = %v, want master only", branches)
 	}
 	// A pull request is never excluded: merged-state verification is preserved.
 	for _, e := range w.doc["when"].([]any) {
@@ -207,7 +212,7 @@ func TestMergedStateIsVerifiedForPullRequests(t *testing.T) {
 			t.Errorf("merge-target lacks %q", want)
 		}
 	}
-	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "race", "govulncheck", "openapi", "native-snapshot", "native-smoke"} {
+	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "migration-e2e", "race", "govulncheck", "openapi", "native-snapshot", "native-smoke"} {
 		deps, _ := dependsOn(w.step(t, name)["depends_on"])
 		if !contains(deps, "merge-target") && !transitivelyDependsOn(w, name, "merge-target") {
 			t.Errorf("step %s does not (transitively) wait for merge-target", name)
@@ -527,12 +532,64 @@ func TestNoWorkflowRequestsPrivilegedExecution(t *testing.T) {
 	}
 }
 
-// Every gate of the project runs for every pull request.
+// Every gate of the project is in the verification workflow. All of them run for every
+// pull request except two (owner decision): migration-e2e runs for a pull request only when
+// it changes migration paths, and race never does; both always run for master, tags (so a
+// release waits for them), manual and cron runs.
 func TestEveryGateRunsInTheVerificationWorkflow(t *testing.T) {
 	w := load(t, "ci.yaml")
-	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "race", "govulncheck", "openapi",
+	conditional := map[string]bool{"migration-e2e": true, "race": true}
+	for _, name := range []string{"fmt", "lint", "vet", "build", "test", "migration-e2e", "race", "govulncheck", "openapi",
 		"native-snapshot", "native-smoke", "frontend-selftest", "dockerfile-lint", "workflow-invariants"} {
-		w.step(t, name)
+		s := w.step(t, name)
+		if s["when"] != nil && !conditional[name] {
+			t.Errorf("ci.yaml/%s has a when filter: it must run for every event", name)
+		}
+	}
+	for name := range conditional {
+		ev := events(w.step(t, name)["when"])
+		for _, want := range []string{"push", "tag", "manual", "cron"} {
+			if !ev[want] {
+				t.Errorf("ci.yaml/%s must run on %s", name, want)
+			}
+		}
+	}
+	// race never runs for a pull request; migration-e2e only behind its path filter, and
+	// then for the migration code at least.
+	for _, e := range w.step(t, "race")["when"].([]any) {
+		if events(e.(map[string]any))["pull_request"] {
+			t.Error("ci.yaml/race must not run for a pull request")
+		}
+	}
+	for _, e := range w.step(t, "migration-e2e")["when"].([]any) {
+		m := e.(map[string]any)
+		if !events(m)["pull_request"] {
+			continue
+		}
+		if m["path"] == nil {
+			t.Error("ci.yaml/migration-e2e runs for every pull request: it must have a path filter")
+		} else if !strings.Contains(text(m), "internal/migration/**") {
+			t.Errorf("ci.yaml/migration-e2e's path filter must include internal/migration/**: %v", m["path"])
+		}
+	}
+	// Nothing waits on a step that a when filter can leave out, except a step that is left
+	// out at least as often (race after migration-e2e): Woodpecker does not document what a
+	// required dependency on a filtered-out step does.
+	for _, s := range w.steps() {
+		deps, _ := dependsOn(s["depends_on"])
+		for _, d := range deps {
+			if conditional[d] && s["name"] != "race" {
+				t.Errorf("ci.yaml/%v depends on %s, which does not run for every pull request", s["name"], d)
+			}
+		}
+	}
+	// The migration end-to-end tests are skipped by the main suite and run by their step, with
+	// the same pattern: no test falls between them.
+	if cmd := strings.Join(toStrings(w.step(t, "test")["commands"]), "\n"); !strings.Contains(cmd, "-skip "+migrationE2E) {
+		t.Errorf("ci.yaml/test must skip %s", migrationE2E)
+	}
+	if cmd := strings.Join(toStrings(w.step(t, "migration-e2e")["commands"]), "\n"); !strings.Contains(cmd, "-run "+migrationE2E) {
+		t.Errorf("ci.yaml/migration-e2e must run %s", migrationE2E)
 	}
 	if cmd := strings.Join(toStrings(w.step(t, "race")["commands"]), "\n"); !strings.Contains(cmd, "-race") {
 		t.Error("the race step must run with -race")
@@ -553,19 +610,26 @@ func TestTimingSensitiveSuitesRunAlone(t *testing.T) {
 			t.Errorf("ci.yaml: the test step must wait for %s (it must not share the agent with it)", light)
 		}
 	}
-	if !transitivelyDependsOn(ci, "race", "test") {
-		t.Error("ci.yaml: the race suite must run after the ordinary suite, not beside it")
-	}
 	for _, after := range []string{"govulncheck", "openapi", "native-snapshot", "workflow-invariants"} {
-		if !transitivelyDependsOn(ci, after, "race") {
-			t.Errorf("ci.yaml: %s must run after the race suite, not beside it", after)
+		if !transitivelyDependsOn(ci, after, "test") {
+			t.Errorf("ci.yaml: %s must run after the test suite, not beside it", after)
 		}
+	}
+	// The migration end-to-end tests run after everything else of a pull request, and the
+	// race suite after them: each heavy suite has the agent to itself.
+	for _, before := range []string{"test", "govulncheck", "openapi", "native-smoke", "workflow-invariants", "frontend-selftest"} {
+		if !transitivelyDependsOn(ci, "migration-e2e", before) {
+			t.Errorf("ci.yaml: migration-e2e must run after %s, not beside it", before)
+		}
+	}
+	if !transitivelyDependsOn(ci, "race", "migration-e2e") || !transitivelyDependsOn(ci, "race", "test") {
+		t.Error("ci.yaml: the race suite must run last, after the other suites")
 	}
 }
 
 func TestTestStepsRequirePostgresRunTheCensusAndUseVerifiedParallelism(t *testing.T) {
 	w := load(t, "ci.yaml")
-	for _, step := range []string{"test", "race"} {
+	for _, step := range []string{"test", "migration-e2e", "race"} {
 		s := w.step(t, step)
 		env, _ := s["environment"].(map[string]any)
 		if env["MAGNETICO_TEST_REQUIRE_POSTGRES"] != "1" {
@@ -575,7 +639,8 @@ func TestTestStepsRequirePostgresRunTheCensusAndUseVerifiedParallelism(t *testin
 			t.Errorf("ci.yaml/%s DSN = %q: the harness derives role DSNs without a password, so the service uses trust authentication", step, dsn)
 		}
 		cmds := strings.Join(toStrings(s["commands"]), "\n")
-		for _, want := range []string{"-p 3", "-count=1", "skipcensus"} {
+		// -timeout 20m: internal/e2e/cli alone takes 6 to 10 minutes, close to go test's default.
+		for _, want := range []string{"-p 3", "-count=1", "-timeout 20m", "skipcensus"} {
 			if !strings.Contains(cmds, want) {
 				t.Errorf("ci.yaml/%s lacks %q", step, want)
 			}

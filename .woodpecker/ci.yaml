@@ -1,7 +1,8 @@
-# Verification workflow: every gate of the project runs here, for every pull request: format,
-# lint, vet, build, the whole test suite and the race-enabled suite against a disposable
-# PostgreSQL 17, govulncheck, OpenAPI consistency, the Dockerfile lint, a snapshot build of
-# the native archives with their smoke test, and the frontend self-tests.
+# Verification workflow: every gate of the project runs here: format, lint, vet, build, the
+# test suite against a disposable PostgreSQL 17, govulncheck, OpenAPI consistency, the
+# Dockerfile lint, a snapshot build of the native archives with their smoke test and the
+# frontend self-tests for every pull request; the migration end-to-end tests and the
+# race-enabled suite where they matter (see the steps' when).
 #
 # It holds NO secrets, uses NO privileged execution and never touches a registry:
 # pull-request code runs here. Publication lives in release.yaml (tags only), which
@@ -10,22 +11,27 @@
 # docs/release-engineering.md.
 #
 # Events:
-#   push          master and the 0.8.0 branch only (remove the branch after the 0.8.0
-#                 merge). Every other branch is verified by its pull request alone, so
-#                 a feature branch does not get two pipelines.
+#   push          master only. Every other branch is verified by its pull request alone, so
+#                 no branch gets two pipelines (owner decision).
 #   pull_request  always, never restricted: merged-state verification is kept (see the
-#                 merge-target step). While a pull request from the 0.8.0 branch is
-#                 open that branch has a push and a pull-request pipeline: the one
-#                 accepted duplication.
+#                 merge-target step).
 #   tag           release tags only (MAJOR.MINOR.PATCH, any suffix): release.yaml waits for it.
-#   manual        on demand.
+#   manual        on demand: the full set, race suite included.
+#   cron          an optional scheduled run (configure a cron job in Woodpecker): the full set.
+#
+# What a pull request runs, and what only master, tags, manual and cron runs add:
+#   every event       merge-target, fmt, lint, vet, build, dockerfile-lint, frontend-selftest,
+#                     test, govulncheck, openapi, native-snapshot, native-smoke,
+#                     workflow-invariants
+#   + migration-e2e   always outside pull requests; for a pull request only when it changes
+#                     the migration code or what it is built on (the step's path filter)
+#   + race            never for a pull request (it repeats the whole suite under -race)
 when:
   - event: push
-    branch:
-      - master
-      - refactor/0.8.0-unify-and-new-storage
+    branch: master
   - event: pull_request
   - event: manual
+  - event: cron
   - event: tag
     evaluate: 'CI_COMMIT_TAG matches "^[0-9]+[.][0-9]+[.][0-9]+"'
 
@@ -120,9 +126,12 @@ steps:
       - sh ci/wait-postgres.sh postgres 5432 60
 
   # The whole suite (unit, PostgreSQL integration, real-binary end-to-end, security
-  # regression, fault injection, fuzz seed corpora). -p 3 is the verified
-  # configuration (docs/engineering-standards.md); at the default parallelism the
-  # timing-sensitive tests of issues #52/#53 are unreliable on a busy host.
+  # regression, fault injection, fuzz seed corpora) except the migration end-to-end tests,
+  # which have their own step (migration-e2e; the -skip pattern here and its -run pattern
+  # are the same, so no test falls between them). -p 3 is the verified configuration
+  # (docs/engineering-standards.md); at the default parallelism the timing-sensitive tests
+  # of issues #52/#53 are unreliable on a busy host. -timeout 20m: one package
+  # (internal/e2e/cli) takes 6 to 10 minutes alone, close to go test's default of 10.
   # MAGNETICO_TEST_REQUIRE_POSTGRES=1 makes an unreachable database a failure, and
   # skipcensus fails the run when any test was skipped for a reason that is not on
   # ci/skip-allowlist.txt: a green run cannot be a run of silently skipped tests.
@@ -138,19 +147,41 @@ steps:
       MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
     commands:
       - |
-        go test -p 3 -count=1 -json ./... > /tmp/test.json || {
+        go test -p 3 -count=1 -timeout 20m -json -skip '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./... > /tmp/test.json || {
           echo "go test failed; failures:"
           go run ./ci/skipcensus --failures < /tmp/test.json
           exit 1
         }
       - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/test.json
 
-  # The same suite under the race detector. It runs after (never beside) the ordinary
-  # suite: both are timing-sensitive and -p 3 is verified for a suite that has the agent
-  # to itself. Failures are never rerun.
-  - name: race
-    image: golang:1.27.4-trixie
-    depends_on: [test]
+  # The end-to-end tests of the offline migrator (crash and resume, lost commits, source
+  # drift, lock exclusion, the binary smoke tests): the slowest tests of the suite, and
+  # only migration code and what it is built on can change their outcome. Outside pull
+  # requests they always run; for a pull request only when such a path changes (master
+  # runs them after the merge either way). They run after everything else of a pull
+  # request, alone on the agent, like the main suite. The -run pattern is the test
+  # step's -skip pattern.
+  - name: migration-e2e
+    image: golang:1.27.4-alpine
+    depends_on: [test, govulncheck, openapi, native-smoke, workflow-invariants, frontend-selftest]
+    when:
+      - event: [push, tag, manual, cron]
+      - event: pull_request
+        path:
+          include:
+            - 'internal/migration/**'
+            - 'internal/app/**'
+            - 'cmd/magnetico/**'
+            - 'opflags/**'
+            - 'persistence/**'
+            - 'codec/**'
+            - 'internal/pgtest/**'
+            - 'internal/testkit/**'
+            - 'internal/e2e/cli/migrate_*'
+            - 'internal/e2e/cli/pgmain_test.go'
+            - 'go.mod'
+            - 'go.sum'
+            - '.woodpecker/ci.yaml'
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -158,7 +189,31 @@ steps:
       MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
     commands:
       - |
-        go test -race -p 3 -count=1 -json ./... > /tmp/race.json || {
+        go test -p 3 -count=1 -timeout 20m -json -run '^(TestFault|TestImportWithReadOnlySourceRole|TestMigrateTorrentsBinarySmoke|TestMigrateVerifyRetryBinarySmoke|TestMigrateExportCleanupBinarySmoke)' ./internal/e2e/cli > /tmp/migration.json || {
+          echo "go test (migration end-to-end) failed; failures:"
+          go run ./ci/skipcensus --failures < /tmp/migration.json
+          exit 1
+        }
+      - go run ./ci/skipcensus --allow ci/skip-allowlist.txt < /tmp/migration.json
+
+  # The whole suite (the migration end-to-end tests included) under the race detector:
+  # pushes to master, tags (a release waits for it), manual and cron runs, never a pull
+  # request (owner decision: it doubles the pipeline). It runs last, alone on the agent:
+  # -p 3 is verified for a suite that has the agent to itself. Nothing depends on it, so
+  # leaving it out of a pull request leaves no step waiting. Failures are never rerun.
+  - name: race
+    image: golang:1.27.4-trixie
+    depends_on: [migration-e2e]
+    when:
+      - event: [push, tag, manual, cron]
+    environment:
+      GOCACHE: /tmp/.gocache
+      GOFLAGS: -buildvcs=false
+      MAGNETICO_TEST_POSTGRES_DSN: postgres://postgres@postgres:5432/postgres?sslmode=disable
+      MAGNETICO_TEST_REQUIRE_POSTGRES: "1"
+    commands:
+      - |
+        go test -race -p 3 -count=1 -timeout 20m -json ./... > /tmp/race.json || {
           echo "go test -race failed; failures:"
           go run ./ci/skipcensus --failures < /tmp/race.json
           exit 1
@@ -169,7 +224,7 @@ steps:
   # the toolchain of the step: a checker built by an older Go cannot analyse this code).
   - name: govulncheck
     image: golang:1.27.4-alpine
-    depends_on: [race]
+    depends_on: [test]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -182,7 +237,7 @@ steps:
   # and the real binary's responses against it); named separately for visibility.
   - name: openapi
     image: golang:1.27.4-alpine
-    depends_on: [race]
+    depends_on: [test]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false
@@ -198,7 +253,7 @@ steps:
   # line: the floor is enforced explicitly.
   - name: native-snapshot
     image: goreleaser/goreleaser:v2.20.1
-    depends_on: [race]
+    depends_on: [test]
     environment:
       GOTOOLCHAIN: go1.27.4+auto
     commands:
@@ -235,7 +290,7 @@ steps:
   # The workflow files' own security invariants and the CI tools' tests.
   - name: workflow-invariants
     image: golang:1.27.4-alpine
-    depends_on: [race]
+    depends_on: [test]
     environment:
       GOCACHE: /tmp/.gocache
       GOFLAGS: -buildvcs=false

@@ -365,7 +365,8 @@ The classes (regular CI, release CI, explicit manual only), the exact commands a
 
 ### Verified full-suite configuration (for CI)
 
-The configuration verified at the end of task 07J, and the one `.woodpecker/ci.yaml` runs (for every pull request), is the
+The configuration verified at the end of task 07J, and the one `.woodpecker/ci.yaml` runs (the plain suite for every
+pull request, the race suite for `master`, tags, manual and cron runs), is the
 **whole suite with reduced package parallelism**:
 
 ```sh
