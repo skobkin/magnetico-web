@@ -1,0 +1,37 @@
+2026/11/26 00:16:28 migrate users: mode=dry-run result=ok source_timezone=Europe/Moscow same_database=false
+2026/11/26 00:16:28 migrate users: source: users=28 invites=10 (used 5) legacy_api_tokens=92 | needs_reset=1 unvetted=0 verified=27
+2026/11/26 00:16:28 migrate users: source isolation evidence (informational only): other client backends=0, database default read-only=false
+2026/11/26 00:16:28 migrate users: target before: state=empty users=0 invites=0 rss_tokens=0 api_tokens=0 sessions=0 one_time_tokens=0
+2026/11/26 00:16:28 migrate users: warning roles-not-plain-user x1 ids=[1]
+2026/11/26 00:16:28 migrate users: warning tokens-over-cap x1 ids=[28]
+2026/11/26 00:16:28 migrate users: note: dry-run: nothing was written to either database
+2026/11/26 00:16:28 migrate users: source digest: bb1b7ea859b66113877978d20cd0d85f99e45cc2ed9b5ddf670288221b7dd3ed
+2026/11/26 00:16:28 migrate users: plan digest: 07f599da49d1d2e84fa2c0984c8b3bc99fc1941c15e0db8659add70223d19d19
+exit=0
+2026/11/26 00:16:29 migrate users: mode=final result=ok source_timezone=Europe/Moscow same_database=false
+2026/11/26 00:16:29 migrate users: source: users=28 invites=10 (used 5) legacy_api_tokens=92 | needs_reset=1 unvetted=0 verified=27
+2026/11/26 00:16:29 migrate users: source isolation evidence (informational only): other client backends=0, database default read-only=false
+2026/11/26 00:16:29 migrate users: target before: state=empty users=0 invites=0 rss_tokens=0 api_tokens=0 sessions=0 one_time_tokens=0
+2026/11/26 00:16:29 migrate users: warning roles-not-plain-user x1 ids=[1]
+2026/11/26 00:16:29 migrate users: warning tokens-over-cap x1 ids=[28]
+2026/11/26 00:16:29 migrate users: imported: users=28 invites=10 rss_tokens=92
+2026/11/26 00:16:29 migrate users: source digest: bb1b7ea859b66113877978d20cd0d85f99e45cc2ed9b5ddf670288221b7dd3ed
+2026/11/26 00:16:29 migrate users: plan digest: 07f599da49d1d2e84fa2c0984c8b3bc99fc1941c15e0db8659add70223d19d19
+exit=0
+2026/11/26 00:16:29 migrate users: mode=final result=already-migrated source_timezone=Europe/Moscow same_database=false
+2026/11/26 00:16:29 migrate users: source: users=28 invites=10 (used 5) legacy_api_tokens=92 | needs_reset=1 unvetted=0 verified=27
+2026/11/26 00:16:29 migrate users: source isolation evidence (informational only): other client backends=0, database default read-only=false
+2026/11/26 00:16:29 migrate users: target before: state=identical users=28 invites=10 rss_tokens=92 api_tokens=0 sessions=0 one_time_tokens=0
+2026/11/26 00:16:29 migrate users: warning roles-not-plain-user x1 ids=[1]
+2026/11/26 00:16:29 migrate users: warning tokens-over-cap x1 ids=[28]
+2026/11/26 00:16:29 migrate users: note: the target already holds exactly this import; nothing was written
+2026/11/26 00:16:29 migrate users: source digest: bb1b7ea859b66113877978d20cd0d85f99e45cc2ed9b5ddf670288221b7dd3ed
+2026/11/26 00:16:29 migrate users: plan digest: c3722f458f4881a50c1037af0872dc44ea84fe28728e074ca2c56cd9911e24c9
+rerun exit=0
+2026/11/26 00:16:29 migrate users verify: mode=verify result=verified source_timezone=Europe/Moscow same_database=false
+2026/11/26 00:16:29 migrate users verify: source: users=28 invites=10 (used 5) legacy_api_tokens=92 | needs_reset=1 unvetted=0 verified=27
+2026/11/26 00:16:29 migrate users verify: source isolation evidence (informational only): other client backends=0, database default read-only=false
+2026/11/26 00:16:29 migrate users verify: warning roles-not-plain-user x1 ids=[1]
+2026/11/26 00:16:29 migrate users verify: warning tokens-over-cap x1 ids=[28]
+2026/11/26 00:16:29 migrate users verify: source digest: bb1b7ea859b66113877978d20cd0d85f99e45cc2ed9b5ddf670288221b7dd3ed
+verify exit=0

@@ -1,6 +1,6 @@
 # RC0 acceptance checklist (future)
 
-**Status:** not started. This file only records items that were agreed ahead of the RC0 acceptance run (the migration items in the first section) and the open items found by task 07J (the sections after it); it is not a release plan. Every item runs against **disposable** PostgreSQL and synthetic or lab data, never against production.
+**Status (2026-11-26):** the automated part ran against the published `0.8.0-rc0` image — results, the item-by-item status (passed, failed, ongoing, untested) and the owner's remaining manual checks are in [`rc0-automated-acceptance-report.md`](rc0-automated-acceptance-report.md) §10–11; the 24-hour soak is still running there. The items below are kept as originally agreed. This file only records items that were agreed ahead of the RC0 acceptance run (the migration items in the first section) and the open items found by task 07J (the sections after it); it is not a release plan. Every item runs against **disposable** PostgreSQL and synthetic or lab data, never against production.
 
 ## Migration
 

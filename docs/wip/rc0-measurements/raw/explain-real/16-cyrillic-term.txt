@@ -1,0 +1,43 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%сезон%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=1848.89..1849.01 rows=51 width=97) (actual time=18.928..18.933 rows=51 loops=1)
+  Buffers: shared hit=3667 read=14
+  I/O Timings: shared read=2.219
+  ->  Sort  (cost=1848.89..1849.75 rows=346 width=97) (actual time=18.927..18.929 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: top-N heapsort  Memory: 42kB
+        Buffers: shared hit=3667 read=14
+        I/O Timings: shared read=2.219
+        ->  Bitmap Heap Scan on torrents  (cost=533.64..1837.34 rows=346 width=97) (actual time=3.940..18.365 rows=3733 loops=1)
+              Recheck Cond: (name ~~* '%сезон%'::text)
+              Heap Blocks: exact=3542
+              Buffers: shared hit=3661 read=14
+              I/O Timings: shared read=2.219
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..533.55 rows=346 width=0) (actual time=3.700..3.700 rows=3733 loops=1)
+                    Index Cond: (name ~~* '%сезон%'::text)
+                    Buffers: shared hit=119 read=14
+                    I/O Timings: shared read=2.219
+Planning:
+  Buffers: shared hit=199
+Planning Time: 1.114 ms
+Execution Time: 19.017 ms
+
+---- warm3 ----
+Limit  (cost=1848.89..1849.01 rows=51 width=97) (actual time=16.098..16.103 rows=51 loops=1)
+  Buffers: shared hit=3681
+  ->  Sort  (cost=1848.89..1849.75 rows=346 width=97) (actual time=16.097..16.099 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: top-N heapsort  Memory: 42kB
+        Buffers: shared hit=3681
+        ->  Bitmap Heap Scan on torrents  (cost=533.64..1837.34 rows=346 width=97) (actual time=1.744..15.569 rows=3733 loops=1)
+              Recheck Cond: (name ~~* '%сезон%'::text)
+              Heap Blocks: exact=3542
+              Buffers: shared hit=3675
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..533.55 rows=346 width=0) (actual time=1.504..1.505 rows=3733 loops=1)
+                    Index Cond: (name ~~* '%сезон%'::text)
+                    Buffers: shared hit=133
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.825 ms
+Execution Time: 16.178 ms

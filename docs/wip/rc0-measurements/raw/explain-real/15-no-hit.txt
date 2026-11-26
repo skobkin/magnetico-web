@@ -1,0 +1,41 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%zzqxj%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=1848.89..1849.01 rows=51 width=97) (actual time=1.855..1.856 rows=0 loops=1)
+  Buffers: shared hit=123 read=5
+  I/O Timings: shared read=0.982
+  ->  Sort  (cost=1848.89..1849.75 rows=346 width=97) (actual time=1.853..1.854 rows=0 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=123 read=5
+        I/O Timings: shared read=0.982
+        ->  Bitmap Heap Scan on torrents  (cost=533.64..1837.34 rows=346 width=97) (actual time=1.838..1.838 rows=0 loops=1)
+              Recheck Cond: (name ~~* '%zzqxj%'::text)
+              Buffers: shared hit=117 read=5
+              I/O Timings: shared read=0.982
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..533.55 rows=346 width=0) (actual time=1.835..1.835 rows=0 loops=1)
+                    Index Cond: (name ~~* '%zzqxj%'::text)
+                    Buffers: shared hit=117 read=5
+                    I/O Timings: shared read=0.982
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.875 ms
+Execution Time: 1.915 ms
+
+---- warm3 ----
+Limit  (cost=1848.89..1849.01 rows=51 width=97) (actual time=1.048..1.049 rows=0 loops=1)
+  Buffers: shared hit=128
+  ->  Sort  (cost=1848.89..1849.75 rows=346 width=97) (actual time=1.047..1.048 rows=0 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=128
+        ->  Bitmap Heap Scan on torrents  (cost=533.64..1837.34 rows=346 width=97) (actual time=1.031..1.031 rows=0 loops=1)
+              Recheck Cond: (name ~~* '%zzqxj%'::text)
+              Buffers: shared hit=122
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..533.55 rows=346 width=0) (actual time=1.022..1.022 rows=0 loops=1)
+                    Index Cond: (name ~~* '%zzqxj%'::text)
+                    Buffers: shared hit=122
+Planning:
+  Buffers: shared hit=199
+Planning Time: 1.337 ms
+Execution Time: 1.124 ms

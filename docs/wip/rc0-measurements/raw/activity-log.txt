@@ -1,0 +1,14 @@
+2026-11-25T23:59:15Z soak (scale 5) started; overlapping: verify-decode/verify-content on rc0-pg
+2026-11-26T00:17:03Z functional-check run 1 (rc0-pg/web, light)
+2026-11-26T01:02:40Z primary: crawlerd a (3/s, 2h) and b (2/s, 2h) started through Traefik
+2026-11-26T01:03:11Z interrupt-resume on rc0_resume started
+2026-11-26T01:09:53Z explain-real (warm) on rc0_magnetico started
+2026-11-26T01:10:50Z explain-real finished
+2026-11-26T01:12:49Z primary: ingest2 started (two instances), traefik restarted
+2026-11-26T01:18:10Z primary: consumer handover test (stop rc0-ingest)
+2026-11-26T01:18:57Z primary: SIGKILL of consumer owner rc0-ingest2
+2026-11-26T01:19:32Z primary: PostgreSQL outage (docker stop rc0-pg, 120 s)
+2026-11-26T01:22:13Z primary: PostgreSQL back
+2026-11-26T01:22:43Z primary: crawler-b token rotated and crawler restarted
+2026-11-26T01:26:26Z primary: torrents table locked 80 s (search-timeout chain test)
+2026-11-26T01:28:24Z primary: web restarted with SMTP (mailpit)

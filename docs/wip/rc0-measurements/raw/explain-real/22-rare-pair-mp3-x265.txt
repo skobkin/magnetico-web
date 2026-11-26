@@ -1,0 +1,43 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%mp3%' AND name ILIKE '%x265%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=548.61..548.61 rows=1 width=97) (actual time=10.305..10.307 rows=4 loops=1)
+  Buffers: shared hit=213 read=94
+  I/O Timings: shared read=4.928
+  ->  Sort  (cost=548.61..548.61 rows=1 width=97) (actual time=10.304..10.305 rows=4 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=213 read=94
+        I/O Timings: shared read=4.928
+        ->  Bitmap Heap Scan on torrents  (cost=544.58..548.60 rows=1 width=97) (actual time=10.254..10.278 rows=4 loops=1)
+              Recheck Cond: ((name ~~* '%mp3%'::text) AND (name ~~* '%x265%'::text))
+              Heap Blocks: exact=4
+              Buffers: shared hit=207 read=94
+              I/O Timings: shared read=4.928
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..544.58 rows=1 width=0) (actual time=10.219..10.220 rows=4 loops=1)
+                    Index Cond: ((name ~~* '%mp3%'::text) AND (name ~~* '%x265%'::text))
+                    Buffers: shared hit=203 read=94
+                    I/O Timings: shared read=4.928
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.842 ms
+Execution Time: 10.381 ms
+
+---- warm3 ----
+Limit  (cost=548.61..548.61 rows=1 width=97) (actual time=7.008..7.009 rows=4 loops=1)
+  Buffers: shared hit=307
+  ->  Sort  (cost=548.61..548.61 rows=1 width=97) (actual time=7.006..7.007 rows=4 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Sort Method: quicksort  Memory: 25kB
+        Buffers: shared hit=307
+        ->  Bitmap Heap Scan on torrents  (cost=544.58..548.60 rows=1 width=97) (actual time=6.962..6.983 rows=4 loops=1)
+              Recheck Cond: ((name ~~* '%mp3%'::text) AND (name ~~* '%x265%'::text))
+              Heap Blocks: exact=4
+              Buffers: shared hit=301
+              ->  Bitmap Index Scan on idx_torrents_name_gin_trgm  (cost=0.00..544.58 rows=1 width=0) (actual time=6.942..6.942 rows=4 loops=1)
+                    Index Cond: ((name ~~* '%mp3%'::text) AND (name ~~* '%x265%'::text))
+                    Buffers: shared hit=297
+Planning:
+  Buffers: shared hit=199
+Planning Time: 1.007 ms
+Execution Time: 7.076 ms

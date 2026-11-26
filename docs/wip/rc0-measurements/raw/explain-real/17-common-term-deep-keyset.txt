@@ -1,0 +1,40 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' AND (discovered_on, id) < (1641575547, 19931082) ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=1.71..23.86 rows=51 width=97) (actual time=0.675..0.830 rows=51 loops=1)
+  Buffers: shared hit=22 read=1
+  I/O Timings: shared read=0.347
+  ->  Incremental Sort  (cost=1.71..102333.48 rows=235626 width=97) (actual time=0.675..0.826 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 30kB  Peak Memory: 30kB
+        Buffers: shared hit=22 read=1
+        I/O Timings: shared read=0.347
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..95946.48 rows=235626 width=97) (actual time=0.036..0.775 rows=52 loops=1)
+              Index Cond: (discovered_on <= 1641575547)
+              Filter: ((name ~~* '%1080p%'::text) AND (ROW(discovered_on, id) < ROW(1641575547, 19931082)))
+              Rows Removed by Filter: 320
+              Buffers: shared hit=13 read=1
+              I/O Timings: shared read=0.347
+Planning:
+  Buffers: shared hit=212
+Planning Time: 1.131 ms
+Execution Time: 0.859 ms
+
+---- warm3 ----
+Limit  (cost=1.71..23.86 rows=51 width=97) (actual time=0.213..0.308 rows=51 loops=1)
+  Buffers: shared hit=23
+  ->  Incremental Sort  (cost=1.71..102333.48 rows=235626 width=97) (actual time=0.212..0.304 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 30kB  Peak Memory: 30kB
+        Buffers: shared hit=23
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..95946.48 rows=235626 width=97) (actual time=0.026..0.270 rows=52 loops=1)
+              Index Cond: (discovered_on <= 1641575547)
+              Filter: ((name ~~* '%1080p%'::text) AND (ROW(discovered_on, id) < ROW(1641575547, 19931082)))
+              Rows Removed by Filter: 320
+              Buffers: shared hit=14
+Planning:
+  Buffers: shared hit=212
+Planning Time: 0.901 ms
+Execution Time: 0.329 ms

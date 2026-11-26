@@ -1,0 +1,1 @@
+mail delivery with the SMTP host down: web logged only: level=WARN msg="mail delivery failed" category=dial

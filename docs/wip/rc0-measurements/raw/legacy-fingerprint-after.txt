@@ -1,0 +1,18 @@
+BEGIN
+SET
+tbl | rows | row_digest_sum | max_id
+torrents | 3457046 | 1993508735254902820587995 | 38594156
+(1 row)
+tbl | rows | row_digest_sum | max_id
+files | 123460039 | 71172631031555017828607865 | 1297921112
+(1 row)
+tbl | string_agg
+migrations | 0
+(1 row)
+tbl | torrents_seq | files_seq
+sequences | 38594156 | 1297921112
+(1 row)
+tbl | relations_digest | constraints_digest
+ddl | 3dc2bfc179fb08be06e7d78a576bccab | 3b61f959d43a59735f9c8ffbc59249e6
+(1 row)
+COMMIT

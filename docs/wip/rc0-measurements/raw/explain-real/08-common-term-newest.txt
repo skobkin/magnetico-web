@@ -1,0 +1,39 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=2.29..21.34 rows=51 width=97) (actual time=5.545..5.631 rows=51 loops=1)
+  Buffers: shared hit=2226 read=9
+  I/O Timings: shared read=0.044
+  ->  Incremental Sort  (cost=2.29..156477.76 rows=418917 width=97) (actual time=5.544..5.627 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 32kB  Peak Memory: 32kB
+        Buffers: shared hit=2226 read=9
+        I/O Timings: shared read=0.044
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..144642.88 rows=418917 width=97) (actual time=5.386..5.592 rows=52 loops=1)
+              Filter: (name ~~* '%1080p%'::text)
+              Rows Removed by Filter: 2496
+              Buffers: shared hit=2217 read=9
+              I/O Timings: shared read=0.044
+Planning:
+  Buffers: shared hit=196 read=3
+  I/O Timings: shared read=0.033
+Planning Time: 1.000 ms
+Execution Time: 5.662 ms
+
+---- warm3 ----
+Limit  (cost=2.29..21.34 rows=51 width=97) (actual time=5.670..5.758 rows=51 loops=1)
+  Buffers: shared hit=2235
+  ->  Incremental Sort  (cost=2.29..156477.76 rows=418917 width=97) (actual time=5.669..5.754 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 32kB  Peak Memory: 32kB
+        Buffers: shared hit=2235
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..144642.88 rows=418917 width=97) (actual time=5.500..5.709 rows=52 loops=1)
+              Filter: (name ~~* '%1080p%'::text)
+              Rows Removed by Filter: 2496
+              Buffers: shared hit=2226
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.937 ms
+Execution Time: 5.788 ms

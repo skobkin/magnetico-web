@@ -1,0 +1,95 @@
+### errors export
+2026/11/26 01:00:37 errors export: phase=metadata scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:37 errors export: phase=metadata scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:37 errors export on postgres://rc0-pg:5432/rc0_cleanup_a finished: 5 event(s), 4537 bytes, sha256 36034b533024fc9e886d7c1a7aab4c26c8f010eb53cfa98c8f9e02095aef3b83, coverage complete → cleanup-a-export.jsonl (manifest cleanup-a-export.jsonl.manifest.json)
+exit=0
+### cleanup (preview)
+2026/11/26 01:00:37 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:37 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:37 cleanup preview on postgres://rc0-pg:5432/rc0_cleanup_a: 2 gate(s) block execution — address them, or re-run with --execute once the gates pass
+cleanup preview — nothing has been changed (pass --execute to drop)
+
+run_id: 7024e458-e623-4130-b7e6-7cea906894a2
+phase: import_complete   data_revision: 0
+registry rows: errors=0 verification_runs=2 verification_issues=0 retry_runs=0 retry_attempts=0
+target facts: torrents=3457046 blobs=2247594 blobless_multi_file=0 rows_beyond_checkpoint=0 unresolved_record_errors=0 unresolved_integrity=0
+verification decode: seq=1 state=completed_pass phase=complete start_revision=0 (current revision) issue_count=0
+verification content: seq=2 state=completed_pass phase=complete start_revision=0 (current revision) issue_count=0
+
+gates:
+  PASS   G1 lock                advisory run lock held and liveness-monitored for the whole command
+  PASS   G2 operational schema  exactly v2
+  PASS   G3 progress row        phase import_complete, one progress row
+  PASS   G4 production schema   exactly the expected magneticod objects
+  PASS   G5 reconcile           torrents=3457046 blobs=2247594 match the recorded counters
+  PASS   G6 unresolved findings no unresolved record errors or integrity incidents
+  PASS   G7 verification        decode: seq 1 completed_pass at revision 0; content: seq 2 completed_pass at revision 0
+  FAIL   G8 backup attestation  --confirm-backup is required: the drop irreversibly destroys the migration history
+  FAIL   G9 evidence            no evidence attestation: provide --confirm-export --evidence-manifest PATH, or the explicit --allow-missing-export-evidence --confirm-history-loss exception
+  SKIP   G10 flag coherence     validated before the connection was opened
+
+expected drops (one transaction; any failure rolls everything back):
+  DROP TABLE magnetico_migration.verification_issues
+  DROP TABLE magnetico_migration.verification_runs
+  DROP TABLE magnetico_migration.retry_attempts
+  DROP TABLE magnetico_migration.retry_runs
+  DROP TABLE magnetico_migration.errors
+  DROP TABLE magnetico_migration.progress
+  DROP TABLE magnetico_migration.operational_schema
+  DROP SCHEMA magnetico_migration RESTRICT
+  (the identity sequences drop with their tables)
+
+blockers — `--execute` would refuse:
+  - G8 backup attestation: --confirm-backup is required: the drop irreversibly destroys the migration history
+  - G9 evidence: no evidence attestation: provide --confirm-export --evidence-manifest PATH, or the explicit --allow-missing-export-evidence --confirm-history-loss exception
+exit=0
+### cleanup --execute
+2026/11/26 01:00:38 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+cleanup preview — nothing has been changed (pass --execute to drop)
+
+run_id: 7024e458-e623-4130-b7e6-7cea906894a2
+phase: import_complete   data_revision: 0
+registry rows: errors=0 verification_runs=2 verification_issues=0 retry_runs=0 retry_attempts=0
+target facts: torrents=3457046 blobs=2247594 blobless_multi_file=0 rows_beyond_checkpoint=0 unresolved_record_errors=0 unresolved_integrity=0
+verification decode: seq=1 state=completed_pass phase=complete start_revision=0 (current revision) issue_count=0
+verification content: seq=2 state=completed_pass phase=complete start_revision=0 (current revision) issue_count=0
+
+gates:
+  PASS   G1 lock                advisory run lock held and liveness-monitored for the whole command
+  PASS   G2 operational schema  exactly v2
+  PASS   G3 progress row        phase import_complete, one progress row
+  PASS   G4 production schema   exactly the expected magneticod objects
+  PASS   G5 reconcile           torrents=3457046 blobs=2247594 match the recorded counters
+  PASS   G6 unresolved findings no unresolved record errors or integrity incidents
+  PASS   G7 verification        decode: seq 1 completed_pass at revision 0; content: seq 2 completed_pass at revision 0
+  PASS   G8 backup attestation  --confirm-backup provided
+  PASS   G9 evidence            manifest binds artifact cleanup-a-export.jsonl (sha256 36034b533024…) to this run at revision 0
+  SKIP   G10 flag coherence     validated before the connection was opened
+
+expected drops (one transaction; any failure rolls everything back):
+  DROP TABLE magnetico_migration.verification_issues
+  DROP TABLE magnetico_migration.verification_runs
+  DROP TABLE magnetico_migration.retry_attempts
+  DROP TABLE magnetico_migration.retry_runs
+  DROP TABLE magnetico_migration.errors
+  DROP TABLE magnetico_migration.progress
+  DROP TABLE magnetico_migration.operational_schema
+  DROP SCHEMA magnetico_migration RESTRICT
+  (the identity sequences drop with their tables)
+2026/11/26 01:00:39 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=1s
+2026/11/26 01:00:39 cleanup on postgres://rc0-pg:5432/rc0_cleanup_a dropped the magnetico_migration schema (run 7024e458-e623-4130-b7e6-7cea906894a2, phase import_complete, data revision 0); the production data was not touched — keep the backup and the export evidence
+exit=0
+### cleanup again
+2026/11/26 01:00:39 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:39 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:39 cleanup on postgres://rc0-pg:5432/rc0_cleanup_a: nothing to clean up; a past cleanup cannot be established from absence alone
+cleanup: no magnetico_migration schema exists — nothing to clean up
+note: a past cleanup cannot be established from absence alone; this no-op is not proof that one happened
+exit=0
+### cleanup --execute again
+2026/11/26 01:00:39 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:39 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:00:39 cleanup on postgres://rc0-pg:5432/rc0_cleanup_a: nothing to clean up; a past cleanup cannot be established from absence alone
+cleanup: no magnetico_migration schema exists — nothing to clean up
+note: a past cleanup cannot be established from absence alone; this no-op is not proof that one happened
+exit=0

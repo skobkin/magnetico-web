@@ -1,0 +1,4 @@
+[('61a4dc2d', 'up', 6, False), ('0cb8bd23', 'up', 25, True), ('33544c77', 'stale', 72, True)]
+{'instances_included': 2, 'instances_excluded': 1}
+[('61a4dc2d', 'up', 14, False), ('0cb8bd23', 'stale', 33, True), ('33544c77', 'stale', 80, True)]
+{'instances_included': 1, 'instances_excluded': 2}

@@ -1,0 +1,35 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%flac%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=2.89..74.84 rows=51 width=97) (actual time=9.620..10.443 rows=51 loops=1)
+  Buffers: shared hit=2325
+  ->  Incremental Sort  (cost=2.89..147756.92 rows=104729 width=97) (actual time=9.619..10.439 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=2325
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..144642.88 rows=104729 width=97) (actual time=7.510..10.390 rows=52 loops=1)
+              Filter: (name ~~* '%flac%'::text)
+              Rows Removed by Filter: 5410
+              Buffers: shared hit=2316
+Planning:
+  Buffers: shared hit=199
+Planning Time: 1.104 ms
+Execution Time: 10.472 ms
+
+---- warm3 ----
+Limit  (cost=2.89..74.84 rows=51 width=97) (actual time=6.808..7.319 rows=51 loops=1)
+  Buffers: shared hit=2325
+  ->  Incremental Sort  (cost=2.89..147756.92 rows=104729 width=97) (actual time=6.807..7.315 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=2325
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..144642.88 rows=104729 width=97) (actual time=5.267..7.276 rows=52 loops=1)
+              Filter: (name ~~* '%flac%'::text)
+              Rows Removed by Filter: 5410
+              Buffers: shared hit=2316
+Planning:
+  Buffers: shared hit=199
+Planning Time: 1.078 ms
+Execution Time: 7.340 ms

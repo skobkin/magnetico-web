@@ -1,0 +1,38 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' AND name ILIKE '%x264%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=5.08..191.79 rows=51 width=97) (actual time=7.282..8.010 rows=51 loops=1)
+  Buffers: shared hit=2324 read=10
+  I/O Timings: shared read=0.045
+  ->  Incremental Sort  (cost=5.08..154866.40 rows=42299 width=97) (actual time=7.281..8.006 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=2324 read=10
+        I/O Timings: shared read=0.045
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..153286.21 rows=42299 width=97) (actual time=5.583..7.968 rows=52 loops=1)
+              Filter: ((name ~~* '%1080p%'::text) AND (name ~~* '%x264%'::text))
+              Rows Removed by Filter: 6030
+              Buffers: shared hit=2315 read=10
+              I/O Timings: shared read=0.045
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.910 ms
+Execution Time: 8.033 ms
+
+---- warm3 ----
+Limit  (cost=5.08..191.79 rows=51 width=97) (actual time=9.670..10.741 rows=51 loops=1)
+  Buffers: shared hit=2334
+  ->  Incremental Sort  (cost=5.08..154866.40 rows=42299 width=97) (actual time=9.670..10.738 rows=51 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=2334
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..153286.21 rows=42299 width=97) (actual time=7.213..10.686 rows=52 loops=1)
+              Filter: ((name ~~* '%1080p%'::text) AND (name ~~* '%x264%'::text))
+              Rows Removed by Filter: 6030
+              Buffers: shared hit=2325
+Planning:
+  Buffers: shared hit=199
+Planning Time: 1.107 ms
+Execution Time: 10.773 ms

@@ -1,0 +1,38 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%1080p%' ORDER BY total_size DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=1.27..42.96 rows=51 width=97) (actual time=2.534..3.246 rows=51 loops=1)
+  Buffers: shared hit=840 read=2
+  I/O Timings: shared read=0.015
+  ->  Incremental Sort  (cost=1.27..342462.82 rows=418917 width=97) (actual time=2.533..3.243 rows=51 loops=1)
+        Sort Key: total_size DESC, id DESC
+        Presorted Key: total_size
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=840 read=2
+        I/O Timings: shared read=0.015
+        ->  Index Scan Backward using idx_torrents_total_size on torrents  (cost=0.43..324521.14 rows=418917 width=97) (actual time=0.122..3.203 rows=52 loops=1)
+              Filter: (name ~~* '%1080p%'::text)
+              Rows Removed by Filter: 774
+              Buffers: shared hit=831 read=2
+              I/O Timings: shared read=0.015
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.915 ms
+Execution Time: 3.271 ms
+
+---- warm3 ----
+Limit  (cost=1.27..42.96 rows=51 width=97) (actual time=2.626..3.455 rows=51 loops=1)
+  Buffers: shared hit=842
+  ->  Incremental Sort  (cost=1.27..342462.82 rows=418917 width=97) (actual time=2.625..3.451 rows=51 loops=1)
+        Sort Key: total_size DESC, id DESC
+        Presorted Key: total_size
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=842
+        ->  Index Scan Backward using idx_torrents_total_size on torrents  (cost=0.43..324521.14 rows=418917 width=97) (actual time=0.131..3.410 rows=52 loops=1)
+              Filter: (name ~~* '%1080p%'::text)
+              Rows Removed by Filter: 774
+              Buffers: shared hit=833
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.921 ms
+Execution Time: 3.482 ms

@@ -1,0 +1,20 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE info_hash = decode('<hash>','hex')
+
+---- first ----
+Index Scan using torrents_info_hash_key on torrents  (cost=0.43..8.45 rows=1 width=97) (actual time=0.621..0.622 rows=1 loops=1)
+  Index Cond: (info_hash = '<hash>'::bytea)
+  Buffers: shared hit=2 read=2
+  I/O Timings: shared read=0.592
+Planning:
+  Buffers: shared hit=171
+Planning Time: 0.474 ms
+Execution Time: 0.635 ms
+
+---- warm3 ----
+Index Scan using torrents_info_hash_key on torrents  (cost=0.43..8.45 rows=1 width=97) (actual time=0.027..0.027 rows=1 loops=1)
+  Index Cond: (info_hash = '<hash>'::bytea)
+  Buffers: shared hit=4
+Planning:
+  Buffers: shared hit=171
+Planning Time: 0.428 ms
+Execution Time: 0.040 ms

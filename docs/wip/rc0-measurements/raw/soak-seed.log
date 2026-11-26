@@ -1,0 +1,11 @@
+=== RUN   TestSeedLargeDataset
+    dataset_test.go:98: free before: 51 GiB, scale 1
+    dataset_test.go:110: phase 1: 3480000 single-file rows in 1m8s
+    dataset_test.go:138:   small   12000 torrents (cumulative 12000 torrents, 361584 files), 1m2s
+    dataset_test.go:138:   medium   6000 torrents (cumulative 18000 torrents, 2011349 files), 1m58s
+    dataset_test.go:138:   large    1900 torrents (cumulative 19900 torrents, 6322947 files), 3m14s
+    dataset_test.go:138:   huge       24 torrents (cumulative 19924 torrents, 9842529 files), 5m42s
+    dataset_test.go:155: RESULT scale=1 torrents=3499924 multi_file=19924 files_in_blobs=9842529 wall=6m50s pg_database_size=1277MiB torrents_table=337MiB torrents_indexes=536MiB blobs_total=395MiB free_after=49GiB
+--- PASS: TestSeedLargeDataset (410.29s)
+PASS
+ok  	github.com/skobkin/magnetico-web/internal/e2e/cli	410.315s

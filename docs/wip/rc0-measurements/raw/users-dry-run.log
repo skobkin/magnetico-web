@@ -1,0 +1,11 @@
+2026/11/25 23:33:10 migrate users: mode=dry-run result=refused source_timezone=Europe/Moscow same_database=false
+2026/11/25 23:33:10 migrate users: source: users=28 invites=10 (used 5) legacy_api_tokens=92 | needs_reset=1 unvetted=0 verified=27
+2026/11/25 23:33:10 migrate users: source isolation evidence (informational only): other client backends=0, database default read-only=false
+2026/11/25 23:33:10 migrate users: target before: state=empty users=0 invites=0 rss_tokens=0 api_tokens=0 sessions=0 one_time_tokens=0
+2026/11/25 23:33:10 migrate users: warning roles-not-plain-user x1 ids=[1]
+2026/11/25 23:33:10 migrate users: warning tokens-over-cap x1 ids=[28]
+2026/11/25 23:33:10 migrate users: note: dry-run: nothing was written to either database
+2026/11/25 23:33:10 migrate users: a final run would refuse: needs-reset-unacknowledged
+2026/11/25 23:33:10 migrate users: source digest: bb1b7ea859b66113877978d20cd0d85f99e45cc2ed9b5ddf670288221b7dd3ed
+2026/11/25 23:33:10 migrate users: plan digest: dc1544127e09b30f987416c185ea95224e52fc16e1923b7730b7e4958a87816a
+2026/11/25 23:33:10 migrate users failed [needs-reset-unacknowledged]: accounts with unsupported password hashes cannot log in until an administrator resets them; acknowledge the exact number with --accept-needs-reset (found 1, acknowledged 0; user ids: 26)

@@ -1,0 +1,45 @@
+BEGIN
+SET
+SET
+== torrents
+ torrents | bad_hash_len | empty_name | name_ctrl | name_bidi | name_outer_space | name_replacement_char | name_max_bytes | name_p50_bytes | min_total |   max_total    |    first_discovered    |    last_discovered     | discovered_in_future 
+----------+--------------+------------+-----------+-----------+------------------+-----------------------+----------------+----------------+-----------+----------------+------------------------+------------------------+----------------------
+  3457046 |            0 |        320 |       127 |       568 |             2344 |                    66 |            677 |             47 |         1 | 31882508238371 | 2019-10-19 22:28:31+00 | 2026-10-14 05:35:01+00 |                    0
+(1 row)
+
+== files
+   files   | null_owner | negative_size | zero_size | empty_path | path_ctrl | path_dot_components | path_empty_components | path_backslash | path_replacement_char | path_max_bytes | path_over_codec_limit 
+-----------+------------+---------------+-----------+------------+-----------+---------------------+-----------------------+----------------+-----------------------+----------------+-----------------------
+ 123460039 |          0 |             0 |    208441 |     193424 |      1080 |                 102 |                 11226 |             51 |                  8860 |           1109 |                     0
+(1 row)
+
+== per torrent (file lists)
+ torrents_without_files | orphan_owner_ids | torrents_with_files | single_file | multi_file | size_sum_mismatch | over_file_limit | over_aggregate_path_limit | over_depth_limit | torrents_with_duplicate_paths | duplicate_path_rows | max_files | files_p50_p90_p99_p999 | max_depth 
+------------------------+------------------+---------------------+-------------+------------+-------------------+-----------------+---------------------------+------------------+-------------------------------+---------------------+-----------+------------------------+-----------
+                      0 |                0 |             3457046 |     1408744 |    2048302 |                 0 |               0 |                         0 |                0 |                          4926 |              378015 |    123480 | {3,34,495,4433}        |        29
+(1 row)
+
+== single-file shape (no-blob eligibility: one file whose path equals the name and size equals the total)
+ no_blob_eligible | atypical_path | atypical_size 
+------------------+---------------+---------------
+          1209452 |        199292 |             0
+(1 row)
+
+== discovery by year
+ year |  count  
+------+---------
+ 2019 | 1382818
+ 2020 |  246019
+ 2021 |  259532
+ 2022 |  397164
+ 2023 |  134399
+ 2024 |  345704
+ 2025 |  345705
+ 2026 |  345705
+(8 rows)
+
+COMMIT
+
+real	8m47.900s
+user	0m0.020s
+sys	0m0.007s

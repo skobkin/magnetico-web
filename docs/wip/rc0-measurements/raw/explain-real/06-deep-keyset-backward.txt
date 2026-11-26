@@ -1,0 +1,37 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE (discovered_on, id) > (1641575547, 19931082) ORDER BY discovered_on ASC, id ASC LIMIT 51
+
+---- first ----
+Limit  (cost=1.71..5.87 rows=51 width=97) (actual time=0.071..0.082 rows=51 loops=1)
+  Buffers: shared hit=14
+  ->  Incremental Sort  (cost=1.71..123373.17 rows=1512662 width=97) (actual time=0.070..0.079 rows=51 loops=1)
+        Sort Key: discovered_on, id
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 30kB  Peak Memory: 30kB
+        Buffers: shared hit=14
+        ->  Index Scan using idx_torrents_discovered_on on torrents  (cost=0.43..70856.65 rows=1512662 width=97) (actual time=0.026..0.035 rows=52 loops=1)
+              Index Cond: (discovered_on >= 1641575547)
+              Filter: (ROW(discovered_on, id) > ROW(1641575547, 19931082))
+              Rows Removed by Filter: 1
+              Buffers: shared hit=5
+Planning:
+  Buffers: shared hit=198
+Planning Time: 0.631 ms
+Execution Time: 0.130 ms
+
+---- warm3 ----
+Limit  (cost=1.71..5.87 rows=51 width=97) (actual time=0.051..0.062 rows=51 loops=1)
+  Buffers: shared hit=14
+  ->  Incremental Sort  (cost=1.71..123373.17 rows=1512662 width=97) (actual time=0.050..0.059 rows=51 loops=1)
+        Sort Key: discovered_on, id
+        Presorted Key: discovered_on
+        Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 30kB  Peak Memory: 30kB
+        Buffers: shared hit=14
+        ->  Index Scan using idx_torrents_discovered_on on torrents  (cost=0.43..70856.65 rows=1512662 width=97) (actual time=0.020..0.029 rows=52 loops=1)
+              Index Cond: (discovered_on >= 1641575547)
+              Filter: (ROW(discovered_on, id) > ROW(1641575547, 19931082))
+              Rows Removed by Filter: 1
+              Buffers: shared hit=5
+Planning:
+  Buffers: shared hit=198
+Planning Time: 0.450 ms
+Execution Time: 0.085 ms

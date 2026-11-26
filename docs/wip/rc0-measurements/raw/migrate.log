@@ -1,0 +1,19 @@
+2026/11/25 23:28:14 migrate torrents: phase=importing scanned=0/3457046 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/25 23:28:44 migrate torrents: phase=importing scanned=374272/3457046 ok=374272 err=0 blobs=232240 rate=12454.1/s elapsed=30s eta=4m07s
+2026/11/25 23:29:14 migrate torrents: phase=importing scanned=763904/3457046 ok=763904 err=0 blobs=483389 rate=12712.9/s elapsed=1m00s eta=3m31s
+2026/11/25 23:29:44 migrate torrents: phase=importing scanned=1136590/3457046 ok=1136590 err=0 blobs=718820 rate=12609.1/s elapsed=1m30s eta=3m04s
+2026/11/25 23:30:14 migrate torrents: phase=importing scanned=1481738/3457046 ok=1481738 err=0 blobs=943637 rate=12332.2/s elapsed=2m00s eta=2m40s
+2026/11/25 23:30:44 migrate torrents: phase=importing scanned=1879552/3457046 ok=1879552 err=0 blobs=1205051 rate=12517.7/s elapsed=2m30s eta=2m06s
+2026/11/25 23:31:14 migrate torrents: phase=importing scanned=2245888/3457046 ok=2245888 err=0 blobs=1448331 rate=12464.8/s elapsed=3m00s eta=1m37s
+2026/11/25 23:31:44 migrate torrents: phase=importing scanned=2627619/3457046 ok=2627619 err=0 blobs=1708697 rate=12500.6/s elapsed=3m30s eta=1m06s
+2026/11/25 23:32:14 migrate torrents: phase=importing scanned=2976487/3457046 ok=2976487 err=0 blobs=1940636 rate=12390.8/s elapsed=4m00s eta=38s
+2026/11/25 23:32:44 migrate torrents: phase=importing scanned=3310185/3457046 ok=3310185 err=0 blobs=2154210 rate=12250.0/s elapsed=4m30s eta=11s
+2026/11/25 23:32:58 migrate torrents: phase=data_loaded scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=12160.5/s elapsed=4m44s
+2026/11/25 23:32:58 migrate torrents: phase=building_indexes scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=12160.5/s elapsed=4m44s
+2026/11/25 23:32:59 migrate torrents: phase=building_indexes 1/3: idx_torrents_total_size scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=12134.3/s elapsed=4m44s
+2026/11/25 23:32:59 migrate torrents: phase=building_indexes 2/3: idx_torrents_discovered_on scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=12116.6/s elapsed=4m45s
+2026/11/25 23:33:36 migrate torrents: phase=building_indexes 2/3: idx_torrents_discovered_on scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=10733.1/s elapsed=5m22s
+2026/11/25 23:33:46 migrate torrents: phase=building_indexes 3/3: idx_torrents_name_gin_trgm scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=10396.2/s elapsed=5m32s
+2026/11/25 23:33:47 migrate torrents: phase=import_complete 3/3: idx_torrents_name_gin_trgm scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=10384.9/s elapsed=5m32s
+2026/11/25 23:33:47 migrate torrents: phase=import_complete 3/3: idx_torrents_name_gin_trgm scanned=3457046/3457046 ok=3457046 err=0 blobs=2247594 rate=10384.9/s elapsed=5m32s
+2026/11/25 23:33:47 torrent migration on postgres://rc0-pg:5432/rc0_magnetico finished in phase import_complete (3457046 scanned, 3457046 migrated, 0 record errors, 0 unresolved integrity incidents); neither completion phase means the data is verified — run verification before cutover

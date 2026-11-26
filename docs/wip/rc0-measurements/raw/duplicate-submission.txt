@@ -1,0 +1,1 @@
+DONE queue_records=0 quarantine_records=0 appended=300 duplicate=0 acked=300 quarantined=0 too_large=0 invalid=0 dropped_shutdown=0

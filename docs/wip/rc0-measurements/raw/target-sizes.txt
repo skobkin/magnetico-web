@@ -1,0 +1,30 @@
+   db    
+---------
+ 2811 MB
+(1 row)
+
+      relname       |    tbl     |  idx   |  total  
+--------------------+------------+--------+---------
+ schema_version     | 8192 bytes | 16 kB  | 24 kB
+ torrent_file_blobs | 1518 MB    | 48 MB  | 1566 MB
+ torrents           | 444 MB     | 792 MB | 1236 MB
+(3 rows)
+
+              indexrelid               | pg_size_pretty 
+---------------------------------------+----------------
+ magneticod.torrents_pkey              | 74 MB
+ magneticod.torrents_info_hash_key     | 175 MB
+ magneticod.torrent_file_blobs_pkey    | 48 MB
+ magneticod.schema_version_pkey        | 16 kB
+ magneticod.idx_torrents_total_size    | 73 MB
+ magneticod.idx_torrents_discovered_on | 53 MB
+ magneticod.idx_torrents_name_gin_trgm | 417 MB
+(7 rows)
+
+ torrents |   files   |   max    
+----------+-----------+----------
+  3457046 | 123460039 | 38594156
+(1 row)
+
+legacy|17844369075|1222893568|16613318656|6819728543
+blobs|2247594|1425406676|122250587|2947471027

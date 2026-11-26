@@ -1,0 +1,39 @@
+SELECT id, info_hash, name, total_size, discovered_on, file_count FROM magneticod.torrents WHERE name ILIKE '%epub%' AND name ILIKE '%720p%' ORDER BY discovered_on DESC, id DESC LIMIT 51
+
+---- first ----
+Limit  (cost=44.86..2264.28 rows=51 width=97) (actual time=1860.694..1860.699 rows=31 loops=1)
+  Buffers: shared hit=95136 read=6792
+  I/O Timings: shared read=18.267
+  ->  Incremental Sort  (cost=44.86..153446.24 rows=3525 width=97) (actual time=1860.693..1860.695 rows=31 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=95136 read=6792
+        I/O Timings: shared read=18.267
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..153290.21 rows=3525 width=97) (actual time=35.075..1860.616 rows=31 loops=1)
+              Filter: ((name ~~* '%epub%'::text) AND (name ~~* '%720p%'::text))
+              Rows Removed by Filter: 3459412
+              Buffers: shared hit=95129 read=6790
+              I/O Timings: shared read=18.258
+Planning:
+  Buffers: shared hit=169 read=30
+  I/O Timings: shared read=0.188
+Planning Time: 1.056 ms
+Execution Time: 1860.723 ms
+
+---- warm3 ----
+Limit  (cost=44.86..2264.28 rows=51 width=97) (actual time=1920.395..1920.401 rows=31 loops=1)
+  Buffers: shared hit=101959
+  ->  Incremental Sort  (cost=44.86..153446.24 rows=3525 width=97) (actual time=1920.394..1920.397 rows=31 loops=1)
+        Sort Key: discovered_on DESC, id DESC
+        Presorted Key: discovered_on
+        Full-sort Groups: 1  Sort Method: quicksort  Average Memory: 31kB  Peak Memory: 31kB
+        Buffers: shared hit=101959
+        ->  Index Scan Backward using idx_torrents_discovered_on on torrents  (cost=0.43..153290.21 rows=3525 width=97) (actual time=38.719..1920.314 rows=31 loops=1)
+              Filter: ((name ~~* '%epub%'::text) AND (name ~~* '%720p%'::text))
+              Rows Removed by Filter: 3459443
+              Buffers: shared hit=101950
+Planning:
+  Buffers: shared hit=199
+Planning Time: 0.952 ms
+Execution Time: 1920.424 ms

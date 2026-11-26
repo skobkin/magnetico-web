@@ -1,0 +1,26 @@
+ok    anonymous /torrents is sent to sign-in — /login
+ok    sign-in page carries exactly the production CSP
+ok    signed in; search for a common word lists results — 100 result links
+ok    keyset pagination: the next page renders
+ok    a search without hits renders its empty state
+ok    tree mode: the file tree renders with folder toggles and a filter — {"mode":"tree","toggles":1,"filter":true}
+ok    tree mode: a folder toggle changes aria-expanded — ["false","true"]
+ok    tree mode: the local filter narrows the list — [13,0]
+ok    directory mode: the first page renders with breadcrumbs and paging — {"mode":"dirs","next":true,"crumbs":true,"text":2943}
+ok    directory mode: Next loads another page or the root fits one page — no next
+ok    Swagger UI renders the v2 operations — {"ops":5,"err":0}
+ok    Swagger page carries exactly its documented policy (docsCSP) — default-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'
+ok    admin overview: five chart groups — throughput,outcomes,queue,storage,traffic
+ok    admin overview: every chart draws or states why it has no data — [{"chart":"throughput","plots":1,"status":""},{"chart":"outcomes","plots":1,"status":""},{"chart":"queue","plots":2,"status":""},{"chart":"storage","plots":2,"status":""},{"chart":"traffic","plots":6,"status":""}]
+ok    dark theme paints a dark background — rgb(14, 20, 24)
+ok    360 px: /torrents?q=<id>p has no horizontal page scroll — overflow 0 px
+ok    360 px: /torrents/<id> has no horizontal page scroll — overflow 0 px
+ok    360 px: /torrents/<id> has no horizontal page scroll — overflow 0 px
+ok    360 px: /account?tab=profile has no horizontal page scroll — overflow 0 px
+ok    360 px: /account?tab=rss has no horizontal page scroll — overflow 0 px
+ok    360 px: /admin has no horizontal page scroll — overflow 0 px
+ok    360 px: /api/v2 has no horizontal page scroll — overflow 0 px
+ok    no request to another origin — https://magnet.rc0.test:18443,null
+ok    no CSP violation
+ok    no console error or exception — {"console":[],"exceptions":[]}
+all checks passed

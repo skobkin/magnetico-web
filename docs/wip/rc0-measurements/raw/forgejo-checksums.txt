@@ -1,0 +1,2 @@
+c1999b95d6a07706a0ee8ae745f0bed5b447d46ff55cfa1854a81ca340db59c1  magnetico-web_0.8.0-rc0_linux_amd64.tar.gz
+a2f5b44567a387b08d4fb2eb630ec472c402f094350c1124d59845a72b8b54e6  magnetico-web_0.8.0-rc0_linux_arm64.tar.gz

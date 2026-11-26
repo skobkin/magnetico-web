@@ -1,0 +1,14 @@
+PASS  sign-in of the migrated user for the email flow  (status 303)
+PASS  migrated address is shown as unverified
+PASS  verification email requested  (status 303)
+PASS  verification email delivered over STARTTLS to the synthetic SMTP server
+INFO  message: subject length 36, from magnetico@rc0.invalid, tls-related headers []
+PASS  verification link page opens (no-referrer)  (status 200)
+PASS  address confirmed through the link  (status 200)
+PASS  account page shows the address as verified
+INFO  reusing the consumed verification link: status 200, generic 'cannot be used' page: False
+PASS  password recovery requested for the verified address  (status 200)
+PASS  recovery email delivered
+PASS  reset link page opens (not completed: the password stays 'test')  (status 200)
+PASS  recovery for an unknown address answers exactly like a known one  (status 200)
+SUMMARY pass=11 fail=0

@@ -1,0 +1,17 @@
+### errors export
+2026/11/26 01:01:09 errors export: phase=metadata scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:01:09 errors export: phase=metadata scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:01:09 errors export on postgres://rc0-pg:5432/rc0_cleanup_b finished: 5 event(s), 4537 bytes, sha256 79b144ffeee0e8b3e67d6de7853823149a76417d35f1bb853054a2dac8297c04, coverage complete → cleanup-b-export.jsonl (manifest cleanup-b-export.jsonl.manifest.json)
+exit=0
+### cleanup --execute
+2026/11/26 01:01:10 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:01:10 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:01:10 cleanup on postgres://rc0-pg:5432/rc0_cleanup_b failed
+2026/11/26 01:01:10 cleanup refused: cleanup refused by its safety gates "G5 reconcile: target torrents 3457047 != success_count 3457046; target blobs 2247595 != blob_count 2247594; 1 torrent rows exist"
+exit=1
+### cleanup --execute --force-unverified
+2026/11/26 01:01:11 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:01:11 cleanup: phase=preview scanned=0 ok=0 err=0 blobs=0 elapsed=0s
+2026/11/26 01:01:11 cleanup on postgres://rc0-pg:5432/rc0_cleanup_b failed
+2026/11/26 01:01:11 cleanup refused: cleanup refused by its safety gates "G5 reconcile: target torrents 3457047 != success_count 3457046; target blobs 2247595 != blob_count 2247594; 1 torrent rows exist"
+exit=1

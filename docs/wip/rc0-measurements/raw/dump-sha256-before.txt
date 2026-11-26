@@ -1,0 +1,1 @@
+964b05df97c25a680a7a8c17bab0c829f574de5bfc81f59883b6d80ea486d78e  /home/herdr/tmp/magnetico/magneticod-sample.sql.gz
