@@ -22,8 +22,17 @@ services:
       MAGNETICO_WEB_PUBLIC_URL: https://magnet.rc0.test:18443
       MAGNETICO_WEB_TRUSTED_PROXIES: 172.19.0.10/32
       MAGNETICO_WEB_SITE_TITLE: Magnetico RC0
+      # synthetic SMTP (Mailpit, STARTTLS with the test CA); the password is in web.env
+      MAGNETICO_WEB_SMTP_HOST: rc0-mailpit
+      MAGNETICO_WEB_SMTP_PORT: "1025"
+      MAGNETICO_WEB_SMTP_SECURITY: starttls
+      MAGNETICO_WEB_SMTP_USERNAME: rc0
+      MAGNETICO_WEB_SMTP_FROM: magnetico@rc0.invalid
+      SSL_CERT_FILE: /certs/ca.crt
       GOMEMLIMIT: 768MiB
       GODEBUG: gctrace=1
+    volumes:
+      - ${RC0_DEPLOY}/traefik/certs/ca.crt:/certs/ca.crt:ro
     env_file: ["${RC0_SECRETS}/web.env"]
     mem_limit: 1g
     memswap_limit: 1g
@@ -74,6 +83,18 @@ services:
     cpus: 1
     stop_grace_period: 60s
     networks: [rc0-net, rc0-edge]
+  mailpit:
+    image: axllent/mailpit:v1.34.0@sha256:23a2ef85bc50853ab3093645d1d64679afd8887e89da5e48a88940c172591a4e
+    container_name: rc0-mailpit
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: ["--smtp-tls-cert", "/certs/smtp.crt", "--smtp-tls-key", "/certs/smtp.key", "--smtp-require-starttls", "--smtp-auth-accept-any"]
+    volumes:
+      - ${RC0_DEPLOY}/traefik/certs:/certs:ro
+    ports: ["127.0.0.1:18025:8025"]
+    networks: [rc0-edge]
   traefik:
     image: traefik:v3.8.0@sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
     container_name: rc0-traefik
@@ -88,7 +109,8 @@ services:
       - ${RC0_DEPLOY}/traefik/certs:/certs:ro
       - ${RC0_DEPLOY}/traefik/logs:/logs
     networks:
-      rc0-edge: { ipv4_address: 172.19.0.10 }
+      # the aliases let synthetic crawler containers on rc0-edge reach the proxy by name
+      rc0-edge: { ipv4_address: 172.19.0.10, aliases: [magnet.rc0.test, ingest.rc0.test] }
     logging:
       driver: local
       options: { max-size: 20m, max-file: "3" }

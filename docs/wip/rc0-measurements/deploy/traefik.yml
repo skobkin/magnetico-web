@@ -33,8 +33,11 @@ accessLog:
     names:
       # The path carries credentials: RSS feed tokens in the query string, one-time
       # registration/reset/verification links in path segments. Traefik cannot mask a
-      # query string or a path segment selectively, so the whole path is redacted.
-      RequestPath: redact
+      # query string or a path segment selectively, so the whole path is dropped.
+      # Field names accept only keep/drop: "redact" (valid for headers) is silently
+      # ignored here and the path, query string included, is logged (Traefik 3.8.0,
+      # observed in the RC0 acceptance run).
+      RequestPath: drop
     headers:
       defaultMode: drop       # never Authorization, Cookie or api-token
 global:

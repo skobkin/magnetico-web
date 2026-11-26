@@ -22,6 +22,7 @@ http:
         serversTransport: magnetico
         servers:
           - url: http://rc0-ingest:8080
+          - url: http://rc0-ingest2:8080   # only while the two-ingest profile runs (Traefik marks it down otherwise)
   serversTransports:
     magnetico:
       forwardingTimeouts:
