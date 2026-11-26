@@ -1,1 +1,0 @@
-ClientAddr ClientHost ClientPort ClientUsername DownstreamContentSize DownstreamStatus Duration OriginContentSize OriginDuration OriginStatus Overhead RequestAddr RequestContentSize RequestCount RequestHost RequestMethod RequestPort RequestProtocol RequestScheme RetryAttempts RouterName ServiceAddr ServiceName ServiceURL StartLocal StartUTC entryPointName level msg time

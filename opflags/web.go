@@ -204,6 +204,11 @@ func (o *OpFlags) mergeWebYaml(section any, explicit map[string]bool) error {
 		case int, int64, uint64:
 			v = fmt.Sprint(t)
 		case bool:
+			// A native YAML boolean is accepted for the boolean setting only;
+			// every other key keeps its own value types.
+			if key != "rssV1Enabled" {
+				return fmt.Errorf("config file: web.%s has an unsupported value type", key)
+			}
 			v = strconv.FormatBool(t)
 		case []any:
 			if key != "trustedProxies" {

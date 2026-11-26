@@ -515,8 +515,18 @@ func TestWebRSSV1Switch(t *testing.T) {
 	if _, err := parseWebFile(t, writeWebConfig(t, pub+"  rssV1Enabled: sometimes\n")); err == nil || strings.Contains(err.Error(), "sometimes") {
 		t.Errorf("invalid file value: %v", err)
 	}
-	// A boolean is accepted for this key only.
-	if _, err := parseWebFile(t, writeWebConfig(t, pub+"  listen: true\n")); err == nil {
-		t.Error("a boolean listen address must be refused")
+	// A native boolean is accepted for this key only. siteTitle and
+	// smtpUsername are free-form strings that would happily take "true", so
+	// only the type check in mergeWebYaml can refuse them; listen would also
+	// fail later address validation, so it does not prove the type check.
+	for _, line := range []string{"  siteTitle: true\n", "  smtpUsername: false\n", "  listen: true\n"} {
+		_, err := parseWebFile(t, writeWebConfig(t, pub+line))
+		if err == nil || !strings.Contains(err.Error(), "unsupported value type") {
+			t.Errorf("%q: a native boolean must be refused as a type: %v", strings.TrimSpace(line), err)
+		}
+	}
+	// The quoted string stays a valid title.
+	if o, err := parseWebFile(t, writeWebConfig(t, pub+"  siteTitle: \"true\"\n")); err != nil || o.Web.SiteTitle != "true" {
+		t.Errorf("quoted title: %v %q", err, o.Web.SiteTitle)
 	}
 }
