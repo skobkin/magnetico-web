@@ -3,6 +3,7 @@ package repocheck
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -481,15 +482,43 @@ func TestDockerReleaseKeepsTheAgreedRepositoriesPlatformsAndTag(t *testing.T) {
 	if set["dockerfile"] != "Dockerfile" {
 		t.Errorf("dockerfile = %v", set["dockerfile"])
 	}
-	for _, a := range toStrings(set["build_args"]) {
-		if !strings.HasPrefix(a, "VERSION=${CI_COMMIT_TAG}") && !strings.HasPrefix(a, "COMMIT=${CI_COMMIT_SHA}") {
-			t.Errorf("unexpected build argument %q", a)
-		}
-	}
 	for _, l := range strings.Split(commentFree(load(t, "release.yaml").raw), "\n") {
 		if regexp.MustCompile(`\blatest\b`).MatchString(l) {
 			t.Errorf("release.yaml applies latest: %q", strings.TrimSpace(l))
 		}
+	}
+}
+
+// The buildx plugin (v6) reads build_args as a JSON string map. Woodpecker encodes a
+// mapping setting as JSON, but a list as one comma-joined string, which the plugin keeps
+// under the key "*": the build then falls back to the Dockerfile defaults (VERSION=dev, an
+// empty COMMIT), which is how the 0.8.0-rc0 image was published. The check substitutes the
+// variables first, as Woodpecker does over the whole file. Both values must be quoted:
+// Woodpecker's parser reads an unquoted SHA such as 1234…567e12 as a number and encodes it
+// as a JSON number, which the plugin's string map rejects in the same way (this module's
+// YAML library keeps it a string, so the quotes are checked in the text).
+func TestDockerReleasePassesVersionAndCommitAsABuildArgumentMap(t *testing.T) {
+	raw := load(t, "release.yaml").raw
+	for _, l := range []string{`VERSION: "${CI_COMMIT_TAG}"`, `COMMIT: "${CI_COMMIT_SHA}"`} {
+		if !strings.Contains(commentFree(raw), l) {
+			t.Errorf("release-docker build_args must contain the quoted entry %s", l)
+		}
+	}
+	const tag, sha = "0.8.0-rc1", "1234567890123456789012345678901234567e12"
+	sub := strings.NewReplacer("${CI_COMMIT_TAG}", tag, "${CI_COMMIT_SHA}", sha).Replace(raw)
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(sub), &doc); err != nil {
+		t.Fatalf("release.yaml after substitution is not valid YAML: %v", err)
+	}
+	s := workflowFile{name: "release.yaml", raw: sub, doc: doc}.step(t, "release-docker")
+	set, _ := s["settings"].(map[string]any)
+	args, ok := set["build_args"].(map[string]any)
+	if !ok {
+		t.Fatalf("release-docker build_args is %T, want a mapping (a list reaches the plugin as the single key \"*\")", set["build_args"])
+	}
+	want := map[string]any{"VERSION": tag, "COMMIT": sha}
+	if !reflect.DeepEqual(args, want) {
+		t.Errorf("release-docker build_args = %#v, want %#v (string values: quote them)", args, want)
 	}
 }
 

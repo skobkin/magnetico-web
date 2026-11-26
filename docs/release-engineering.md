@@ -127,7 +127,10 @@ tag ─► ci.yaml (every gate above, same commit)
   The Forgejo API URL is derived from `CI_FORGE_URL` (set by Woodpecker).
 * **`release-docker`** is `woodpeckerci/plugin-docker-buildx:6` with `linux/amd64,linux/arm64`, SBOM and provenance
   attestations, `pull_image: true`, the release tag as the only tag, build arguments `VERSION` and `COMMIT`, and logins
-  for both registries. Its automatic labels are off (they would replace the Dockerfile's
+  for both registries. `build_args` must be a **mapping** (`VERSION: "${CI_COMMIT_TAG}"`): the plugin reads it as a
+  JSON string map, Woodpecker encodes a mapping as JSON but a list as a single comma-joined string, which the plugin
+  keeps under the key `*`, so a list silently builds `version=dev` with an empty commit (the `0.8.0-rc0` image did).
+  The values are quoted so that no commit SHA is ever parsed as a YAML number. Its automatic labels are off (they would replace the Dockerfile's
   `org.opencontainers.image.source`, the GitHub mirror that links the GHCR package to the repository, with the Forgejo
   URL). **No registry cache** is configured (a cache is a poisoning surface; BuildKit cache mounts suffice).
 * **Untrusted code never sees credentials.** `ci.yaml` (the only workflow pull requests reach) has no `from_secret`, no
@@ -157,7 +160,10 @@ run. `ci/prepare-rebuild.sh` (step `prepare-rebuild`):
 
 `rebuild-docker` is `release-docker` with the cache off, the tags from `prepare-rebuild` (`tags_file`) and the build
 arguments `VERSION` (the release tag, so `magnetico --version` still reports the release) and `COMMIT` from its env
-file. Its repositories, platforms, labels, SBOM, provenance and logins are pinned equal to `release-docker` by
+file: the plugin loads `env_file` (`.rebuild.env`, written by `prepare-rebuild`) into its own environment at start-up
+and `build_args_from_env: [VERSION, COMMIT]` forwards those two variables as build arguments. The plugin ignores a
+missing env file, so `prepare-rebuild` failing to write it would build an unversioned image; the step fails instead of
+continuing without it. Its repositories, platforms, labels, SBOM, provenance and logins are pinned equal to `release-docker` by
 `internal/repocheck`. The Forgejo release and its archives are not touched. **Not verified on Woodpecker:** whether
 `evaluate` sees a variable of a manual run (if it does not, the rebuild simply does not start: say so and the gate
 moves into the step); the registry logic was checked against Docker Hub and GHCR with other public images.
