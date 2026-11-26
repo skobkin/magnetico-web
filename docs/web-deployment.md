@@ -51,13 +51,67 @@ Configure `trustedProxies` with the **narrowest** set of addresses your proxy co
 
 Searches may legitimately run for `SEARCH_TIMEOUT` (60 s) and the service may still write the response for 10 s after that, so the search **write deadline is 70 s** with the defaults (ordinary requests: `REQUEST_TIMEOUT` + 5 s = 35 s). The proxy must not give up on the upstream before that, and must not cut an idle keep-alive earlier than it can recover from. **Recommendation: allow at least 90 s (about 20 s above 70 s) for the upstream response/idle timeouts**, and recompute as `SEARCH_TIMEOUT + 10 s + 20 s` if you change the search timeout. The handler context is cancelled exactly at `SEARCH_TIMEOUT`, so a stuck query is always stopped by the application, not by the proxy.
 
-**The option names below were not verified against specific proxy versions, and neither were the proxies' defaults** — check the documentation of the version you run. Note that proxy defaults (for example a 30 s upstream response limit in some products) may be lower than 70 s, so set the values explicitly.
+**Except for Traefik 3.8.0, the option names below were not verified against specific proxy versions, and neither were the proxies' defaults** — check the documentation of the version you run. Note that proxy defaults (for example a 30 s upstream response limit in some products) may be lower than 70 s, so set the values explicitly.
 
-- **Traefik (default deployment).** Static configuration: the entry point's `transport.respondingTimeouts` (`readTimeout`, `writeTimeout`, `idleTimeout`) govern the client side; set `writeTimeout` (or leave it unlimited) and `idleTimeout` above 90 s. For the upstream side, a `serversTransport` with `forwardingTimeouts.responseHeaderTimeout` above 90 s (and a sensible `idleConnTimeout`) applies to the web service. Client-IP trust is configured on the entry point (`forwardedHeaders.trustedIPs`).
+- **Traefik (default deployment).** Static configuration: the entry point's `transport.respondingTimeouts` (`readTimeout`, `writeTimeout`, `idleTimeout`) govern the client side; set `writeTimeout` (or leave it unlimited) and `idleTimeout` above 90 s. For the upstream side, a `serversTransport` with `forwardingTimeouts.responseHeaderTimeout` above 90 s (and a sensible `idleConnTimeout`) applies to the web service. Client-IP trust is configured on the entry point (`forwardedHeaders.trustedIPs`). Verified with Traefik 3.8.0 in the RC0 acceptance (`writeTimeout: 120s`, `idleTimeout: 180s`, `responseHeaderTimeout: 100s`): a search held for 60 s was cut by the service at its deadline (`503` with `Retry-After`), not by the proxy.
 - **Nginx.** `proxy_read_timeout 90s;` (or more) and `send_timeout`/`proxy_send_timeout` accordingly; `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 - **Caddy.** In `reverse_proxy`, `transport http { response_header_timeout 90s }` (and a read timeout if you set one); trusted proxies for Caddy's own client-IP handling are configured with `trusted_proxies` in the server options.
 
 The service logs the effective deadlines and this requirement at startup. Full deployment integration testing is out of scope for W1.
+
+### Proxy access logs
+
+Several URLs and headers carry credentials or private data, and a proxy that logs them stores them:
+
+| Where | What |
+|---|---|
+| query string | RSS tokens (`feed_token` of the v2 feed, `api-token` of the deprecated v1 feed), search terms (`q`) |
+| path segment | invitation codes (`/register/{code}`), password setup and reset links (`/password/setup/{token}`, `/password/reset/{token}`), email verification links (`/email/verify/{token}`), for `GET` and `POST` alike |
+| request headers | `Authorization` (API tokens of `/api/v2`, the ingest credential of `/api/ingest/v1`), `Cookie` (the session, a v1 `api-token` cookie), the v1 `api-token` header, `Referer` |
+| response headers | `Location`: a sign-in redirect repeats the requested URL, query string included (`/login?next=…`) |
+
+**The service's own access log needs no proxy log.** It writes one line per request with the matched route pattern
+(`GET /password/reset/{token}`), status, size, duration, client address, request id and user id, and nothing taken from
+the URL, headers or cookies. The `X-Request-Id` response header carries the same request id. Traefik's access log is
+**off by default**, and leaving it off is the simplest safe choice.
+
+**If you enable Traefik's access log**, drop the request path and every header. Tested with Traefik 3.8.0 in the RC0
+acceptance (`docs/wip/rc0-measurements/raw/traefik-log-check/`):
+
+```yaml
+# Traefik static configuration
+accessLog:
+  format: json              # common/genericCLF behave the same with these settings
+  fields:
+    defaultMode: keep
+    names:
+      RequestPath: drop     # path and query string: feed tokens, link codes, search terms
+    headers:
+      defaultMode: drop     # Authorization, Cookie, api-token, Referer, Location, …
+      names:
+        X-Request-Id: keep  # optional: the service's random request id, to match its own log line
+```
+
+With this configuration none of the probe credentials sent in every place listed in the table appeared in the access
+log or in Traefik's own log (also at `log.level: DEBUG`). The tests also showed:
+
+* **`redact` does not work for fields.** Field names accept only `keep` and `drop`; Traefik 3.8.0 silently treats
+  `RequestPath: redact` as `keep` and logs the whole path and query string. `redact` exists for headers only.
+* **The default format logs everything in the URL.** `accessLog: {}` (the `common` format) writes the full request line,
+  query string included. With `RequestPath: drop` the request line becomes `"GET - HTTP/1.1"`. In JSON there is no
+  separate `RequestLine` field: the path appears only as `RequestPath`.
+* **Headers are a second leak.** With `headers.defaultMode: keep`, `Authorization`, `Cookie` and `api-token` are logged
+  in full unless each is set to `redact`, and redacting them is not enough. The `Location` header of a sign-in redirect
+  (`downstream_Location`, `origin_Location`) still carries the original URL. The `common` format's `Referer` and
+  `User-Agent` columns come from the headers too (`-` when they are dropped).
+* **What you lose.** Traefik cannot mask a query parameter or a path segment selectively, so its log shows no path at
+  all. Each line keeps the method, host, router and service names, status, sizes, durations and client address. Use
+  the router name, or the request id kept above, to find the matching line in the service's log.
+* **Not tested:** other Traefik versions, Traefik's tracing and metrics (an OpenTelemetry exporter records request URLs;
+  keep it off for these routers or check what it exports), and other proxies. Nginx's `$request`, `$request_uri` and
+  `$args`, and Caddy's default access log, include the query string.
+
+Access logs also hold client IP addresses, which are personal data: keep their retention short.
 
 ## 4. Database schema and roles (W2)
 
@@ -216,7 +270,7 @@ Measured on one host with synthetic data (3.5 million torrents, about 20,000 wit
 | `GET /api`, `/api/v1`, `/api/v2`, `/api/{v1,v2}/openapi.yaml` | session cookie (anonymous requests are redirected to `/login`) | `noindex`, `private`; interactive documentation (Swagger UI, vendored; "Try it out" is `GET` only and uses a token the user pastes in) |
 
 * **Credentials are separate.** API tokens never open a feed and RSS tokens never open the JSON API; a revoked, expired or suspended (owner disabled) token fails on its very next request, and `disable`/`enable` leave token rows untouched. A password reset revokes both types.
-* **Feed URLs and feed requests carry a credential.** The v2 feed takes `feed_token` in the query string; the deprecated v1 feed takes the RSS token in the query (`api-token`), **or in the `api-token` request header or cookie**. The service never logs query strings, headers or cookies, never echoes the token, sends `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. **Configure the reverse proxy to omit or mask query strings in its own access logs, and to keep the `api-token` header and any `Cookie` header out of header-logging options** (a proxy that logs full request URLs, or all request headers, stores the credential; check your proxy's option names and defaults for your version), and do not enable response caching for these paths (a cache key that includes the query would store a per-user URL; the pages are cheap and the service caches the rendered page for 60 s itself, after checking the token). Failures are rate limited per client address (burst 20, one more every 10 s) and successes per token.
+* **Feed URLs and feed requests carry a credential.** The v2 feed takes `feed_token` in the query string; the deprecated v1 feed takes the RSS token in the query (`api-token`), **or in the `api-token` request header or cookie**. The service never logs query strings, headers or cookies, never echoes the token, sends `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. **Keep the reverse proxy's access log off, or drop the request path and all headers from it** (§3, "Proxy access logs": the tested Traefik configuration; Traefik cannot mask a query parameter, and `redact` is ignored for the path), and do not enable response caching for these paths (a cache key that includes the query would store a per-user URL; the pages are cheap and the service caches the rendered page for 60 s itself, after checking the token). Failures are rate limited per client address (burst 20, one more every 10 s) and successes per token.
 * **Tracker list.** Loaded from `magnetico_web.trackers` at startup (startup fails if it cannot be read), refreshed at most every `TRACKER_CACHE_TTL` by one background task, last good list kept if a refresh fails (a warning is logged). Edits made with `web tracker …` appear within the TTL. `/magnet` and every magnet link use this snapshot and never wait for the database.
 * **Documentation pages and CSP.** The interactive pages use the normal policy plus `img-src 'self' data:` (the renderer's stylesheet uses inline `data:` icons) — no inline script or style, no `eval`, no other origin; the relaxation applies to `/api/v1` and `/api/v2` only. Whether the renderer runs cleanly under this policy in real browsers has **not** been verified on the development VM.
 * **Reverse proxy timeouts** are unchanged (§3): `/api/v2/torrents` is a search route (`SEARCH_TIMEOUT` + 10 s write deadline); every other new route is an ordinary request (`REQUEST_TIMEOUT` + 5 s).

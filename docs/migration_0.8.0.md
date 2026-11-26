@@ -308,7 +308,7 @@ In this order, with a person ready to roll back (§11) until each step is checke
 - [ ] A migrated user with a supported hash signs in; a legacy RSS URL works; the same token fails on `/api/v2`.
 - [ ] Search finds known torrents (ASCII and non-ASCII names); a very large torrent opens.
 - [ ] `/magnet/{infohash}` redirects; the tracker list is what you expect (`web tracker list`).
-- [ ] The reverse proxy omits or masks query strings in its access logs (RSS URLs carry credentials), does not cache `/torrents`, `/api` or feeds, and its timeouts exceed the search write deadline (≥ 90 s; [`docs/web-deployment.md`](web-deployment.md) §3).
+- [ ] The reverse proxy's access log is off, or drops the request path and all headers (RSS URLs, invitation, reset and verification links and the `Authorization` header carry credentials; Traefik: `RequestPath: drop`, not `redact`; [`docs/web-deployment.md`](web-deployment.md) §3, "Proxy access logs"), does not cache `/torrents`, `/api` or feeds, and its timeouts exceed the search write deadline (≥ 90 s; [`docs/web-deployment.md`](web-deployment.md) §3).
 - [ ] Ingest accepts records, the crawler's `unauthorized=0`, `queue records=` is small, torrents appear in the UI.
 - [ ] Logs contain no secrets (spot-check), SMTP (if configured) delivers a verification email.
 - [ ] The backups from §5 and all reports are stored in a place the new system's administrators cannot delete from by accident.
