@@ -69,7 +69,7 @@ Several URLs and headers carry credentials or private data, and a proxy that log
 | query string | RSS tokens (`feed_token` of the v2 feed, `api-token` of the deprecated v1 feed), search terms (`q`) |
 | path segment | invitation codes (`/register/{code}`), password setup and reset links (`/password/setup/{token}`, `/password/reset/{token}`), email verification links (`/email/verify/{token}`), for `GET` and `POST` alike |
 | request headers | `Authorization` (API tokens of `/api/v2`, the ingest credential of `/api/ingest/v1`), `Cookie` (the session, a v1 `api-token` cookie), the v1 `api-token` header, `Referer` |
-| response headers | `Location`: a sign-in redirect repeats the requested URL, query string included (`/login?next=…`) |
+| response headers | `Location`: a sign-in redirect repeats the requested URL, query string included (`/login?next=…`); `Set-Cookie`: the session and pre-session cookies the service issues |
 
 **The service's own access log needs no proxy log.** It writes one line per request with the matched route pattern
 (`GET /password/reset/{token}`), status, size, duration, client address, request id and user id, and nothing taken from
@@ -88,26 +88,35 @@ accessLog:
     names:
       RequestPath: drop     # path and query string: feed tokens, link codes, search terms
     headers:
-      defaultMode: drop     # Authorization, Cookie, api-token, Referer, Location, …
-      names:
-        X-Request-Id: keep  # optional: the service's random request id, to match its own log line
+      defaultMode: drop     # Authorization, Cookie, api-token, Referer, Location, X-Request-Id, …
 ```
 
-With this configuration none of the probe credentials sent in every place listed in the table appeared in the access
-log or in Traefik's own log (also at `log.level: DEBUG`). The tests also showed:
+The probes put fake credentials in every place listed in the table: the v1 and v2 feed query strings, the v1
+`api-token` header and cookie, the invitation, setup, reset and verification paths (`GET` and `POST`), `Authorization`
+for `/api/v2` and for ingest, the session cookie, a search term, the sign-in redirect's `Location`, a `Referer`
+carrying a reset link and a client-supplied `X-Request-Id`. With this configuration none of them appeared in the access
+log or in Traefik's own log (also at `log.level: DEBUG`), and no header name appears in the log at all, so the
+`Set-Cookie` of a response is not logged either. The tests also showed:
 
 * **`redact` does not work for fields.** Field names accept only `keep` and `drop`; Traefik 3.8.0 silently treats
   `RequestPath: redact` as `keep` and logs the whole path and query string. `redact` exists for headers only.
 * **The default format logs everything in the URL.** `accessLog: {}` (the `common` format) writes the full request line,
   query string included. With `RequestPath: drop` the request line becomes `"GET - HTTP/1.1"`. In JSON there is no
   separate `RequestLine` field: the path appears only as `RequestPath`.
-* **Headers are a second leak.** With `headers.defaultMode: keep`, `Authorization`, `Cookie` and `api-token` are logged
-  in full unless each is set to `redact`, and redacting them is not enough. The `Location` header of a sign-in redirect
-  (`downstream_Location`, `origin_Location`) still carries the original URL. The `common` format's `Referer` and
-  `User-Agent` columns come from the headers too (`-` when they are dropped).
+* **Headers are a second leak.** With `headers.defaultMode: keep`, `Authorization`, `Cookie`, `api-token` and the
+  responses' `Set-Cookie` are logged in full unless each is set to `redact`, and redacting them is not enough. The
+  `Location` header of a sign-in redirect
+  (`downstream_Location`, `origin_Location`) still carries the original URL, and `request_Referer` carries whatever
+  link the browser came from (a reset link, for example). The `common` format's `Referer` and `User-Agent` columns come
+  from the headers too (`-` when they are dropped).
+* **Do not keep `X-Request-Id` either.** A header name in `headers.names` applies to the request and to both response
+  copies: `X-Request-Id: keep` logs the service's own id (`origin_X-Request-Id`, `downstream_X-Request-Id`) **and**
+  whatever the client sent in its own `X-Request-Id` header (`request_X-Request-Id`), verbatim. The service ignores an
+  incoming request id, but Traefik logs it, so any client can write arbitrary text, a credential included, into the
+  log. Traefik cannot keep one copy without the other.
 * **What you lose.** Traefik cannot mask a query parameter or a path segment selectively, so its log shows no path at
   all. Each line keeps the method, host, router and service names, status, sizes, durations and client address. Use
-  the router name, or the request id kept above, to find the matching line in the service's log.
+  the router name and the timestamp to find the matching line in the service's log.
 * **Not tested:** other Traefik versions, Traefik's tracing and metrics (an OpenTelemetry exporter records request URLs;
   keep it off for these routers or check what it exports), and other proxies. Nginx's `$request`, `$request_uri` and
   `$args`, and Caddy's default access log, include the query string.
