@@ -48,7 +48,7 @@ The container mode of the load harness is `internal/e2e/cli/container_harness_te
 | `functional-4.txt` | the functional re-run of the follow-up, with file-by-file and root-summary-only counts reported separately |
 | `d1-plugin-verification.txt` | the buildx plugin run with Woodpecker's encoding: mapping, rebuild path and the rc0 list form (follow-up) |
 | `d2-ghcr-retry.txt` | anonymous GHCR access and the manifest comparison with Docker Hub after the visibility change |
-| `traefik-log-check/` | summary, field lists, CLF lines and probe hits of `tools/traefik-log-check.sh` (probe values are fake) |
+| `traefik-log-check/` | summary (with a validity column), field lists, CLF lines and probe hits of `tools/traefik-log-check.sh` (probe values are fake; `Set-Cookie` values redacted) |
 | `alpine-cves-recheck.txt` | Trivy of the rc0 image and a fresh `alpine:3.24`, upgradable packages, who links the affected libraries |
 | `activity-log.txt` | when heavy work ran (to separate overlapping measurements) |
 

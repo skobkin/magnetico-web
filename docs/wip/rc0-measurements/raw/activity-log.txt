@@ -18,3 +18,6 @@
 2026-11-26T02:35:00Z follow-up: GHCR/Docker Hub manifest comparison and Trivy scans (D2, D5; until 02:37)
 2026-11-26T02:40:00Z primary: functional check re-run (functional-4, through Traefik)
 2026-11-26T02:56:39Z primary: functional check re-run finished (50/50)
+2026-11-26T17:51:00Z review corrections (before this time; exact start not recorded, the Docker event buffer no longer held it): disposable tmpfs test PostgreSQL rc0f-test-pg (port 55433) started; real-binary RSS v1 switch test; Traefik probe negative test (failed docker run beside a decoy container rc0-tlog, created and removed by this step); first full Traefik probe pass
+2026-11-26T17:51:50Z review corrections: second full Traefik probe pass with Set-Cookie redaction (until 17:52:00; the kept evidence), then a negative test with an unreachable backend (17:52:09-17:52:25)
+2026-11-26T17:55:15Z review corrections: go test -race (feed, opflags, apidocs, account) and the race-built real-binary RSS switch test (until 17:55:44); lint, vet, repocheck; test PostgreSQL removed at 17:56:09

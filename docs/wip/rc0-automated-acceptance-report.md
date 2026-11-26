@@ -314,7 +314,7 @@ disappeared during the run together with its anonymous volume. The owner removed
 | Proxy: timeouts > 70 s, 60 s search cut by the application | ✅ §5 |
 | Proxy: only the configured host is routed | ✅ (404 for another `Host`) |
 | Proxy: `X-Forwarded-For` appended, narrow trust | ✅ |
-| Proxy: access log keeps no credentials | ❌ with `redact` (D3) · ✅ with `RequestPath: drop` and all headers dropped: 13 probe credentials (feed tokens, link codes, API/ingest/session headers) absent from the access log and Traefik's own log (§13) |
+| Proxy: access log keeps no credentials | ❌ with `redact` (D3) · ✅ with `RequestPath: drop` and all headers dropped, no header exception: 15 probe credentials (feed tokens, link codes, API/ingest/session headers, a reset link in `Referer`, a client `X-Request-Id`) absent from the access log and Traefik's own log (§13.3, §13.9) |
 | Proxy: no response caching; TLS, HSTS, redirects | ✅ `no-store` on feeds/admin, HSTS, TLS 1.2+/1.3 via Traefik; HTTP→HTTPS redirect configured · ⬜ real certificates |
 | Operations: container memory with the real image | ⏳ soak (limits 1 GiB, no event so far); ✅ migration and verification footprints |
 | Operations: real SMTP provider | ⬜ owner (synthetic STARTTLS ✅) |
@@ -416,25 +416,28 @@ gives the same repository digest (`raw/d2-ghcr-retry.txt`).
 ### 13.3 D3: proxy access logs (documentation corrected)
 
 `tools/traefik-log-check.sh` starts a throwaway Traefik 3.8.0 (the deployment's image) per configuration in front of the
-RC0 services. It sends 13 probe credentials:
+RC0 services. It sends 15 probe credentials (13 in the first version, two added after the review, §13.9):
 - `feed_token`, and `api-token` in the query, a header and a cookie;
 - the four link paths, including a `POST`;
 - ingest and API `Authorization`, a session cookie;
-- a search query that triggers a sign-in redirect.
+- a search query that triggers a sign-in redirect;
+- a `Referer` carrying a reset link, and a client-supplied `X-Request-Id`.
 
-It then counts the probes in the access log and in Traefik's own log (`raw/traefik-log-check/`):
+It then counts the probes in the access log and in Traefik's own log (`raw/traefik-log-check/`, the re-run of
+2026-11-26 17:51 UTC; every configuration valid, 16 of 16 requests logged):
 
 | Configuration | Probes found |
 |---|---|
-| JSON, everything kept | 13 / 13 (access log) |
-| **`RequestPath: drop`, `headers.defaultMode: drop`** (also with `X-Request-Id: keep`, also at `log.level: DEBUG`) | **0** |
+| JSON, everything kept (positive control) | 15 / 15 (access log) |
+| **`RequestPath: drop`, `headers.defaultMode: drop`** (also at `log.level: DEBUG`) | **0** |
+| the same plus `headers.names.X-Request-Id: keep` | 1: the client-supplied `X-Request-Id` (`request_X-Request-Id`), so the exception is no longer recommended |
 | `RequestPath: redact` | 8 (all query strings and link paths): `redact` is ignored for fields |
-| path dropped, headers kept with `Authorization`, `Cookie`, `Api-Token` set to `redact` | 1: the `Location` of the sign-in redirect repeats the URL (`/login?next=…`) |
+| path dropped, headers kept with `Authorization`, `Cookie`, `Api-Token` set to `redact` | 3: the `Location` of the sign-in redirect repeats the URL (`/login?next=…`); `Referer`; the client `X-Request-Id` |
 | `common` / `genericCLF` with `RequestPath: drop` | 0 (request line `"GET - HTTP/1.1"`) |
 | the default `common` format | 8 |
 
 JSON has no separate `RequestLine` field. The documentation now states the tested configuration and what an operator
-loses with it (no paths in the proxy log; the service's own log has the route pattern and the request id). It also says
+loses with it (no paths or headers in the proxy log; the service's own log has the route pattern and the request id). It also says
 that the proxy log can stay off: `docs/web-deployment.md` §3 "Proxy access logs", the feed section of §9, `crawler.md`
 §4, the migration checklist, spec §8.2.3 and the v1 OpenAPI text. Not tested: other Traefik versions, tracing exporters,
 other proxies.
@@ -486,3 +489,48 @@ used), and all pass:
 
 They overlapped the soak for about ten minutes (`raw/activity-log.txt`). The functional check was re-run against the RC0
 deployment with the corrected file-comparison counts: `raw/functional-4.txt`.
+
+### 13.9 Corrections after the review of the follow-up (2026-11-26)
+
+Commits: `5e0e73dc` (configuration file), `bfa5bfe9` (OpenAPI and migration guide), `e380774e` (Traefik guidance),
+`f0b01df7` (probe script); this report and the evidence separately.
+
+- **Configuration file.** Native YAML booleans were accepted for every `web:` key, so `siteTitle: true` became the title
+  `"true"`. They are now accepted for `rssV1Enabled` only. Every other key refuses them as an unsupported value type,
+  which a new regression test checks for `siteTitle`, `smtpUsername` and `listen`. The test fails against the previous
+  code. A quoted `"true"` is still a valid title.
+- **OpenAPI v1.** `getLegacyFeed` documents the `404` of a switched-off feed: the router's plain-text
+  `404 page not found`, given before any credential is read. The real-binary test asserts exactly that answer.
+- **Migration guide.** The §8.2 smoke test and the §9 checklist check the v2 feed with a migrated legacy token (`200`)
+  and the JSON API with the same token (`401`). The v1 URL check depends on `MAGNETICO_WEB_RSS_V1_ENABLED`: it must work
+  when on and answer `404` when off. §8.5 tells operators who switch v1 off how users rewrite their URL with the same
+  token. Spec §4.8.3 still says a legacy token "MUST NOT authenticate against `/api/v2/*`". Read with §8.2.8, the v2
+  feed accepts every RSS credential, and the feed tests have always checked this, so the sentence means the JSON API.
+  The spec text was not changed (owner approval needed).
+- **Traefik probe.** Two probes were added: a `Referer` carrying a reset link, and a client-supplied `X-Request-Id`. The
+  optional `X-Request-Id: keep` exception logs the service's own id (`origin_`/`downstream_X-Request-Id`, 16 hex
+  characters). It also logs the client's header verbatim (`request_X-Request-Id`), and one header name governs all
+  three. It was removed from the recommended configuration (`docs/web-deployment.md` §3). The guide now lists exactly
+  the places the probes cover. The keep-all control also showed `Set-Cookie` (the service's pre-session cookie) as a
+  further response header that carries a credential, so the credential table names it. The recommended configuration
+  drops it with every other header.
+- **Probe script.** Each Traefik container gets a unique name and a fresh `--cidfile`. Cleanup removes only that id.
+  The script publishes a random loopback port, and `curl` has connect and total timeouts.
+  - **Validity.** A configuration counts only when every probe got an HTTP answer that is not 502/503/504 and the
+    access log holds exactly one line per request Traefik answered. The keep-all control must show every marker.
+    Otherwise the summary says `INVALID(…)` and the script exits 1.
+  - **Redaction.** `Set-Cookie` values in the kept hit lines are redacted, because they are real cookies issued by
+    the RC0 service.
+  - **Negative tests, not kept as evidence.** A failed `docker run` left a pre-existing container named `rc0-tlog`
+    untouched. An unreachable backend gave `INVALID(backend-502,not-ready)` and exit 1.
+  - **Real runs.** Two full runs gave the same counts (table in §13.3). The feed probes answered `429` in the later
+    configurations: the throwaway Traefik is the client address that the failure limiter sees. Traefik logs the
+    request either way, and the line count shows it did.
+- **Checks.** These ran against a disposable tmpfs PostgreSQL, removed afterwards, and all pass:
+  - `go test -race` of `internal/web/feed`, `opflags`, `internal/web/apidocs` and `internal/web/account`;
+  - `TestRealBinaryRSSV1Switch` with `GOFLAGS=-race`, so the harness's `magnetico` binary is race-instrumented too
+    (`go version -m` shows `-race=true`), with `GORACE` reports sent to files: none was written;
+  - `internal/repocheck`, `golangci-lint` (0 issues) and `go vet` for both tag sets.
+
+  The soak was not touched: the probes and tests used only the primary deployment and the test PostgreSQL, with load
+  on the same host until 17:56 UTC (`raw/activity-log.txt`).
