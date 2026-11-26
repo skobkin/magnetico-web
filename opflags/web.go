@@ -64,6 +64,11 @@ type WebOptions struct {
 	LogLevel  string `long:"log-level" description:"Log level: debug, info, warn or error." default:"info"`
 	LogFormat string `long:"log-format" description:"Log format: text or json." default:"text"`
 
+	// RSSV1 is the raw switch of the deprecated RSS v1 feed; check() parses it into
+	// RSSV1Disabled. A string rather than a bool so that the flag can be turned off
+	// (--rss-v1-enabled=false) like the environment variable and the file key.
+	RSSV1 string `long:"rss-v1-enabled" description:"Serve the deprecated RSS v1 feed /api/v1/feed/rss/last (true or false). When false the path answers 404 without reading any credential; the v2 feed is unaffected." default:"true"`
+
 	// SMTPPassword is MAGNETICO_WEB_SMTP_PASSWORD only: no flag, never printed.
 	SMTPPassword string `yaml:"-"`
 
@@ -72,6 +77,9 @@ type WebOptions struct {
 	TrustedProxyPrefixes []netip.Prefix `yaml:"-"`
 	// DevMode is true for a loopback http:// public URL (§4.4.3).
 	DevMode bool `yaml:"-"`
+	// RSSV1Disabled is the parsed RSSV1 switch, inverted so that the zero value
+	// of an options literal that skips check() keeps the feed (the default).
+	RSSV1Disabled bool `yaml:"-"`
 
 	// Administrator subcommands (`web user …`, `web tracker …`); bare `web`
 	// runs the service. Subcommand records the selected one as "user add",
@@ -132,6 +140,7 @@ var webEnvs = []webEnv{
 	{webEnvPrefix + "SMTP_FROM", "smtp-from", "smtpFrom", envString(func(o *WebOptions) *string { return &o.SMTPFrom })},
 	{webEnvPrefix + "LOG_LEVEL", "log-level", "logLevel", envString(func(o *WebOptions) *string { return &o.LogLevel })},
 	{webEnvPrefix + "LOG_FORMAT", "log-format", "logFormat", envString(func(o *WebOptions) *string { return &o.LogFormat })},
+	{webEnvPrefix + "RSS_V1_ENABLED", "rss-v1-enabled", "rssV1Enabled", envString(func(o *WebOptions) *string { return &o.RSSV1 })},
 }
 
 // applyEnvWebConfig applies MAGNETICO_WEB_* variables (an explicit flag wins;
@@ -194,6 +203,8 @@ func (o *OpFlags) mergeWebYaml(section any, explicit map[string]bool) error {
 			v = t
 		case int, int64, uint64:
 			v = fmt.Sprint(t)
+		case bool:
+			v = strconv.FormatBool(t)
 		case []any:
 			if key != "trustedProxies" {
 				return fmt.Errorf("config file: web.%s must be a scalar", key)
@@ -262,6 +273,11 @@ func (o *WebOptions) check(explicitDatabase bool) error {
 	default:
 		return errors.New("log-format must be text or json")
 	}
+	rssV1, err := strconv.ParseBool(strings.TrimSpace(o.RSSV1))
+	if err != nil {
+		return errors.New("rss-v1-enabled must be true or false (--rss-v1-enabled / MAGNETICO_WEB_RSS_V1_ENABLED)")
+	}
+	o.RSSV1Disabled = !rssV1
 	prefixes, err := parseTrustedProxies(o.TrustedProxies)
 	if err != nil {
 		return err

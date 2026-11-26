@@ -69,6 +69,12 @@ type Config struct {
 	Trackers   TrackerSource // optional: no trackers without it
 	PublicBase *url.URL
 
+	// DisableV1 leaves the deprecated v1 feed unregistered
+	// (MAGNETICO_WEB_RSS_V1_ENABLED=false): its path then answers like any
+	// unknown path (404), and nothing sent to it is read as a credential, rate
+	// limited or looked up. The v2 feed is unaffected.
+	DisableV1 bool
+
 	CacheTTL time.Duration // 0 → 60 s
 	Now      func() time.Time
 
@@ -178,7 +184,8 @@ type Handlers struct {
 	gen     chan struct{}
 }
 
-// Install registers both feeds (Feed access class).
+// Install registers both feeds, or the v2 feed only with DisableV1 (Feed
+// access class).
 func Install(srv *server.Server, cfg Config) (*Handlers, error) {
 	if cfg.Auth == nil || cfg.Rows == nil || cfg.PublicBase == nil {
 		return nil, errors.New("feed: authenticator, rows and public base URL are required")
@@ -207,7 +214,11 @@ func Install(srv *server.Server, cfg Config) (*Handlers, error) {
 	// The Feed class carries no credential logic: each route below binds its own
 	// fixed policy, so the transports of one feed can never leak into the other.
 	rt.SetGuard(server.Feed, func(next http.Handler) http.Handler { return next })
-	rt.Handle("GET "+V1Path, server.KindRequest, server.Feed, h.handler(v1Policy))
+	if cfg.DisableV1 {
+		h.log.Info("rss v1 feed disabled: its path answers 404", "path", V1Path)
+	} else {
+		rt.Handle("GET "+V1Path, server.KindRequest, server.Feed, h.handler(v1Policy))
+	}
 	rt.Handle("GET "+V2Path, server.KindRequest, server.Feed, h.handler(v2Policy))
 	return h, nil
 }

@@ -460,3 +460,63 @@ func TestMigrateWebSchemaInitUsesMigrateDatabaseConventions(t *testing.T) {
 		t.Fatalf("file = %s", got)
 	}
 }
+
+// MAGNETICO_WEB_RSS_V1_ENABLED: on by default (backward compatibility), off
+// through the environment, the file (a YAML boolean or string) or the flag,
+// with the usual precedence; anything but a boolean is refused without echoing
+// the value.
+func TestWebRSSV1Switch(t *testing.T) {
+	webEnvClean(t)
+	o, err := parseWeb(t, "--public-url", webPublic)
+	if err != nil || o.Web.RSSV1Disabled {
+		t.Fatalf("default must keep the v1 feed: %v disabled=%v", err, o.Web.RSSV1Disabled)
+	}
+	if (&WebOptions{}).RSSV1Disabled {
+		t.Fatal("the zero value must keep the v1 feed")
+	}
+	for _, v := range []string{"false", "FALSE", "0", " false "} {
+		t.Setenv("MAGNETICO_WEB_RSS_V1_ENABLED", v)
+		if o, err := parseWeb(t, "--public-url", webPublic); err != nil || !o.Web.RSSV1Disabled {
+			t.Errorf("env %q: %v disabled=%v", v, err, o.Web.RSSV1Disabled)
+		}
+	}
+	t.Setenv("MAGNETICO_WEB_RSS_V1_ENABLED", "true")
+	if o, err := parseWeb(t, "--public-url", webPublic); err != nil || o.Web.RSSV1Disabled {
+		t.Errorf("env true: %v disabled=%v", err, o.Web.RSSV1Disabled)
+	}
+	t.Setenv("MAGNETICO_WEB_RSS_V1_ENABLED", "false")
+	if o, err := parseWeb(t, "--public-url", webPublic, "--rss-v1-enabled=true"); err != nil || o.Web.RSSV1Disabled {
+		t.Errorf("CLI must beat ENV: %v disabled=%v", err, o.Web.RSSV1Disabled)
+	}
+	t.Setenv("MAGNETICO_WEB_RSS_V1_ENABLED", "maybe-secret")
+	if _, err := parseWeb(t, "--public-url", webPublic); err == nil || !strings.Contains(err.Error(), "MAGNETICO_WEB_RSS_V1_ENABLED") || strings.Contains(err.Error(), "maybe-secret") {
+		t.Errorf("invalid env value: %v", err)
+	}
+	os.Unsetenv("MAGNETICO_WEB_RSS_V1_ENABLED")
+	if o, err := parseWeb(t, "--public-url", webPublic, "--rss-v1-enabled", "false"); err != nil || !o.Web.RSSV1Disabled {
+		t.Errorf("flag false: %v", err)
+	}
+	pub := "web:\n  publicURL: https://magnet.example.org\n"
+	for body, disabled := range map[string]bool{
+		pub + "  rssV1Enabled: false\n":     true,
+		pub + "  rssV1Enabled: \"false\"\n": true,
+		pub + "  rssV1Enabled: true\n":      false,
+	} {
+		o, err := parseWebFile(t, writeWebConfig(t, body))
+		if err != nil || o.Web.RSSV1Disabled != disabled {
+			t.Errorf("file %q: %v disabled=%v", body, err, o.Web.RSSV1Disabled)
+		}
+	}
+	t.Setenv("MAGNETICO_WEB_RSS_V1_ENABLED", "true")
+	if o, err := parseWebFile(t, writeWebConfig(t, pub+"  rssV1Enabled: false\n")); err != nil || o.Web.RSSV1Disabled {
+		t.Errorf("ENV must beat the file: %v disabled=%v", err, o.Web.RSSV1Disabled)
+	}
+	os.Unsetenv("MAGNETICO_WEB_RSS_V1_ENABLED")
+	if _, err := parseWebFile(t, writeWebConfig(t, pub+"  rssV1Enabled: sometimes\n")); err == nil || strings.Contains(err.Error(), "sometimes") {
+		t.Errorf("invalid file value: %v", err)
+	}
+	// A boolean is accepted for this key only.
+	if _, err := parseWebFile(t, writeWebConfig(t, pub+"  listen: true\n")); err == nil {
+		t.Error("a boolean listen address must be refused")
+	}
+}

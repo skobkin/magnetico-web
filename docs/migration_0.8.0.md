@@ -30,7 +30,7 @@ Marks: **[R]** reversible (you can undo it and the legacy system is untouched) �
 | Invitations | Codes stored in plaintext | Kept (ids, owners, plaintext codes, used-by); the legacy app never recorded a use time, so `used_at` is empty. No new invitations are created (`MAGNETICO_WEB_INVITE_QUOTA` defaults to 0) |
 | URLs | `/auth/login`, `/auth/reset/…`, `/profile/api/…`, `/torrents`, `/api/v1/…` | New routes; **no redirects from legacy UI URLs** (they are 404) |
 | Public API | `/api/v1/*` | `/api/v2/*` with Bearer API tokens. Removed: `POST /api/v1/login`, `POST /api/v1/logout`, `GET /api/v1/torrents`, `GET /api/v1/torrents/{id}` |
-| RSS | `/api/v1/feed/rss/last?api-token=…` | **Kept (deprecated)** for legacy tokens at the same URL and with the same structure. Intentional change: `page=1` is now the newest 1,000 items, so a client may see up to 1,000 items it has never seen once after cutover (GUIDs are info hashes, so seen items de-duplicate). New feed: `/api/v2/feeds/latest.rss?feed_token=…` |
+| RSS | `/api/v1/feed/rss/last?api-token=…` | **Kept (deprecated)** for legacy tokens at the same URL and with the same structure (on by default; `MAGNETICO_WEB_RSS_V1_ENABLED=false` switches it off, and the path then answers `404`). Intentional change: `page=1` is now the newest 1,000 items, so a client may see up to 1,000 items it has never seen once after cutover (GUIDs are info hashes, so seen items de-duplicate). New feed: `/api/v2/feeds/latest.rss?feed_token=…` |
 | Magnet short link | `/magnet/{infohash}` | Unchanged path; trackers now come from the database (seeded once with the historical list) |
 | reCAPTCHA | Used on reset and registration | Gone (rate limiting instead; no third-party calls) |
 

@@ -122,7 +122,7 @@
 {{else}}<div class="no-rows">You have no RSS tokens.</div>{{end}}
 </div>
 <div class="warning-copy">
-<p>Use the <strong>/api/v2/feeds/latest.rss?feed_token=…</strong> URL. The older <strong>/api/v1/feed/rss/last</strong> address is deprecated and may be removed in the future, but it still works, and existing legacy tokens keep working until you revoke them. You do not have to replace them right away.</p>
+{{if .RSSV1Disabled}}<p>Use the <strong>/api/v2/feeds/latest.rss?feed_token=…</strong> URL. The older <strong>/api/v1/feed/rss/last</strong> address is switched off on this site: feed readers that still use it must be given a v2 URL. Existing legacy tokens work in the v2 URL until you revoke them.</p>{{else}}<p>Use the <strong>/api/v2/feeds/latest.rss?feed_token=…</strong> URL. The older <strong>/api/v1/feed/rss/last</strong> address is deprecated and may be removed in the future, but it still works, and existing legacy tokens keep working until you revoke them. You do not have to replace them right away.</p>{{end}}
 <p>RSS tokens only open the feed. They cannot be used for the API, and API tokens cannot open the feed.</p>
 <p>Anyone who has a feed URL can read the feed: treat it like a password. Resetting your password revokes all RSS tokens.</p>
 </div>

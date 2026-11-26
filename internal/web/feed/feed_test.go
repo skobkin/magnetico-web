@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"encoding/xml"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skobkin/magnetico-web/internal/web/accounts"
 	"github.com/skobkin/magnetico-web/internal/web/ratelimit"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -611,5 +613,103 @@ func TestStorageFaultIsLoggedAtErrorAndBackpressureAtWarn(t *testing.T) {
 			t.Errorf("%s: handler diagnostic %q missing\n%s", c.name, c.wantHandler, logged)
 		}
 		e.rows.err.Store(nil)
+	}
+}
+
+// countingAuth counts every credential the feeds hand to the token store.
+type countingAuth struct {
+	Authenticator
+	lookups, touches atomic.Int64
+}
+
+func (c *countingAuth) AuthenticateRSSToken(ctx context.Context, presented string) (accounts.Identity, error) {
+	c.lookups.Add(1)
+	return c.Authenticator.AuthenticateRSSToken(ctx, presented)
+}
+
+func (c *countingAuth) TouchRSSToken(ctx context.Context, id int64) error {
+	c.touches.Add(1)
+	return c.Authenticator.TouchRSSToken(ctx, id)
+}
+
+// MAGNETICO_WEB_RSS_V1_ENABLED=false: the v1 path is not registered, answers
+// 404 for every transport and every token (valid legacy, valid new, bogus),
+// never reaches the token store, the failure limiter or last_used_at, and the
+// v2 feed keeps serving the same tokens.
+func TestDisabledV1FeedIs404WithoutReadingCredentials(t *testing.T) {
+	spy := &countingAuth{}
+	// One failure allowed per client: a v1 request that were rate limited or
+	// authenticated would consume it, and the v2 request below would then be 429.
+	fail, err := ratelimit.New(ratelimit.Config{Burst: 1, Interval: time.Hour, MaxKeys: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := newEnv(t, func(o *envOpts) {
+		o.disableV1 = true
+		o.failLim = fail
+		o.auth = func(a Authenticator) Authenticator { spy.Authenticator = a; return spy }
+	})
+	seedGolden(e)
+	const legacy = "0123456789abcdef0123456789abcdef"
+	lh := sha256.Sum256([]byte(legacy))
+	e.exec(`INSERT INTO magnetico_web.rss_tokens (token_hash, user_id, legacy) VALUES ($1,$2,true)`, lh[:], e.user.ID)
+	rss := e.rssToken()
+
+	for _, r := range e.srv.Router().Routes() {
+		if r.Pattern == "GET "+V1Path {
+			t.Fatalf("the v1 feed is registered although disabled")
+		}
+	}
+	cookie := func(v string) []*http.Cookie { return []*http.Cookie{{Name: "api-token", Value: v}} }
+	for _, tok := range []string{legacy, rss.Plaintext, "bogus"} {
+		for name, r := range map[string]resp{
+			"query":  e.do(V1Path+"?api-token="+url.QueryEscape(tok), nil),
+			"header": e.do(V1Path, map[string]string{"api-token": tok}),
+			"cookie": e.do(V1Path, nil, cookie(tok)...),
+			"page":   e.do(V1Path+"?page=2&api-token="+url.QueryEscape(tok), nil),
+		} {
+			if r.Status != http.StatusNotFound {
+				t.Errorf("v1 %s: status %d, want 404", name, r.Status)
+			}
+			if strings.Contains(string(r.Body), "Invalid credentials") || strings.Contains(r.Header.Get("Content-Type"), "rss") {
+				t.Errorf("v1 %s: a feed answer (%s) from a disabled feed", name, r.Header.Get("Content-Type"))
+			}
+		}
+	}
+	if n := spy.lookups.Load(); n != 0 {
+		t.Fatalf("the disabled v1 feed looked up %d credentials", n)
+	}
+	var used int
+	if err := e.pool.QueryRow(tctx(t), `SELECT count(*) FROM magnetico_web.rss_tokens WHERE last_used_at IS NOT NULL`).Scan(&used); err != nil {
+		t.Fatal(err)
+	}
+	if used != 0 || spy.touches.Load() != 0 {
+		t.Fatalf("a token was marked used through the disabled v1 feed (rows %d, touches %d)", used, spy.touches.Load())
+	}
+	if strings.Contains(e.log.String(), legacy) || strings.Contains(e.log.String(), rss.Plaintext) {
+		t.Fatal("a token reached the log")
+	}
+
+	// v2 is unaffected: the same tokens work, and the failure budget is intact.
+	for _, tok := range []string{legacy, rss.Plaintext} {
+		if r := e.do(V2Path+"?feed_token="+tok, nil); r.Status != http.StatusOK {
+			t.Fatalf("v2 with a valid token: %d", r.Status)
+		}
+	}
+	if r := e.do(V2Path+"?feed_token=bogus", nil); r.Status != http.StatusUnauthorized {
+		t.Fatalf("v2 first failure: %d, want 401 (the disabled v1 requests must not have used the failure budget)", r.Status)
+	}
+	if spy.lookups.Load() != 3 {
+		t.Fatalf("lookups = %d, want 3 (the v2 requests only)", spy.lookups.Load())
+	}
+}
+
+// The default keeps both feeds (backward compatibility).
+func TestBothFeedsAreRegisteredByDefault(t *testing.T) {
+	e := newEnv(t)
+	seedGolden(e)
+	tok := e.rssToken()
+	if r := e.do(V1Path+"?api-token="+tok.Plaintext, nil); r.Status != http.StatusOK {
+		t.Fatalf("v1 by default: %d", r.Status)
 	}
 }

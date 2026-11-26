@@ -92,6 +92,10 @@ type AccountPage struct {
 	// the stored address is verified and the server can send email. A pending
 	// replacement does not change it.
 	RecoveryAvailable bool
+	// RSSV1Disabled: the deprecated v1 feed is switched off on this server
+	// (MAGNETICO_WEB_RSS_V1_ENABLED=false); the RSS tab then says so instead of
+	// telling users that the old address still works.
+	RSSV1Disabled bool
 
 	Invites          []InviteRow
 	InvitesAvailable int

@@ -19,7 +19,11 @@ info:
     tokens are rejected by the JSON API. Because the token can appear in a URL,
     the response carries `Referrer-Policy: no-referrer` and
     `Cache-Control: private, no-store`, and the server never logs or echoes
-    it; configure your reverse proxy to mask query strings in its own logs.
+    it. Keep the reverse proxy's access log off, or drop the request path and
+    all headers from it: a proxy cannot reliably mask a single query parameter.
+
+    The operator may switch this feed off (`MAGNETICO_WEB_RSS_V1_ENABLED=false`);
+    the path then answers `404` and the same token keeps working in the v2 feed.
 servers:
   - url: /api/v1
 paths:

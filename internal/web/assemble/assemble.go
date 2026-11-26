@@ -103,7 +103,7 @@ func Web(o *opflags.WebOptions, backend *webdb.Backend, logger *slog.Logger, dia
 	}
 	if _, err := webaccount.Install(srv, webaccount.Config{
 		Store: accountStore, Passwords: password.Default, Auth: authSvc, Mail: mailQueue,
-		PublicBase: o.PublicBaseURL, InviteQuota: o.InviteQuota,
+		PublicBase: o.PublicBaseURL, InviteQuota: o.InviteQuota, RSSV1Disabled: o.RSSV1Disabled,
 	}); err != nil {
 		return nil, err
 	}
@@ -149,10 +149,12 @@ func Web(o *opflags.WebOptions, backend *webdb.Backend, logger *slog.Logger, dia
 		return nil, err
 	}
 
-	// RSS feeds (W7): the deprecated v1 compatibility feed and the v2 feed, each
-	// with its own fixed credential policy, over RSS tokens only.
+	// RSS feeds (W7): the deprecated v1 compatibility feed (unless
+	// MAGNETICO_WEB_RSS_V1_ENABLED=false) and the v2 feed, each with its own
+	// fixed credential policy, over RSS tokens only.
 	if _, err := webfeed.Install(srv, webfeed.Config{
 		Auth: accountStore, Rows: reader, Trackers: trackerCache, PublicBase: o.PublicBaseURL,
+		DisableV1: o.RSSV1Disabled,
 	}); err != nil {
 		return nil, err
 	}

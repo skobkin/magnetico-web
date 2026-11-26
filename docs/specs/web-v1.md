@@ -47,6 +47,7 @@ Key words MUST, SHOULD, MAY are used in the RFC 2119 sense.
 | `MAGNETICO_WEB_SMTP_HOST`, `_PORT`, `_SECURITY`, `_USERNAME`, `_FROM` | unset (email features disabled) | `_SECURITY` is `starttls` or `tls` only; there is **no** plaintext value |
 | `MAGNETICO_WEB_SMTP_PASSWORD` | unset | environment only |
 | `MAGNETICO_WEB_LOG_LEVEL`, `_LOG_FORMAT` | `info`, `text` | `text` or `json` |
+| `MAGNETICO_WEB_RSS_V1_ENABLED` | `true` **[APPROVED, owner request after RC0]** | boolean; `false` leaves the v1 feed unregistered (§8.2.9) |
 
 2.4 Startup MUST fail fast, with an actionable message and without modifying the database, if: PostgreSQL is unreachable; `pg_trgm` is missing; the torrent schema or its `schema_version` is not the supported one; the `magnetico_web` schema is missing, has an unsupported version, **or differs structurally from version 1 (columns, constraints, indexes, unexpected triggers; §5.5)**; the tracker list cannot be loaded; the database role lacks the needed privileges; SMTP is partially configured or its `_SECURITY` is not `starttls`/`tls`. It MUST NOT run any automatic migration (`postgresql-persistence-v2.md` §2, §6).
 
@@ -506,6 +507,8 @@ The W4-era proposal of `/files` as a flat canonical list with positional cursors
 - **API access:** create and revoke general API tokens; an explanation of Bearer-header authentication. API tokens are never created automatically at login or by migration; a user who wants API access creates one explicitly after logging in.
 
 8.2.8 **`GET /api/v2/feeds/latest.rss?feed_token=<rss-token>` [APPROVED].** Works in torrent clients that cannot send custom authorization headers. It is an explicitly documented exception in the v2 OpenAPI document and uses only the separate RSS credential; it rejects general API tokens. The parameter name `feed_token` is the recommended one and may change only for a concrete compatibility or design problem (none identified). Same item mapping, ordering, page semantics and protections as v1 (§8.2.1, §8.2.3). The general v2 JSON API stays strictly Bearer-header authenticated; RSS tokens do not work there.
+
+8.2.9 **Switching the v1 feed off [APPROVED, owner request after RC0].** With `MAGNETICO_WEB_RSS_V1_ENABLED=false` the v1 route is not registered: `GET /api/v1/feed/rss/last` answers `404` like any unknown path, for every transport, and MUST NOT read, rate limit, look up or touch any credential sent to it. The v2 feed (§8.2.8) is unaffected and keeps accepting migrated legacy tokens. The default is `true` (backward compatibility); the account page (§8.2.7) says when the v1 address is switched off.
 
 ### 8.3 Magnet short link and the tracker list
 

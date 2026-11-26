@@ -75,6 +75,9 @@ type Config struct {
 	// from it, never from the Host header.
 	PublicBase  *url.URL
 	InviteQuota int
+	// RSSV1Disabled mirrors MAGNETICO_WEB_RSS_V1_ENABLED=false for the wording
+	// of the RSS tab (the feed itself is switched in the feed package).
+	RSSV1Disabled bool
 
 	// Test seams.
 	Now func() time.Time

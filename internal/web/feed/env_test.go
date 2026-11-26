@@ -97,6 +97,8 @@ func (c *clock) Advance(d time.Duration) {
 type envOpts struct {
 	failLim, useLim *ratelimit.Limiter
 	noTrackers      bool
+	disableV1       bool
+	auth            func(Authenticator) Authenticator // wraps the store (spies)
 }
 
 type env struct {
@@ -160,7 +162,10 @@ func newEnv(t *testing.T, mutate ...func(*envOpts)) *env {
 		l, _ := ratelimit.New(ratelimit.Config{Burst: 1000000, Interval: time.Microsecond, MaxKeys: 1000})
 		return l
 	}
-	c := Config{Auth: e.store, Rows: e.rows, PublicBase: pu, Now: e.clock.Now, CacheTTL: time.Minute, FailLimiter: big(), UseLimiter: big()}
+	c := Config{Auth: e.store, Rows: e.rows, PublicBase: pu, Now: e.clock.Now, CacheTTL: time.Minute, FailLimiter: big(), UseLimiter: big(), DisableV1: o.disableV1}
+	if o.auth != nil {
+		c.Auth = o.auth(e.store)
+	}
 	if !o.noTrackers {
 		c.Trackers = e.trackers
 	}
