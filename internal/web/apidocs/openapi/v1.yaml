@@ -69,6 +69,17 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Error"}
               example: {code: 401, status: error, message: Invalid credentials., data: null}
+        "404":
+          description: |
+            The operator switched this feed off (`MAGNETICO_WEB_RSS_V1_ENABLED=false`).
+            The path is not served at all: the answer is the server's generic
+            not-found text, given before and regardless of any credential (no
+            token is read, looked up or counted). The same token keeps working
+            in the v2 feed.
+          content:
+            text/plain:
+              schema: {type: string}
+              example: "404 page not found"
         "429":
           description: Too many requests.
           headers:

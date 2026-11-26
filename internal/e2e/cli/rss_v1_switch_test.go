@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -38,6 +39,20 @@ func TestRealBinaryRSSV1Switch(t *testing.T) {
 	} {
 		if st != http.StatusNotFound {
 			t.Errorf("v1 %s: %d, want 404", name, st)
+		}
+	}
+	// The documented 404 (OpenAPI v1 getLegacyFeed): the router's plain-text
+	// answer for an unregistered path, never an RSS document or the token.
+	{
+		resp, err := http.Get("http://" + w.web.addr + "/api/v1/feed/rss/last?api-token=" + tok)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusNotFound || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/plain") ||
+			strings.TrimSpace(string(body)) != "404 page not found" {
+			t.Errorf("disabled v1 answer: %d %q %q", resp.StatusCode, resp.Header.Get("Content-Type"), body)
 		}
 	}
 	if st, hdr, _ := w.bearer("", "/api/v2/feeds/latest.rss?feed_token="+tok); st != 200 || !strings.Contains(hdr.Get("Content-Type"), "rss") {

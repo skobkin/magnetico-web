@@ -262,7 +262,9 @@ Start `magnetico web` ([`docs/web-deployment.md`](web-deployment.md) §1: at lea
 
 1. Login with a migrated password works (first success rehashes to the current format: `web user list` then shows `current`).
 2. Search a known name; open a torrent with a long file list (both file-browser modes).
-3. A legacy RSS URL works unchanged (`/api/v1/feed/rss/last?api-token=LEGACY_TOKEN`) and the same token is rejected (`401`) on `/api/v2/torrents`.
+3. A migrated legacy RSS token works in the v2 feed (`/api/v2/feeds/latest.rss?feed_token=LEGACY_TOKEN` answers `200` with RSS) and is rejected (`401`) by the JSON API (`/api/v2/torrents`). Then, depending on `MAGNETICO_WEB_RSS_V1_ENABLED`:
+   - **on** (the default): the legacy RSS URL works unchanged (`/api/v1/feed/rss/last?api-token=LEGACY_TOKEN`);
+   - **off**: the same URL answers `404`.
 4. `/magnet/{infohash}` redirects.
 5. The account page lists the migrated invitations and shows the legacy tokens masked.
 
@@ -295,7 +297,7 @@ In this order, with a person ready to roll back (§11) until each step is checke
 
 - Everyone has to **sign in again**; sessions did not migrate. Passwords carry over, except for the accounts you told you must be reset.
 - **Verify your email address** on the account page before relying on password recovery. A password change or reset cancels a confirmation link that is still waiting (the stored address is kept): request the confirmation email again afterwards.
-- **RSS URLs keep working.** Create a new RSS URL on the account page when convenient: the old (v1) endpoint is deprecated and may eventually be removed. Expect up to 1,000 recent items to look new once.
+- **RSS URLs keep working** (if you switched the v1 feed off, tell users to replace `/api/v1/feed/rss/last?api-token=TOKEN` with `/api/v2/feeds/latest.rss?feed_token=TOKEN`; the token stays the same). Create a new RSS URL on the account page when convenient: the old (v1) endpoint is deprecated and may eventually be removed. Expect up to 1,000 recent items to look new once.
 - **API clients** must create a new API token (account page) and use `/api/v2` with `Authorization: Bearer …`; `/api/v1/login` and the v1 JSON endpoints no longer exist.
 - Old bookmarks of the legacy pages may be 404. Search is by name only.
 
@@ -305,7 +307,9 @@ In this order, with a person ready to roll back (§11) until each step is checke
 - [ ] The torrent count of the new database equals the legacy count minus the documented unresolved record errors (`SELECT count(*) FROM magneticod.torrents;` on each; the legacy count is taken from the frozen database).
 - [ ] `magnetico migrate users verify` exited 0; the reports from §7 are stored.
 - [ ] `magnetico web user list` matches expectations: the number of `needs-reset` accounts equals N, and you can sign in as an administrator.
-- [ ] A migrated user with a supported hash signs in; a legacy RSS URL works; the same token fails on `/api/v2`.
+- [ ] A migrated user with a supported hash signs in.
+- [ ] A migrated legacy RSS token works in the v2 feed (`/api/v2/feeds/latest.rss?feed_token=…`) and fails (`401`) on the JSON API (`/api/v2/torrents`).
+- [ ] With the v1 feed on (`MAGNETICO_WEB_RSS_V1_ENABLED`, default `true`): a legacy RSS URL (`/api/v1/feed/rss/last?api-token=…`) works unchanged. With it off: that URL answers `404`.
 - [ ] Search finds known torrents (ASCII and non-ASCII names); a very large torrent opens.
 - [ ] `/magnet/{infohash}` redirects; the tracker list is what you expect (`web tracker list`).
 - [ ] The reverse proxy's access log is off, or drops the request path and all headers (RSS URLs, invitation, reset and verification links and the `Authorization` header carry credentials; Traefik: `RequestPath: drop`, not `redact`; [`docs/web-deployment.md`](web-deployment.md) §3, "Proxy access logs"), does not cache `/torrents`, `/api` or feeds, and its timeouts exceed the search write deadline (≥ 90 s; [`docs/web-deployment.md`](web-deployment.md) §3).
