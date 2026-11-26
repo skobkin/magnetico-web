@@ -21,3 +21,4 @@
 2026-11-26T17:51:00Z review corrections (before this time; exact start not recorded, the Docker event buffer no longer held it): disposable tmpfs test PostgreSQL rc0f-test-pg (port 55433) started; real-binary RSS v1 switch test; Traefik probe negative test (failed docker run beside a decoy container rc0-tlog, created and removed by this step); first full Traefik probe pass
 2026-11-26T17:51:50Z review corrections: second full Traefik probe pass with Set-Cookie redaction (until 17:52:00; the kept evidence), then a negative test with an unreachable backend (17:52:09-17:52:25)
 2026-11-26T17:55:15Z review corrections: go test -race (feed, opflags, apidocs, account) and the race-built real-binary RSS switch test (until 17:55:44); lint, vet, repocheck; test PostgreSQL removed at 17:56:09
+2026-11-26T19:53:02Z spec correction: disposable tmpfs test PostgreSQL; feed credential tests and repocheck (until 19:53:15, PostgreSQL stopped and removed)

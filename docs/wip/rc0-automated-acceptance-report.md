@@ -504,9 +504,12 @@ Commits: `5e0e73dc` (configuration file), `bfa5bfe9` (OpenAPI and migration guid
 - **Migration guide.** The §8.2 smoke test and the §9 checklist check the v2 feed with a migrated legacy token (`200`)
   and the JSON API with the same token (`401`). The v1 URL check depends on `MAGNETICO_WEB_RSS_V1_ENABLED`: it must work
   when on and answer `404` when off. §8.5 tells operators who switch v1 off how users rewrite their URL with the same
-  token. Spec §4.8.3 still says a legacy token "MUST NOT authenticate against `/api/v2/*`". Read with §8.2.8, the v2
-  feed accepts every RSS credential, and the feed tests have always checked this, so the sentence means the JSON API.
-  The spec text was not changed (owner approval needed).
+  token. Spec §4.8.3 said a legacy token "MUST NOT authenticate against `/api/v2/*`", which contradicted §8.2.8 (the
+  v2 feed accepts every RSS credential, and the feed tests have always checked this). With the owner's approval
+  (`d7d2f933`), §4.8.3 now forbids the v2 JSON API only and names the v2 RSS endpoint as the exception (§8.2.8,
+  §8.2.9). §12.4a now requires the positive v2 feed test with a migrated legacy token, with v1 enabled and switched off.
+  No behaviour changed: `TestCredentialPoliciesAreIndependent` and `TestDisabledV1FeedIs404WithoutReadingCredentials`
+  already cover both cases and were re-run (pass).
 - **Traefik probe.** Two probes were added: a `Referer` carrying a reset link, and a client-supplied `X-Request-Id`. The
   optional `X-Request-Id: keep` exception logs the service's own id (`origin_`/`downstream_X-Request-Id`, 16 hex
   characters). It also logs the client's header verbatim (`request_X-Request-Id`), and one header name governs all
