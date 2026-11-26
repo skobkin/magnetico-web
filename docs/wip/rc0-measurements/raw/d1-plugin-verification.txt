@@ -1,0 +1,47 @@
+# D1 verification: woodpeckerci/plugin-docker-buildx:6.1.2 (sha256:d26b69cb…) run locally, privileged, dry_run, --output type=oci
+# plugin settings encoded by Woodpecker v3.20.1's own settings.ParamsToEnv (logins dropped); commit 5368119 built as tag 0.8.0-rc1 (not pushed)
+
+## release
+env  PLUGIN_BUILD_ARGS={"COMMIT":"5368119890ae7b6b67d4f4035fd4aef1dde64e50","VERSION":"0.8.0-rc1"}
+env  PLUGIN_DEFAULT_LABELS=false
+env  PLUGIN_DOCKERFILE=Dockerfile
+env  PLUGIN_PLATFORMS=linux/amd64,linux/arm64
+env  PLUGIN_PROVENANCE=mode=max
+env  PLUGIN_PULL_IMAGE=true
+env  PLUGIN_REPO=skobkin/magnetico-web,ghcr.io/skobkin/magnetico-web
+env  PLUGIN_SBOM=true
+env  PLUGIN_TAGS=0.8.0-rc1
+cmd  + docker buildx build --rm=true -f Dockerfile . --pull=true --build-arg COMMIT=5368119890ae7b6b67d4f4035fd4aef1dde64e50 --build-arg VERSION=0.8.0-rc1 --build-arg DOCKER_IMAGE_CREATED=2026-11-26T02:17:35Z
+
+## rebuild
+env  PLUGIN_BUILD_ARGS_FROM_ENV=VERSION,COMMIT
+env  PLUGIN_DEFAULT_LABELS=false
+env  PLUGIN_DOCKERFILE=Dockerfile
+env  PLUGIN_ENV_FILE=.rebuild.env
+env  PLUGIN_NO_CACHE=true
+env  PLUGIN_PLATFORMS=linux/amd64,linux/arm64
+env  PLUGIN_PROVENANCE=mode=max
+env  PLUGIN_PULL_IMAGE=true
+env  PLUGIN_REPO=skobkin/magnetico-web,ghcr.io/skobkin/magnetico-web
+env  PLUGIN_SBOM=true
+env  PLUGIN_TAGS_FILE=.tags
+cmd  + docker buildx build --rm=true -f Dockerfile . --pull=true --no-cache --build-arg DOCKER_IMAGE_CREATED=2026-11-26T02:18:51Z --build-arg VERSION=0.8.0-rc1 --build-arg COMMIT=5368119890ae7b6b67d4f4035fd4aef1dde64e50
+
+## old
+env  PLUGIN_BUILD_ARGS=VERSION=0.8.0-rc1,COMMIT=5368119890ae7b6b67d4f4035fd4aef1dde64e50
+env  PLUGIN_DEFAULT_LABELS=false
+env  PLUGIN_DOCKERFILE=Dockerfile
+env  PLUGIN_PLATFORMS=linux/amd64,linux/arm64
+env  PLUGIN_PROVENANCE=mode=max
+env  PLUGIN_PULL_IMAGE=true
+env  PLUGIN_REPO=skobkin/magnetico-web,ghcr.io/skobkin/magnetico-web
+env  PLUGIN_SBOM=true
+env  PLUGIN_TAGS=0.8.0-rc1
+env  PLUGIN_PLATFORMS=linux/amd64
+cmd  + docker buildx build --rm=true -f Dockerfile . --pull=true --build-arg *=VERSION=0.8.0-rc1,COMMIT=5368119890ae7b6b67d4f4035fd4aef1dde64e50 --build-arg DOCKER_IMAGE_CREATED=2026-11-26T02:19:40Z
+
+## results (labels version, revision; --version of the amd64 image)
+release (mapping form, this branch): amd64 and arm64 ["0.8.0-rc1","5368119890ae7b6b67d4f4035fd4aef1dde64e50"]; magnetico 0.8.0-rc1 (commit 5368119890ae, go1.27.4, linux/amd64)
+rebuild (.tags + .rebuild.env written as ci/prepare-rebuild.sh does): amd64 and arm64 ["0.8.0-rc1","5368119890ae7b6b67d4f4035fd4aef1dde64e50"]; magnetico 0.8.0-rc1 (commit 5368119890ae, go1.27.4, linux/amd64); tags 0.8.0-rc1-r1 and 0.8.0-rc1 in both repositories
+old (list form of the rc0 release.yaml, amd64 only): ["dev",""]; magnetico dev (commit unknown, go1.27.4, linux/amd64)  -- reproduces the published rc0 image
+arm64 executable of the rebuild image (not executed, no arm64 host): contains 0.8.0-rc1 and the full commit

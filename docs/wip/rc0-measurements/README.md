@@ -22,6 +22,7 @@ appear; they are not private. Screenshots of real data were kept out of the repo
 | `tools/smtp-check.py` | email verification and recovery against a synthetic SMTP server |
 | `tools/browser/driver-rc0.js` | headless Chrome (CDP) checks of the web UI under the production CSP |
 | `tools/magnetico-image-cli` | the operator CLI through the image (`MAGNETICO_BENCH_BIN` of the harness's container mode) |
+| `tools/traefik-log-check.sh` | which probe credentials reach Traefik's access log and own log, per access-log configuration (follow-up, D3) |
 | `tools/rc0-soak.sh` | start / status / stop / collect of the published-image soak (profile `soak09a`, container mode) |
 | `deploy/compose.yaml`, `traefik.yml`, `dynamic.yml` | the disposable deployment: web, ingest ×2, Traefik with TLS, Mailpit (secrets in env files outside the repository) |
 
@@ -44,6 +45,11 @@ The container mode of the load harness is `internal/e2e/cli/container_harness_te
 | `term-cooccurrence.txt`, `explain-real/`, `search-latency-e2e.md` | real-data search plans and latency (F5) |
 | `duplicate-submission.txt`, `consumer-handover.txt`, `overview-instance-excluded.txt`, `credential-events-primary.txt` | operational exercises |
 | `soak-seed.log`, `soak-smoke/` | the soak dataset and the 15-minute smoke run of the soak workload (JSONL and summary) |
+| `functional-4.txt` | the functional re-run of the follow-up, with file-by-file and root-summary-only counts reported separately |
+| `d1-plugin-verification.txt` | the buildx plugin run with Woodpecker's encoding: mapping, rebuild path and the rc0 list form (follow-up) |
+| `d2-ghcr-retry.txt` | anonymous GHCR access and the manifest comparison with Docker Hub after the visibility change |
+| `traefik-log-check/` | summary, field lists, CLF lines and probe hits of `tools/traefik-log-check.sh` (probe values are fake) |
+| `alpine-cves-recheck.txt` | Trivy of the rc0 image and a fresh `alpine:3.24`, upgradable packages, who links the affected libraries |
 | `activity-log.txt` | when heavy work ran (to separate overlapping measurements) |
 
 The 24-hour soak's own output stays in the workspace (`~/tmp/magnetico/tmp/rc0/soak/out/rc0soak.jsonl`) until it is collected

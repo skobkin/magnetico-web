@@ -1,0 +1,12 @@
+# D2 retry 2026-11-26T02:35:43Z: anonymous (no registry credentials configured; skopeo --no-creds / --src-no-creds; docker pull with an empty auth config)
+ghcr.io tags: ["0.8.0-rc0"]
+docker.io index: sha256:8f4ee86d92cc5fe42144851d80eb0106729eb9da053186d78c4d14cfc19a2ef7 application/vnd.oci.image.index.v1+json
+ghcr.io index: sha256:8f4ee86d92cc5fe42144851d80eb0106729eb9da053186d78c4d14cfc19a2ef7 application/vnd.oci.image.index.v1+json
+child manifests (digest: docker.io bytes sha256 / ghcr.io bytes sha256):
+  sha256:fa35989cc7f2 linux/amd64 image: fa35989cc7f2 / fa35989cc7f2
+  sha256:790dfd930041 linux/arm64 image: 790dfd930041 / 790dfd930041
+  sha256:3d53c478f8aa unknown/unknown attestation-manifest: 3d53c478f8aa / 3d53c478f8aa
+  sha256:a55c6e62a0cd unknown/unknown attestation-manifest: a55c6e62a0cd / a55c6e62a0cd
+ghcr amd64 blobs downloaded anonymously: manifest fa35989cc7f2, config sha256:6e763657d1d7, 11 layers (digests verified by skopeo)
+ghcr arm64 blobs downloaded anonymously: manifest 790dfd930041, config sha256:7dc0e7953543, 11 layers (digests verified by skopeo)
+docker pull ghcr.io/skobkin/magnetico-web:0.8.0-rc0 -> RepoDigest sha256:8f4ee86d92cc…; --version: magnetico dev (commit unknown, go1.27.4, linux/amd64) (D1 is a property of the published artifact, identical in both registries)

@@ -5,6 +5,14 @@
 (commit `47742edf`). **Branch of this report:** `fix/post-merge-quick-fixes`. **Run:** 2026-11-25 23:10 UTC – 2026-11-26
 (the 24-hour soak continues after this report; §8 says how to collect it).
 
+**Follow-up (2026-11-26, §13):** after the owner's review, D1 is fixed in `release.yaml` and verified with the real buildx
+plugin (it takes effect with the next tag); D2 is resolved (GHCR serves the identical index anonymously); D3 is a
+documentation correction (tested Traefik configuration); D6 is intentional; D7 is Anubis, not authentication; the
+`m-pg` container was removed by the owner; F5 is not a blocker and moved to issue #57; `MAGNETICO_WEB_RSS_V1_ENABLED`
+was added. Two claims of the first version were too broad and are corrected below: synthetic legacy accounts are not an
+acceptance of real accounts (§4.5), and the largest torrents were compared by their root directory summary, not file by
+file (§5).
+
 Everything ran on the development VM against dedicated, disposable containers, databases, networks and bind mounts under
 `~/tmp/magnetico/tmp/rc0` (not the root file system). No production system, no live DHT or BitTorrent traffic, no tag or
 image was touched. Every acceptance test exercised the **published image**; locally built helpers are named as such
@@ -15,13 +23,13 @@ image was touched. Every acceptance test exercised the **published image**; loca
 
 | Area | Result |
 |---|---|
-| Published image | runs as documented (non-root `10001`, read-only root, no capabilities, exec-form entrypoint, health checks, graceful `SIGTERM`); 42 of 43 smoke checks pass; Trivy (fresh DB): **0 HIGH/CRITICAL** on amd64 and arm64. **Defect D1: the image carries no version** (`magnetico dev (commit unknown …)`, empty revision label). **D2: the GHCR copy could not be pulled anonymously** (401) |
+| Published image | runs as documented (non-root `10001`, read-only root, no capabilities, exec-form entrypoint, health checks, graceful `SIGTERM`); 42 of 43 smoke checks pass; Trivy (fresh DB): **0 HIGH/CRITICAL** on amd64 and arm64. **Defect D1: the image carries no version** (`magnetico dev (commit unknown …)`, empty revision label; fixed for the next tag, §13). D2 (GHCR 401) was resolved by the owner: both registries serve the same digests anonymously (§13) |
 | Real-data migration (10 % sample: 3,457,046 torrents, 123,460,039 files) | import **4 min 44 s** (12,160 torrents/s) + deferred indexes 48 s, **0 record errors**; `verify-decode` **PASS** (41 min 49 s), `verify-content` **PASS** (43 min 0 s, every row verified); source byte-identical before and after; 17.8 GB legacy → **2.95 GB** |
 | Migration resilience | SIGTERM → exit 2, SIGKILL → resume, completion → a target **identical** row-for-row and blob-for-blob to the uninterrupted one; `cleanup` positive case passes and leaves 28 tables unchanged; negative case refused at **G5** with and without `--force-unverified` |
-| User migration (synthetic legacy accounts) | dry-run, final run, idempotent re-run, `users verify`: all as documented; unsupported hash counted and gated |
-| Functional (published image behind Traefik, TLS) | **50/50** checks pass, including source equality of **415** migrated torrents (438,172 files) through the API (every unusual-name/path category of the audit), both file-browser modes, RSS v1/v2, magnet redirects, authorization; real headless Chrome 159: **25/25** under the production CSP; synthetic SMTP (STARTTLS): **11/11** |
+| User migration (**synthetic** legacy accounts only) | dry-run, final run, idempotent re-run, `users verify`: all as documented; unsupported hash counted and gated. This exercises the procedure and the hash formats PHP 8.3 produces; it is **not** an acceptance of the real accounts, which the owner rehearses separately |
+| Functional (published image behind Traefik, TLS) | **50/50** checks pass, including source equality of **415** migrated torrents through the API (metadata, lookups, and the complete file list of 411 of them; the 4 torrents above 20,000 files only by their root summary — see §5 for what was and was not compared file by file), both file-browser modes, RSS v1/v2, magnet redirects, authorization; real headless Chrome 159: **25/25** under the production CSP; synthetic SMTP (STARTTLS): **11/11** |
 | Search on real names | ordinary shapes ≤ 11 ms warm; **finding F5 confirmed on real data**: two common words that rarely co-occur cost **1.8–2.0 s** (date order) and **4.0–4.3 s** (size order); the generic plan would answer in 7.7 ms. No index added (owner decision) |
-| Operations | two ingest instances (election, handover 8 s graceful / 10 s after SIGKILL, statistics aggregation), PostgreSQL outage of 2 min, duplicate submissions, credential rotation/disable/enable, search-timeout chain through the proxy: all as specified. **D3: Traefik logged feed tokens** with the documented-intent setting `redact`; `drop` works |
+| Operations | two ingest instances (election, handover 8 s graceful / 10 s after SIGKILL, statistics aggregation), PostgreSQL outage of 2 min, duplicate submissions, credential rotation/disable/enable, search-timeout chain through the proxy: all as specified. **D3: Traefik logged feed tokens** with the setting `redact`; `drop` works (documentation corrected, §13) |
 | Soak (published image, ≥ 24 h) | **running** (`rc0-soak` user unit, scale 5 ≈ 26 h, the full-scale 09A synthetic dataset); 15-minute smoke run of the same workload passed every gate; interim state in §8 |
 
 ## 2. Artifact, environment and dataset
@@ -33,9 +41,9 @@ image was touched. Every acceptance test exercised the **published image**; loca
 | `--version` | `magnetico dev (commit unknown, go1.27.4, linux/amd64)` — **D1** |
 | Labels | `version=dev`, `revision=""` (others as documented) — **D1** |
 | Size | 54.6 MB (amd64, uncompressed), Alpine 3.24.4 base |
-| GHCR | `ghcr.io/skobkin/magnetico-web:0.8.0-rc0`: anonymous token request **401** (another of the owner's GHCR packages answers 200) — manifests **not compared**, **D2** |
-| Docker Hub tags | `0.8.0-rc0` (above); also `latest` → `sha256:6a0d5f20…` = the legacy PHP **0.7.1** image (see D6) |
-| Forgejo release `0.8.0-rc0` | prerelease, `checksums.txt` + linux amd64/arm64 archives (sha256 `c1999b95…`, `a2f5b445…`); body lists **5,223 commits** (484 KB, D4). Archives need authentication (401 anonymously): **not downloaded or executed** |
+| GHCR | first run: anonymous token request **401** (D2). After the owner changed the package visibility: anonymous pulls work and the index (`sha256:8f4ee86d…`), all four child manifests, configs and blobs are identical to Docker Hub's (`raw/d2-ghcr-retry.txt`, §13) |
+| Docker Hub tags | `0.8.0-rc0` (above); also `latest` → `sha256:6a0d5f20…` = the legacy PHP **0.7.1** image (intentional until the stable 0.8.0, D6) |
+| Forgejo release `0.8.0-rc0` | prerelease, `checksums.txt` + linux amd64/arm64 archives (sha256 `c1999b95…`, `a2f5b445…`); body lists **5,223 commits** (484 KB, D4). The forge is behind Anubis, which blocks automated downloads (the 401 seen here; human visitors download normally): the archives were **not downloaded or executed** here (D7) |
 | Host | AMD Ryzen 9 7950X3D, 8 logical CPUs, 31 GiB RAM (≈ 25 GiB available), Debian 13, Linux 6.12, Docker 29.10.0, Compose v5.8.0; root FS 14 GB (6.7 GB free at the end), `/home` 126 GB (43 GB free) |
 | PostgreSQL | `postgres:17@sha256:87c8b42f…` = 17.12, `fsync=on`, `synchronous_commit=on`, `shared_buffers=512MB` (as in 07J/09A), `max_wal_size=8GB`, `maintenance_work_mem=1GB`, `max_connections=200`; primary instance `rc0-pg` (legacy + targets), soak instance `rc0-soak-pg` |
 | Proxy | Traefik 3.8.0 `@sha256:00c97349…`, TLS with a throwaway test CA, file provider, `deploy/` |
@@ -118,6 +126,12 @@ delete beyond the restore; the dump's SHA-256 is unchanged.
 
 ### 4.5 User migration (synthetic legacy accounts; real accounts are the owner's rehearsal)
 
+**Scope.** Everything in this section ran against a synthetic legacy database. It shows that the documented procedure,
+its gates and the hash formats made by PHP 8.3 work with the published image. It says nothing about the real account
+data (its hash mix, unsupported or malformed hashes, email addresses, roles, token counts, invitation chains): the
+real-account dry run is the owner's (§11). The sign-ins of "migrated accounts" in §5 are sign-ins of these synthetic
+accounts.
+
 A synthetic legacy PHP database (`tools/synthetic-legacy-users.py`: the five Doctrine migrations verbatim, 28 users, 10
 invitations (5 used), 92 legacy API keys; bcrypt-13, argon2id, bcrypt-10 hashes of `test` made by PHP 8.3; one MD5-crypt
 hash; a non-ASCII username; one user with 55 keys). Results (`raw/users-*.log`): dry-run refuses with
@@ -136,17 +150,28 @@ proxy, legacy source through the read-only role), `tools/browser/driver-rc0.js` 
 
 **Functional check (`raw/functional-3.txt`): 50 pass, 0 fail.** Covered: health and readiness through the proxy;
 anonymous redirects and 401; the production CSP and HSTS (`max-age=31536000`); an unrouted `Host` is 404 at the proxy;
-sign-in of migrated accounts with legacy hashes; `__Host-`, `Secure`, `HttpOnly` session cookie; every `/admin` page
+sign-in of the synthetic migrated accounts (§4.5) with their legacy hashes; `__Host-`, `Secure`, `HttpOnly` session cookie; every `/admin` page
 `no-store`, no password hash on the users page; ordinary user 403 on `/admin` and its JSON; wrong password and unsupported
 hash refused; API and RSS tokens minted on the account page; API v2 search with keyset pagination for four (q, sort,
 order) shapes over four pages each (ordered — name order judged by PostgreSQL's collation —, no duplicates); invalid cursor
 400; API token refused by the feed; v2 RSS (1,000 items, `no-store`, `no-referrer`); legacy v1 RSS with a migrated key in
 query and header; the legacy key refused by API v2; API documentation behind sign-in with its documented CSP;
-**content equality with the legacy source for 415 torrents and 438,172 files** (300 random + 10 of every unusual-shape category of §4.1 +
-the three largest + the id edges): name, size, info hash, discovery time, file count, the complete file list with
-duplicates (409 in tree mode, 2 by a complete directory-by-directory walk; the 4 torrents above 20,000 files by their
-root directory summary, because the API allows 2 requests/s per token — their per-file equality is `verify-content`'s), info-hash lookup and the magnet redirect; tree mode and a full
-directory-by-directory walk give the same list for five medium torrents; the torrent pages and the UI search render.
+**content equality with the legacy source for 415 torrents** (300 random + 10 of every unusual-shape category of §4.1 +
+the three largest + the id edges): name, size, info hash, discovery time, file count, info-hash lookup and the magnet
+redirect for all 415; the **complete file list with duplicates for 411** (409 in tree mode, 2 by a complete
+directory-by-directory walk); tree mode and a full directory-by-directory walk give the same list for five medium
+torrents; the torrent pages and the UI search render.
+
+**Correction: what was compared file by file.** The first version said "415 torrents and 438,172 files". That file count
+included the **4 torrents above 20,000 files**, which were compared only by the **root directory summary** (file count and
+total size of the root page), not by their file lists: the API allows 2 requests/s per token, so walking 100,000-file
+torrents through it takes tens of minutes. A root summary that matches does not prove that each path and size matches.
+The per-file equality of those torrents rests on `verify-content` (§4.2), which compared every file of every torrent **in
+the database**, not through the API. The checker now reports both counts separately. Its re-run on 2026-11-26
+(`raw/functional-4.txt`) drew 407 torrents (the unusual-shape queries use `LIMIT` without `ORDER BY` and returned a slightly
+different set): **complete file lists for 404 torrents with 18,470 files**, and the root summary only for the 3 largest
+(367,746 files), with 0 mismatches. For the first run that means at most about 50,000 of the 438,172 files were compared one
+by one through the API.
 
 **Real browser (`raw/browser-run-2.txt`): 25/25.** Chrome 159 over HTTPS through Traefik, the certificate trusted by SPKI
 pin only: sign-in, search and keyset next page, empty state, tree mode (toggle changes `aria-expanded`, the local filter
@@ -249,14 +274,14 @@ an addendum to this report; F9 is investigated with a `diag` build only if a sus
 
 | # | Severity | Finding | Evidence | Proposed fix |
 |---|---|---|---|---|
-| D1 | **High** (release engineering) | The published image is unversioned: `--version` prints `magnetico dev (commit unknown …)`, labels `version=dev`, `revision=""`. `release.yaml` passes `build_args` as a YAML **list**; `plugin-docker-buildx` v6 declares `build_args` as a string **map** (`StringMapFlag`, its docs show the map form), so nothing reached `docker build` and the Dockerfile defaults applied. The image smoke test catches the empty label, but it is not part of the release workflow | `raw/image-smoke-amd64.log`; the version line; plugin source `plugin/plugin.go` (v6.1.2) | Use the map form (`build_args: {VERSION: ${CI_COMMIT_TAG}, COMMIT: ${CI_COMMIT_SHA}}`), pin it in `internal/repocheck`, and publish a corrected RC (`0.8.0-rc1`); check `rebuild.yaml`'s `build_args_from_env` path the same way before relying on it |
-| D2 | **High** (distribution, unverified) | `ghcr.io/skobkin/magnetico-web` refuses anonymous pulls (token endpoint 401) | §2 | Check that the push succeeded and make the package public / link it to the mirror; then compare the digest with Docker Hub |
-| D3 | **Medium** (deployment documentation, credential exposure) | Traefik's `accessLog.fields.names.<field>: redact` is silently ignored (keep); `RequestPath` then carries RSS tokens and one-time link tokens | §5, `raw/traefik-redact-evidence.txt` | Give the exact Traefik setting in `web-deployment.md` §9 and `crawler.md`: `accessLog.fields.headers.defaultMode: drop` and `accessLog.fields.names.RequestPath: drop` (Traefik cannot mask a query or a path segment selectively); warn that `redact` does not apply to field names |
-| F5 | **Medium** (performance, owner decision) | Two common but rarely co-occurring words: 1.8–2.5 s (date order) and 4–5.6 s (size order) on real names, whereas a GIN bitmap answers in < 10 ms. Within the search deadline; can saturate the four search slots | §6 | Options (none applied): (a) let PostgreSQL see the term counts — e.g. a bounded `MATERIALIZED` candidate CTE from the trigram index with an ordered fallback when it overflows; (b) `plan_cache_mode`/generic-plan control per statement; (c) an index decision with the owner; (d) accept and document. A real-data EXPLAIN set for re-measuring is in `raw/explain-real/` |
+| D1 | **High** (release engineering) — **fixed for the next tag** (§13) | The published image is unversioned: `--version` prints `magnetico dev (commit unknown …)`, labels `version=dev`, `revision=""`. `release.yaml` passes `build_args` as a YAML **list**; `plugin-docker-buildx` v6 declares `build_args` as a string **map** (`StringMapFlag`, its docs show the map form), so nothing reached `docker build` and the Dockerfile defaults applied. The image smoke test catches the empty label, but it is not part of the release workflow | `raw/image-smoke-amd64.log`; the version line; plugin source `plugin/plugin.go` (v6.1.2) | Use the map form (`build_args: {VERSION: ${CI_COMMIT_TAG}, COMMIT: ${CI_COMMIT_SHA}}`), pin it in `internal/repocheck`, and publish a corrected RC (`0.8.0-rc1`); check `rebuild.yaml`'s `build_args_from_env` path the same way before relying on it |
+| D2 | ~~High~~ **resolved** (distribution) | `ghcr.io/skobkin/magnetico-web` refused anonymous pulls (token endpoint 401) | §2 | The package was private; the owner made it public. Re-checked: identical digests in both registries (§13) |
+| D3 | **Medium** (deployment documentation; not a release blocker) — **documented** (§13) | Traefik's `accessLog.fields.names.<field>: redact` is silently ignored (keep); `RequestPath` then carries RSS tokens and one-time link tokens | §5, `raw/traefik-redact-evidence.txt` | Give the exact Traefik setting in `web-deployment.md` §9 and `crawler.md`: `accessLog.fields.headers.defaultMode: drop` and `accessLog.fields.names.RequestPath: drop` (Traefik cannot mask a query or a path segment selectively); warn that `redact` does not apply to field names |
+| F5 | **Medium** (performance; not a release blocker) — **issue #57** | Two common but rarely co-occurring words: 1.8–2.5 s (date order) and 4–5.6 s (size order) on real names, whereas a GIN bitmap answers in < 10 ms. Within the search deadline; can saturate the four search slots | §6 | Options (none applied): (a) let PostgreSQL see the term counts — e.g. a bounded `MATERIALIZED` candidate CTE from the trigram index with an ordered fallback when it overflows; (b) `plan_cache_mode`/generic-plan control per statement; (c) an index decision with the owner; (d) accept and document. A real-data EXPLAIN set for re-measuring is in `raw/explain-real/` |
 | D4 | Low (release notes) | The Forgejo release body lists 5,223 commits (484 KB): GoReleaser had no previous Go-line tag to compare with | §2 | `changelog` filters or a fixed range for the first Go-line release; check again with rc1 |
-| D5 | Low (image hygiene) | 11 fixable MEDIUM/LOW Alpine CVEs (OpenSSL 3.5.9-r0, zlib 1.3.2) in packages the Go binary does not use; `security.yaml` only fails on HIGH/CRITICAL | `raw/trivy-*` | Rebuild on the refreshed Alpine base with the next RC; optionally trim unused packages from the final stage |
-| D6 | Info (distribution) | Docker Hub `latest` still points to the legacy PHP 0.7.1 image | §2 | Owner decision: leave, remove, or document that `latest` is not the Go line |
-| D7 | Info | Forgejo release assets require authentication (401 anonymously); the native archives were therefore not verified here | §2 | If anonymous download is intended, check the repository visibility; otherwise verify the archives with credentials |
+| D5 | Low (image hygiene) | 11 fixable MEDIUM/LOW Alpine CVEs (OpenSSL 3.5.9-r0, zlib 1.3.2) in packages the Go binary does not use (only `apk` and `ssl_client` link them); `security.yaml` only fails on HIGH/CRITICAL. Re-checked: the newest `alpine:3.24` image (3.24.4, built 2026-11-05) has the **same** 11 findings; the fixed packages are already in the Alpine repository but in no published image yet, so a rebuild today does not fix them | `raw/trivy-*`, `raw/alpine-cves-recheck.txt` | Rebuild (`rebuild.yaml` or the next tag) once Alpine publishes a refreshed 3.24 image; or decide to `apk upgrade` in the image, which would need a `RUN` (and emulation for arm64) in the final stage |
+| D6 | Info — **intentional** | Docker Hub `latest` still points to the legacy PHP 0.7.1 image | §2 | Owner decision: `latest` stays on the PHP release until the stable 0.8.0; left untouched |
+| D7 | Info — **not a defect** | The release assets could not be downloaded by the automated client (401) | §2 | The forge is protected by Anubis, which blocks automated downloads; human visitors download normally. The native archives remain unverified by this run (owner: check them by hand) |
 | O1 | Info (observability) | After a consumer handover the overview's `owns_consumer` reflects the last heartbeat (seconds late); dead instances are marked stale within one heartbeat | §7 | Documented behaviour; no change proposed |
 
 No product defect was found in migration, verification, cleanup, user migration, the web service, the API, the feeds,
@@ -267,12 +292,8 @@ EXPLAIN script no longer prints result rows (an earlier local run printed real n
 deleted before anything was copied into the repository, and the copied files were scanned against every real name of the
 sample and every secret: no hit).
 
-**Environment incident (not a product finding):** the owner's disposable test PostgreSQL container `m-pg`
-(`docs/testing.md`, started with `--rm` and an anonymous volume) was running at the start of this task and is gone now,
-together with its volume. No command of this task names it or uses a pattern that matches it (every stop/remove targets an
-exact `rc0*`/`smoke<pid>` name; one broad `docker stop` by image ancestry was refused by the permission system and never ran),
-and the Docker event buffer no longer holds the event, so the cause could not be established. Recreate it with the command in
-`docs/testing.md` if needed.
+**Environment note (not a product finding):** the owner's disposable test PostgreSQL container `m-pg` (`docs/testing.md`)
+disappeared during the run together with its anonymous volume. The owner removed it; nothing in this task touched it.
 
 ## 10. RC0 acceptance checklist — status after this run
 
@@ -293,33 +314,33 @@ and the Docker event buffer no longer holds the event, so the cause could not be
 | Proxy: timeouts > 70 s, 60 s search cut by the application | ✅ §5 |
 | Proxy: only the configured host is routed | ✅ (404 for another `Host`) |
 | Proxy: `X-Forwarded-For` appended, narrow trust | ✅ |
-| Proxy: access log keeps no credentials | ❌ with `redact` (D3) · ✅ with `drop` |
+| Proxy: access log keeps no credentials | ❌ with `redact` (D3) · ✅ with `RequestPath: drop` and all headers dropped: 13 probe credentials (feed tokens, link codes, API/ingest/session headers) absent from the access log and Traefik's own log (§13) |
 | Proxy: no response caching; TLS, HSTS, redirects | ✅ `no-store` on feeds/admin, HSTS, TLS 1.2+/1.3 via Traefik; HTTP→HTTPS redirect configured · ⬜ real certificates |
 | Operations: container memory with the real image | ⏳ soak (limits 1 GiB, no event so far); ✅ migration and verification footprints |
 | Operations: real SMTP provider | ⬜ owner (synthetic STARTTLS ✅) |
-| Operations: search plans on a production-like copy, F5 decision | ✅ measured (§6) · ⏳ owner decision |
+| Operations: search plans on a production-like copy, F5 decision | ✅ measured (§6) · not a release blocker (owner); follow-up in issue #57 |
 | Operations: live-DHT acceptance | ⬜ separate host, not from this VM |
-| Operations: user migration dry-run on real accounts | ⬜ owner (synthetic ✅ §4.5) |
+| Operations: user migration dry-run on real accounts | ⬜ owner (only the procedure was exercised, on synthetic accounts, §4.5) |
 | Operations: first admin via `set-role`, email removal by a migrated user | ✅ set-role · ⬜ owner |
 | Operations: ≥ 24 h soak with the real image | ⏳ running (§8) |
 | Operations: toolchain Go ≥ 1.27.4 | ✅ the image reports `go1.27.4` |
 | Statistics: uPlot under the strict CSP in more browsers | ✅ Chrome 159 again · ⬜ Firefox, phone |
 | Statistics: keyboard, screen reader, badge contrast | ⬜ |
-| Statistics: access with real accounts (admin link, 403, demotion) | ✅ 403 and admin access with migrated accounts · ⬜ demotion on the next request |
+| Statistics: access with real accounts (admin link, 403, demotion) | ✅ 403 and admin access with **synthetic** migrated accounts · ⬜ real accounts, demotion on the next request |
 | Statistics: ≥ 24 h with real crawlers | ⬜ live DHT · ⏳ synthetic in the soak |
 | Statistics: behind the production proxy (client addresses, Authorization not logged, rotation within 60 s) | ✅ §§5, 7 |
 | Statistics: queue sampling at production scale with a cold cache | ⬜ not reproduced (queue stayed small) |
 | Statistics: two ingest instances | ✅ §7 |
 | Statistics: cleartext HTTP/2 evaluation over a real network | ⬜ |
-| Release: operator configuration, PR pipeline, first RC tag | ✅ tag built and pushed to Docker Hub · ❌ D1 (unversioned), D2 (GHCR not verifiable) · ⬜ PR pipeline (not observed) |
+| Release: operator configuration, PR pipeline, first RC tag | ✅ tag built and pushed to both registries (identical digests, §13) · ❌ D1 (unversioned; fixed for the next tag, §13) · ⬜ PR pipeline (not observed) |
 | Release: image smoke test and Trivy | ✅ (D1 caught) |
 | Release: arm64 executed on arm64 | ⬜ no arm64 host |
-| Release: `latest`, cache, licence bundling, legacy warning removal, branch cleanup | ⬜ owner decisions (D6) |
+| Release: `latest`, cache, licence bundling, legacy warning removal, branch cleanup | `latest` stays on PHP until 0.8.0 (owner, D6) · ⬜ the other owner decisions |
 
 ## 11. What the owner still has to do by hand
 
-1. **Decide D1/D2** and publish a corrected candidate; re-run `ci/image-smoke.sh --platform linux/amd64 <digest>` and
-   `image-smoke.sh --check-version-line "$(docker run --rm IMAGE --version)" 0.8.0-rc1 <commit>`; compare both registries'
+1. **Tag `0.8.0-rc1`** with the D1 fix (§13) and check the result: `ci/image-smoke.sh --platform linux/amd64 <digest>`,
+   `image-smoke.sh --check-version-line "$(docker run --rm IMAGE --version)" 0.8.0-rc1 <commit>`, and both registries'
    digests (`docker buildx imagetools inspect`).
 2. **Real accounts:** run `docs/wip/07H-audit.sql` and `migrate users --dry-run` against a copy of the real PHP database
    (§4.6 of the migration guide); then sign in as a migrated user.
@@ -329,9 +350,9 @@ and the Docker event buffer no longer holds the event, so the cause could not be
    `Пользователь`, `many-tokens` (password `test`; `unsupported-hash` cannot sign in by design). Mail sent by the service is
    at `http://127.0.0.1:18025` (Mailpit). Check by hand: keyboard-only, screen reader, contrast, remember-me, the email states
    and removal, Swagger *Authorize* / *Try it out*, Firefox, a real phone.
-4. **Decide F5** (§6, §9) with the real-data plans in `raw/explain-real/`.
-5. **Fix the proxy documentation (D3)** before production; use `RequestPath: drop`.
-6. **Real SMTP provider**, **live-DHT acceptance** on a separate host, **arm64 execution**, and the remaining release decisions (D4–D7).
+4. **F5** is tracked in issue #57 (measurements, plans, approaches; a comparison with the tuned legacy production server is still missing). The issue was created without a label (the agent's token cannot read the organisation's labels): add `enhancement` if wanted.
+5. **Proxy access logs (D3)**: use the configuration of `docs/web-deployment.md` §3 or leave Traefik's access log off.
+6. **Real SMTP provider**, **live-DHT acceptance** on a separate host, **arm64 execution**, the native archives by hand (D7), D4, and D5 once Alpine publishes a refreshed image.
 7. **Collect the soak** (§8) and judge it with the 07J/09A criteria; append the verdict.
 
 ## 12. Resources left running and cleanup
@@ -354,3 +375,114 @@ docker network rm rc0-net rc0-edge rc0soak-net
 git -C ~/src/magnetico-web worktree remove ~/tmp/magnetico/tmp/rc0/soak-src
 rm -rf ~/tmp/magnetico/tmp/rc0        # the original dump in ~/tmp/magnetico is not touched
 ```
+
+## 13. Follow-up after the owner's review (2026-11-26)
+
+Commits on `fix/post-merge-quick-fixes`, each separate from the acceptance tooling and this report: `e4a2ed38` (D1),
+`240dee5a` (D3 documentation), `fe4a3efc` (`MAGNETICO_WEB_RSS_V1_ENABLED`). RC0 was neither rewritten nor republished, and
+no tag, package visibility or registry permission was changed by this task.
+
+### 13.1 D1: build arguments (fixed for the next tag)
+
+`plugin-docker-buildx` 6.1.2 declares `build_args` as a `StringMapFlag` (`codeberg.org/woodpecker-plugins/go-plugin`): it
+JSON-decodes the value and keeps anything else under the key `*`. Woodpecker 3.20.1 (`settings.ParamsToEnv`) encodes a
+mapping as JSON but a list of strings as one comma-joined string. The list in `release.yaml` therefore reached the build as
+`--build-arg *=VERSION=0.8.0-rc0,COMMIT=…`, and the Dockerfile defaults applied. `release.yaml` now uses a quoted mapping
+(`VERSION: "${CI_COMMIT_TAG}"`, `COMMIT: "${CI_COMMIT_SHA}"`). Unquoted, a SHA such as `1234…567e12` becomes a JSON number
+in Woodpecker's encoding, which the map rejects in the same way. `internal/repocheck` requires the quoted mapping and fails
+on the list. `rebuild.yaml` was correct as it was: the plugin loads `env_file` into its environment at start-up and
+`build_args_from_env` forwards `VERSION` and `COMMIT`.
+
+Verification (`raw/d1-plugin-verification.txt`): the real plugin image, run locally in dry-run mode with `--output type=oci`,
+fed the environment that Woodpecker's own encoder produces from the workflow files, built commit `5368119` as tag
+`0.8.0-rc1` (not pushed):
+
+| Path | Labels `version` / `revision` | `--version` (amd64 image) |
+|---|---|---|
+| `release.yaml`, mapping (this branch) | `0.8.0-rc1` / full commit, amd64 and arm64 | `magnetico 0.8.0-rc1 (commit 5368119890ae, go1.27.4, linux/amd64)` |
+| `rebuild.yaml` (`.tags` and `.rebuild.env` as `prepare-rebuild` writes them) | same, amd64 and arm64; tags `0.8.0-rc1-r1` and `0.8.0-rc1` in both repositories | same |
+| the rc0 list form (negative control) | `dev` / empty | `magnetico dev (commit unknown, …)`: reproduces the published image |
+
+The arm64 executable contains the version and the commit (not executed: no arm64 host). **Not verified:** a run on the
+real Woodpecker server. The owner's `0.8.0-rc1` tag is that check (§11).
+
+### 13.2 D2: GHCR (resolved by the owner)
+
+After the visibility change, every request is anonymous (no registry credentials are configured on this host). The
+GHCR copy lists `0.8.0-rc0`, and serves the same index digest `sha256:8f4ee86d…`. The four child manifests (amd64, arm64,
+two attestations) are byte-identical in both registries. Both platforms' configs and all layers download, and `docker pull`
+gives the same repository digest (`raw/d2-ghcr-retry.txt`).
+
+### 13.3 D3: proxy access logs (documentation corrected)
+
+`tools/traefik-log-check.sh` starts a throwaway Traefik 3.8.0 (the deployment's image) per configuration in front of the
+RC0 services. It sends 13 probe credentials:
+- `feed_token`, and `api-token` in the query, a header and a cookie;
+- the four link paths, including a `POST`;
+- ingest and API `Authorization`, a session cookie;
+- a search query that triggers a sign-in redirect.
+
+It then counts the probes in the access log and in Traefik's own log (`raw/traefik-log-check/`):
+
+| Configuration | Probes found |
+|---|---|
+| JSON, everything kept | 13 / 13 (access log) |
+| **`RequestPath: drop`, `headers.defaultMode: drop`** (also with `X-Request-Id: keep`, also at `log.level: DEBUG`) | **0** |
+| `RequestPath: redact` | 8 (all query strings and link paths): `redact` is ignored for fields |
+| path dropped, headers kept with `Authorization`, `Cookie`, `Api-Token` set to `redact` | 1: the `Location` of the sign-in redirect repeats the URL (`/login?next=…`) |
+| `common` / `genericCLF` with `RequestPath: drop` | 0 (request line `"GET - HTTP/1.1"`) |
+| the default `common` format | 8 |
+
+JSON has no separate `RequestLine` field. The documentation now states the tested configuration and what an operator
+loses with it (no paths in the proxy log; the service's own log has the route pattern and the request id). It also says
+that the proxy log can stay off: `docs/web-deployment.md` §3 "Proxy access logs", the feed section of §9, `crawler.md`
+§4, the migration checklist, spec §8.2.3 and the v1 OpenAPI text. Not tested: other Traefik versions, tracing exporters,
+other proxies.
+
+### 13.4 D5: Alpine findings
+
+Re-scanned with the pinned Trivy 0.76.2 and a freshly downloaded database (`raw/alpine-cves-recheck.txt`):
+- The rc0 image and a freshly pulled `alpine:3.24` (3.24.4, built 2026-11-05, the newest 3.24 tag) show the same 11
+  MEDIUM/LOW findings.
+- The Go binary has none.
+- The fixed `libcrypto3`/`libssl3` 3.5.9-r1 and `zlib` 1.4-r0 are in the Alpine repository (`apk list -u`) but in no
+  published image. A rebuild resolves them only after Alpine publishes a refreshed image, or with an `apk upgrade` in the
+  final stage. That stage has no `RUN` by design, so arm64 builds need no emulation.
+
+### 13.5 Owner clarifications recorded
+
+- D6: `latest` stays on the PHP release until the stable 0.8.0 (left untouched).
+- D7: the forge is behind Anubis, which blocks automated downloads; it is not an authentication defect.
+- D3 is a documentation correction, not a release blocker.
+- F5 is not a release blocker.
+- The `m-pg` container was removed by the owner.
+
+### 13.6 `MAGNETICO_WEB_RSS_V1_ENABLED`
+
+The default is `true`. With `false` (also `rssV1Enabled: false` in the file, `--rss-v1-enabled=false`):
+- the v1 route is not registered, and `/api/v1/feed/rss/last` answers 404 for every transport;
+- no credential sent to it is read, rate limited, looked up or marked as used;
+- the v2 feed keeps serving the same tokens, migrated legacy ones included;
+- the account page says that the old address is switched off, and the service logs the switch at startup.
+
+Tests cover option parsing and precedence, the feed package (zero credential lookups, failure budget and `last_used_at`
+untouched; the test fails when the switch is ignored), and the real binary end to end. Documented in
+`docs/web-deployment.md` §1 and §9, spec §2.3 and §8.2.9, and the migration guide.
+
+### 13.7 F5
+
+Issue **#57** on the forge has the measurements, the plans and the possible approaches (`raw/explain-real/`,
+`raw/search-latency-e2e.md`). It records that a regression against the separately tuned legacy production configuration
+has **not** been established. Nothing in search queries, indexes or planner settings was changed.
+
+### 13.8 Checks run for the follow-up changes
+
+All of these ran against a disposable tmpfs PostgreSQL container that was removed afterwards (the RC0 databases were not
+used), and all pass:
+- `golangci-lint fmt --diff` and `run`: 0 issues;
+- `go vet` for both tag sets;
+- `go test` of `internal/repocheck`, `opflags`, `internal/e2e/cli` (real binaries) and every package under
+  `internal/web/...`.
+
+They overlapped the soak for about ten minutes (`raw/activity-log.txt`). The functional check was re-run against the RC0
+deployment with the corrected file-comparison counts: `raw/functional-4.txt`.

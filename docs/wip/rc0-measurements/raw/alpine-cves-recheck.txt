@@ -1,0 +1,30 @@
+# D5 re-check 2026-11-26T02:36:51Z: Trivy 0.76.2 (pinned image of security.yaml), all severities, --scanners vuln, linux/amd64, vulnerability DB refreshed today
+## docker.io/skobkin/magnetico-web:0.8.0-rc0 (sha256:8f4ee86d92cc…)
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-88822   LOW
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-88823   LOW
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-88822   LOW
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-88823   LOW
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-107496  MEDIUM
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-95691   MEDIUM
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-95692   MEDIUM
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-107496  MEDIUM
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-95691   MEDIUM
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-95692   MEDIUM
+zlib        1.3.2-r1  1.4-r0    CVE-2026-4738    MEDIUM
+## docker.io/library/alpine:3.24 (freshly pulled: sha256:f59abe656b69…, created 2026-11-05, 3.24.4 = newest 3.24.x tag)
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-88822   LOW
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-88823   LOW
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-88822   LOW
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-88823   LOW
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-107496  MEDIUM
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-95691   MEDIUM
+libcrypto3  3.5.9-r0  3.5.9-r1  CVE-2026-95692   MEDIUM
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-107496  MEDIUM
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-95691   MEDIUM
+libssl3     3.5.9-r0  3.5.9-r1  CVE-2026-95692   MEDIUM
+zlib        1.3.2-r1  1.4-r0    CVE-2026-4738    MEDIUM
+## results of the Go binary (gobinary target): 0 vulnerabilities
+## apk list -u in a fresh alpine:3.24 (the fixes are in the Alpine 3.24 repository, not yet in a published image)
+libcrypto3-3.5.9-r1, libssl3-3.5.9-r1 (from 3.5.9-r0); zlib-1.4-r0 (from 1.3.2-r1)
+## who links the affected libraries in the rc0 image (ldd)
+/sbin/apk: libcrypto.so.3 libssl.so.3 libz.so.1; /usr/bin/ssl_client: libcrypto.so.3 libssl.so.3; /bin/busybox: none; /usr/local/bin/magnetico: static (CGO_ENABLED=0)

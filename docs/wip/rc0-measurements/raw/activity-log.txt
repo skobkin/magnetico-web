@@ -12,3 +12,9 @@
 2026-11-26T01:22:43Z primary: crawler-b token rotated and crawler restarted
 2026-11-26T01:26:26Z primary: torrents table locked 80 s (search-timeout chain test)
 2026-11-26T01:28:24Z primary: web restarted with SMTP (mailpit)
+2026-11-26T02:17:00Z follow-up: buildx plugin dry-run builds (D1, three builds, privileged container, until 02:20)
+2026-11-26T02:20:30Z follow-up: Traefik access-log probes (throwaway rc0-tlog on rc0-edge, two passes, until 02:24)
+2026-11-26T02:25:00Z follow-up: go test of the changed packages, then ./internal/e2e/cli and ./internal/web/... -p 3 against a tmpfs test PostgreSQL (until ~02:34)
+2026-11-26T02:35:00Z follow-up: GHCR/Docker Hub manifest comparison and Trivy scans (D2, D5; until 02:37)
+2026-11-26T02:40:00Z primary: functional check re-run (functional-4, through Traefik)
+2026-11-26T02:56:39Z primary: functional check re-run finished (50/50)

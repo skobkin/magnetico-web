@@ -1,0 +1,11 @@
+traefik traefik:v3.8.0@sha256:00c9734983e74ae35a1fc18eaee9e9da13f3dde95c4e45b3b8c3b60e0dbd2d17
+config                     level   access  traefik  markers found (P1..P13)
+keep-all                   INFO        13        0  access: PROBE01 PROBE02 PROBE03 PROBE04 PROBE05 PROBE06 PROBE07 PROBE08 PROBE09 PROBE10 PROBE11 PROBE12 PROBE13 | traefik: none | http 401 401 401 401 404 200 200 200 403 401 401 303 303
+recommended                INFO         0        0  access: none | traefik: none | http 429 429 429 429 404 200 200 200 403 401 401 303 303
+recommended-request-id     INFO         0        0  access: none | traefik: none | http 401 429 429 429 404 200 200 200 403 401 401 303 303
+recommended-debug          DEBUG        0        0  access: none | traefik: none | http 429 429 429 429 404 200 200 200 403 401 401 303 303
+path-redact                INFO         8        0  access: PROBE01 PROBE02 PROBE05 PROBE06 PROBE07 PROBE08 PROBE09 PROBE13 | traefik: none | http 429 429 429 429 404 200 200 200 403 401 401 303 303
+path-drop-headers-redact   INFO         1        0  access: PROBE13 | traefik: none | http 401 429 429 429 404 200 200 200 403 401 401 303 303
+common-path-drop           INFO         0        0  access: none | traefik: none | http 429 429 429 429 404 200 200 200 403 401 401 303 303
+genericclf-path-drop       INFO         0        0  access: none | traefik: none | http 429 429 429 429 404 200 200 200 403 401 401 303 303
+default-format             INFO         8        0  access: PROBE01 PROBE02 PROBE05 PROBE06 PROBE07 PROBE08 PROBE09 PROBE13 | traefik: none | http 401 429 429 429 404 200 200 200 403 401 401 303 303
