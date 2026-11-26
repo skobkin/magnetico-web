@@ -317,7 +317,7 @@ def main():
     for line in psql(secrets, f"SELECT json_build_object('id', torrent_id, 'f', json_agg(json_build_array(path, size))) FROM magneticod.files WHERE torrent_id IN ({idlist}) GROUP BY torrent_id"):
         o = json.loads(line)
         srcfiles[o["id"]] = sorted((p, s) for p, s in o["f"])
-    mism, modes, nfiles = [], {}, 0
+    mism, modes, nfiles, nsummary, tsummary = [], {}, 0, 0, 0
     for tid in sorted(ids):
         m = meta[tid]
         try:
@@ -331,7 +331,10 @@ def main():
             files, mode = api_files(api, tid, d)
             modes[mode] = modes.get(mode, 0) + 1
             if mode == "dirs-summary":
-                nfiles += files["file_count"]
+                # Only the root summary (file count and total size) is compared: these files are
+                # NOT compared one by one through the API (verify-content did that in the database).
+                nsummary += files["file_count"]
+                tsummary += 1
                 if files["file_count"] != len(srcfiles[tid]) or files["size"] != sum(sz for _, sz in srcfiles[tid]):
                     bad.append("file_summary")
             else:
@@ -348,8 +351,9 @@ def main():
                 mism.append((tid, ids[tid], bad))
         except Exception as e:  # noqa: BLE001 - reported as a failure of this torrent
             mism.append((tid, ids[tid], [f"error: {type(e).__name__}: {str(e)[:80]}"]))
-    report(not mism, "migrated torrents equal the legacy source (metadata, file list with duplicates, info-hash lookup, magnet redirect)",
-           f"{len(ids)} torrents, {nfiles} files, modes {modes}, mismatches {len(mism)}")
+    report(not mism, "migrated torrents equal the legacy source (metadata, info-hash lookup, magnet redirect; complete file list with duplicates, or the root summary above 20,000 files)",
+           f"{len(ids)} torrents; complete file lists compared for {len(ids) - tsummary} torrents ({nfiles} files); "
+           f"root summary only for {tsummary} torrents ({nsummary} files); modes {modes}, mismatches {len(mism)}")
     for tid, cat, bad in mism[:50]:
         print(f"      mismatch id={tid} category={cat} fields={bad}")
 
