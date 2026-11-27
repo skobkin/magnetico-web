@@ -1,0 +1,75 @@
+## start
+
+{'image': 'docker.io/skobkin/magnetico-web@sha256:8f4ee86d92cc5fe42144851d80eb0106729eb9da053186d78c4d14cfc19a2ef7', 'web_gomemlimit': '768MiB', 'web_mem': '1G', 'machine': 'go1.27.4 linux/amd64, cpu="AMD Ryzen 9 7950X3D 16-Core Processor" cores=8 GOMAXPROCS=8 GOGC=default(100) GOMEMLIMIT=unset kernel=6.12.117+deb13-amd64 mem=32102 MiB cgroup(mem="" cpu="")'}
+
+## 10-s samples: 3100 kept
+
+### web
+
+| window (min) | n | RSS MiB median | RSS max | cgroup MiB median | cgroup max | threads max | fds max |
+|---|---|---|---|---|---|---|---|
+| 0-60 | 120 | 426 | 522 | 509 | 619 | 9 | 89 |
+| 60-120 | 120 | 420 | 515 | 527 | 639 | 9 | 90 |
+| 120-180 | 120 | 434 | 539 | 550 | 657 | 9 | 109 |
+| 180-240 | 120 | 426 | 520 | 556 | 644 | 9 | 90 |
+| 240-300 | 120 | 426 | 530 | 563 | 674 | 9 | 89 |
+| 300-360 | 120 | 429 | 513 | 558 | 646 | 9 | 89 |
+| 360-420 | 120 | 431 | 568 | 563 | 683 | 9 | 89 |
+| 420-480 | 120 | 427 | 527 | 559 | 665 | 10 | 89 |
+| 480-540 | 120 | 420 | 523 | 558 | 654 | 10 | 90 |
+| 540-600 | 120 | 430 | 543 | 564 | 675 | 10 | 91 |
+| 600-660 | 120 | 435 | 559 | 575 | 700 | 10 | 90 |
+| 660-720 | 120 | 423 | 513 | 564 | 669 | 10 | 91 |
+| 720-780 | 120 | 415 | 529 | 541 | 667 | 10 | 90 |
+| 780-840 | 120 | 422 | 499 | 543 | 618 | 10 | 90 |
+| 840-900 | 120 | 426 | 529 | 567 | 680 | 10 | 90 |
+| 900-960 | 120 | 435 | 524 | 561 | 633 | 9 | 91 |
+| 960-1020 | 120 | 427 | 508 | 566 | 656 | 9 | 125 |
+| 1020-1080 | 120 | 431 | 533 | 560 | 665 | 9 | 91 |
+| 1080-1140 | 120 | 429 | 543 | 561 | 675 | 9 | 91 |
+| 1140-1200 | 120 | 438 | 516 | 575 | 662 | 9 | 91 |
+| 1200-1260 | 120 | 419 | 529 | 554 | 661 | 9 | 89 |
+| 1260-1320 | 120 | 429 | 558 | 549 | 665 | 9 | 56 |
+| 1320-1380 | 120 | 434 | 543 | 576 | 693 | 10 | 91 |
+| 1380-1440 | 120 | 430 | 570 | 579 | 723 | 10 | 91 |
+| 1440-1500 | 120 | 262 | 519 | 485 | 669 | 10 | 91 |
+| 1500-1560 | 100 | 498 | 498 | 478 | 483 | 10 | 8 |
+
+- web rss_mib segment 10-100 min: median 424 MiB, Theil-Sen +4.78 MiB/h (+1.13 %/h), least squares +5.13 MiB/h (+1.21 %/h)
+- web cgroup_mib segment 10-100 min: median 517 MiB, Theil-Sen +40.66 MiB/h (+7.86 %/h), least squares +43.66 MiB/h (+8.44 %/h)
+- web rss_mib segment 110-900 min: median 427 MiB, Theil-Sen -0.72 MiB/h (-0.17 %/h), least squares -0.79 MiB/h (-0.18 %/h)
+- web cgroup_mib segment 110-900 min: median 558 MiB, Theil-Sen -0.15 MiB/h (-0.03 %/h), least squares -0.16 MiB/h (-0.03 %/h)
+- web rss_mib segment 910-1440 min: median 430 MiB, Theil-Sen -0.62 MiB/h (-0.14 %/h), least squares -0.16 MiB/h (-0.04 %/h)
+- web cgroup_mib segment 910-1440 min: median 564 MiB, Theil-Sen +0.50 MiB/h (+0.09 %/h), least squares +0.80 MiB/h (+0.14 %/h)
+- web rss_mib segment 1450-1600 min: median 262 MiB, Theil-Sen +39.79 MiB/h (+15.20 %/h), least squares +181.21 MiB/h (+69.23 %/h)
+- web cgroup_mib segment 1450-1600 min: median 483 MiB, Theil-Sen -5.97 MiB/h (-1.23 %/h), least squares -17.05 MiB/h (-3.53 %/h)
+
+## process reports
+
+{"cgroup_peak_mib": 290.75, "exit_code": 0, "gc_count": 3559, "gc_pause_ms_total": 189.87300000000124, "heap_after_gc_mib_max": 84, "memory_events": {"high": 0, "low": 0, "max": 0, "oom": 0, "oom_group_kill": 0, "oom_kill": 0}, "proc": "ingest", "warn_error_lines": {}}
+  heap after GC series (712 points, thinned, no timestamps): thirds median 77 / 77 / 78 MiB, max 84
+  apparent restarts at indices [703]
+  segment 0: 668 points, first third median 77, last third 79, max 84 MiB
+  segment 1: 9 points, first third median 18, last third 18, max 18 MiB
+{"cgroup_peak_mib": 740.30078125, "exit_code": 0, "gc_count": 20670, "gc_pause_ms_total": 1941.9529999999943, "heap_after_gc_mib_max": 269, "memory_events": {"high": 0, "low": 0, "max": 0, "oom": 0, "oom_group_kill": 0, "oom_kill": 0}, "proc": "web", "warn_error_lines": {"WARN: development mode: session cookies are not Secure and carry no __Host- prefix; use only on a loopback address": 3, "WARN: request request_id=": 35748}}
+  heap after GC series (608 points, thinned, no timestamps): thirds median 176 / 176 / 177 MiB, max 244
+  apparent restarts at indices []
+  segment 0: 578 points, first third median 176, last third 177, max 239 MiB
+
+check {"acknowledged": 3257969, "agg_hour_rows": 27, "covered_minutes": 1551, "duplicates": 0, "enqueued": 3257969, "received": 3257969, "refused": 0, "rollup_mismatches": [], "run_minutes": 1550.0870656901666, "settled": 3257969, "torrents_created": 3257969, "torrents_stored_by_crawlers": 3257969}
+drain {"acked": 0, "drain_seconds": 0.004865576, "missing": 0, "quarantined": 0, "queue_left": 0, "unverified": 0}
+
+kinds: {'start': 1, 'monitor': 1449, 'admin_overview': 1447, 'web_round': 705, 'event': 7, 'admin_summary': 1, 'drain': 1, 'samples': 1, 'process': 2, 'check': 1}
+
+## admin_overview snapshots (dropped from the committed JSONL: 1,447 records, 3.8 MiB)
+
+1,447 dashboard snapshots, one per minute. 1,399 report ingest/queue/storage "up"; the 48 others (stale or
+unavailable) are at minutes 751.3–799.4, i.e. exactly the planned 50-minute statistics lock (750–800), after which
+the dashboard was fresh again within 1 s (event stats_outage_end). Instances: 1 or 2 ingest instances (2 while the
+replacement ingest overlapped). Crawlers: 6 registered, 6 enabled, 5 recently active at the end.
+
+## Note on the 10-s samples
+
+Only web samples survive in the `samples` record: the harness thins the interleaved web/ingest sample list by
+taking every n-th entry, and with an even step only one process remains (tooling defect of the harness, not of the
+service). Ingest memory is covered by its cgroup peak (291 MiB), its memory events (none) and its complete gctrace.

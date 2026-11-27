@@ -253,7 +253,7 @@ func TestStatisticsDocumentLinksResolve(t *testing.T) {
 	link := regexp.MustCompile(`\]\(([^)#\s]+)(#[^)]*)?\)`)
 	for _, f := range []string{
 		"docs/specs/statistics-v1.md", "docs/operator-statistics.md", "docs/specs/crawler-ingest-delivery-v1.md", "docs/specs/web-v1.md",
-		"docs/web-deployment.md", "docs/crawler.md", "docs/container.md", "README.md", "AGENTS.md", "docs/wip/README.md", "docs/projects_differences.md",
+		"docs/web-deployment.md", "docs/crawler.md", "docs/container.md", "README.md", "AGENTS.md", "docs/wip/README.md", "docs/projects_differences.md", "docs/development.md",
 	} {
 		dir := filepath.Dir(f)
 		for _, m := range link.FindAllStringSubmatch(readRepo(t, f), -1) {

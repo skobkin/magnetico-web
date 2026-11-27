@@ -24,6 +24,7 @@ appear; they are not private. Screenshots of real data were kept out of the repo
 | `tools/magnetico-image-cli` | the operator CLI through the image (`MAGNETICO_BENCH_BIN` of the harness's container mode) |
 | `tools/traefik-log-check.sh` | which probe credentials reach Traefik's access log and own log, per access-log configuration (follow-up, D3) |
 | `tools/rc0-soak.sh` | start / status / stop / collect of the published-image soak (profile `soak09a`, container mode) |
+| `tools/soak-analysis.py`, `tools/gctrace-hourly.py` | soak verdict: hourly samples and slopes, process reports, conservation; live heap after GC per hour from gctrace |
 | `deploy/compose.yaml`, `traefik.yml`, `dynamic.yml` | the disposable deployment: web, ingest ×2, Traefik with TLS, Mailpit (secrets in env files outside the repository) |
 
 The container mode of the load harness is `internal/e2e/cli/container_harness_test.go` (opt-in, `MAGNETICO_BENCH_IMAGE`).
@@ -50,7 +51,8 @@ The container mode of the load harness is `internal/e2e/cli/container_harness_te
 | `d2-ghcr-retry.txt` | anonymous GHCR access and the manifest comparison with Docker Hub after the visibility change |
 | `traefik-log-check/` | summary (with a validity column), field lists, CLF lines and probe hits of `tools/traefik-log-check.sh` (probe values are fake; `Set-Cookie` values redacted) |
 | `alpine-cves-recheck.txt` | Trivy of the rc0 image and a fresh `alpine:3.24`, upgradable packages, who links the affected libraries |
+| `soak/` | the 24-hour soak (report §14): harness result, summary, analysis, gctrace trend, the post-soak search plan, the JSONL without the dashboard snapshots |
 | `activity-log.txt` | when heavy work ran (to separate overlapping measurements) |
 
-The 24-hour soak's own output stays in the workspace (`~/tmp/magnetico/tmp/rc0/soak/out/rc0soak.jsonl`) until it is collected
-(report §8).
+The 24-hour soak was collected on 2026-11-27 into `raw/soak/` (report §14). The full JSONL with the dashboard snapshots
+and the harness log stay in the workspace (`~/tmp/magnetico/tmp/rc0/soak/`).

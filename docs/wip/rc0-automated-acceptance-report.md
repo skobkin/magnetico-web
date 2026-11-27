@@ -3,7 +3,7 @@
 **Artifact under test:** `docker.io/skobkin/magnetico-web:0.8.0-rc0` (index digest
 `sha256:8f4ee86d92cc5fe42144851d80eb0106729eb9da053186d78c4d14cfc19a2ef7`), built by Woodpecker from tag `0.8.0-rc0`
 (commit `47742edf`). **Branch of this report:** `fix/post-merge-quick-fixes`. **Run:** 2026-11-25 23:10 UTC – 2026-11-26
-(the 24-hour soak continues after this report; §8 says how to collect it).
+and 2026-11-27 (the 24-hour soak: **PASS**, verdict in §14).
 
 **Follow-up (2026-11-26, §13):** after the owner's review, D1 is fixed in `release.yaml` and verified with the real buildx
 plugin (it takes effect with the next tag); D2 is resolved (GHCR serves the identical index anonymously); D3 is a
@@ -30,7 +30,7 @@ image was touched. Every acceptance test exercised the **published image**; loca
 | Functional (published image behind Traefik, TLS) | **50/50** checks pass, including source equality of **415** migrated torrents through the API (metadata, lookups, and the complete file list of 411 of them; the 4 torrents above 20,000 files only by their root summary — see §5 for what was and was not compared file by file), both file-browser modes, RSS v1/v2, magnet redirects, authorization; real headless Chrome 159: **25/25** under the production CSP; synthetic SMTP (STARTTLS): **11/11** |
 | Search on real names | ordinary shapes ≤ 11 ms warm; **finding F5 confirmed on real data**: two common words that rarely co-occur cost **1.8–2.0 s** (date order) and **4.0–4.3 s** (size order); the generic plan would answer in 7.7 ms. No index added (owner decision) |
 | Operations | two ingest instances (election, handover 8 s graceful / 10 s after SIGKILL, statistics aggregation), PostgreSQL outage of 2 min, duplicate submissions, credential rotation/disable/enable, search-timeout chain through the proxy: all as specified. **D3: Traefik logged feed tokens** with the setting `redact`; `drop` works (documentation corrected, §13) |
-| Soak (published image, ≥ 24 h) | **running** (`rc0-soak` user unit, scale 5 ≈ 26 h, the full-scale 09A synthetic dataset); 15-minute smoke run of the same workload passed every gate; interim state in §8 |
+| Soak (published image, ≥ 24 h) | **PASS** (25 h 50 min, 0 gate failures, §14): conservation exact over 3,257,969 records, no cgroup memory event, web heap after GC 176 / 176 / 177 MiB by thirds (**F9 not reproduced**), RSS and cgroup flat between restarts, descriptors back at baseline; search latency grew with the soak's synthetic inserts (the F5 plan shape, issue #57) |
 
 ## 2. Artifact, environment and dataset
 
@@ -267,8 +267,8 @@ $T collect                # soak-summary.md from soak/out/rc0soak.jsonl (09A's s
 journalctl --user -u rc0-soak; less ~/tmp/magnetico/tmp/rc0/soak/harness.log   # PASS/FAIL line at the end
 ```
 
-Expected end ≈ 2026-11-27 02:00 UTC. The verdict (memory plateau, F9 heap-after-GC trend, conservation, every gate) belongs in
-an addendum to this report; F9 is investigated with a `diag` build only if a sustained trend appears.
+Ended 2026-11-27 01:49 UTC: **PASS**; the verdict (memory plateau, F9 heap-after-GC trend, conservation, every gate) is in §14.
+No sustained trend appeared, so no `diag` build was run.
 
 ## 9. Findings and defects (most severe first)
 
@@ -316,18 +316,18 @@ disappeared during the run together with its anonymous volume. The owner removed
 | Proxy: `X-Forwarded-For` appended, narrow trust | ✅ |
 | Proxy: access log keeps no credentials | ❌ with `redact` (D3) · ✅ with `RequestPath: drop` and all headers dropped, no header exception: 15 probe credentials (feed tokens, link codes, API/ingest/session headers, a reset link in `Referer`, a client `X-Request-Id`) absent from the access log and Traefik's own log (§13.3, §13.9) |
 | Proxy: no response caching; TLS, HSTS, redirects | ✅ `no-store` on feeds/admin, HSTS, TLS 1.2+/1.3 via Traefik; HTTP→HTTPS redirect configured · ⬜ real certificates |
-| Operations: container memory with the real image | ⏳ soak (limits 1 GiB, no event so far); ✅ migration and verification footprints |
+| Operations: container memory with the real image | ✅ soak (§14: limits 1 GiB, peaks web 740 MiB / ingest 291 MiB, no memory event); ✅ migration and verification footprints |
 | Operations: real SMTP provider | ⬜ owner (synthetic STARTTLS ✅) |
 | Operations: search plans on a production-like copy, F5 decision | ✅ measured (§6) · not a release blocker (owner); follow-up in issue #57 |
 | Operations: live-DHT acceptance | ⬜ separate host, not from this VM |
 | Operations: user migration dry-run on real accounts | ⬜ owner (only the procedure was exercised, on synthetic accounts, §4.5) |
 | Operations: first admin via `set-role`, email removal by a migrated user | ✅ set-role · ⬜ owner |
-| Operations: ≥ 24 h soak with the real image | ⏳ running (§8) |
+| Operations: ≥ 24 h soak with the real image | ✅ PASS, 25 h 50 min, 0 gate failures; F9 not reproduced (§14) · ⬜ goroutines (not exposed by the published image) |
 | Operations: toolchain Go ≥ 1.27.4 | ✅ the image reports `go1.27.4` |
 | Statistics: uPlot under the strict CSP in more browsers | ✅ Chrome 159 again · ⬜ Firefox, phone |
 | Statistics: keyboard, screen reader, badge contrast | ⬜ |
 | Statistics: access with real accounts (admin link, 403, demotion) | ✅ 403 and admin access with **synthetic** migrated accounts · ⬜ real accounts, demotion on the next request |
-| Statistics: ≥ 24 h with real crawlers | ⬜ live DHT · ⏳ synthetic in the soak |
+| Statistics: ≥ 24 h with real crawlers | ⬜ live DHT · ✅ synthetic in the soak (27 hourly rows, roll-ups agree, 50-minute lock recovered, §14) |
 | Statistics: behind the production proxy (client addresses, Authorization not logged, rotation within 60 s) | ✅ §§5, 7 |
 | Statistics: queue sampling at production scale with a cold cache | ⬜ not reproduced (queue stayed small) |
 | Statistics: two ingest instances | ✅ §7 |
@@ -353,14 +353,14 @@ disappeared during the run together with its anonymous volume. The owner removed
 4. **F5** is tracked in issue #57 (measurements, plans, approaches; a comparison with the tuned legacy production server is still missing). The issue was created without a label (the agent's token cannot read the organisation's labels): add `enhancement` if wanted.
 5. **Proxy access logs (D3)**: use the configuration of `docs/web-deployment.md` §3 or leave Traefik's access log off.
 6. **Real SMTP provider**, **live-DHT acceptance** on a separate host, **arm64 execution**, the native archives by hand (D7), D4, and D5 once Alpine publishes a refreshed image.
-7. **Collect the soak** (§8) and judge it with the 07J/09A criteria; append the verdict.
+7. ~~Collect the soak~~ done: **PASS** (§14). Tear down `rc0-soak-pg` and `rc0soak-net` when they are no longer wanted (§12).
 
 ## 12. Resources left running and cleanup
 
 Kept on purpose: `rc0-pg` (legacy sample `legacy_torrents`, read-only role; **primary migrated database `rc0_magnetico`
 with `magnetico_migration` preserved**, the synthetic accounts and the synthetic crawler torrents stored after the
 verifications; synthetic legacy accounts `legacy_app`), the deployment `rc0` (`rc0-web`, `rc0-ingest`, `rc0-ingest2`,
-`rc0-traefik`, `rc0-mailpit`), the soak (`rc0-soak`, `rc0-soak-pg`, containers `rc0soak-*`), the sampler unit
+`rc0-traefik`, `rc0-mailpit`), the soak database `rc0-soak-pg` (the soak itself finished, §14; its unit and containers are gone), the sampler unit
 `rc0-primary-sampler`, networks `rc0-net`, `rc0-edge`, `rc0soak-net`. Data under `~/tmp/magnetico/tmp/rc0`; secrets (database
 passwords, crawler tokens, synthetic legacy keys and hashes) in its `secrets/` (mode 700/600), never in the repository.
 
@@ -368,7 +368,7 @@ Removed: the cleanup copies `rc0_cleanup_a`/`_b`, the interruption target `rc0_r
 smoke-test resources (by the script). Full teardown when no longer needed:
 
 ```sh
-systemctl --user stop rc0-soak rc0-primary-sampler
+systemctl --user stop rc0-primary-sampler
 cd ~/tmp/magnetico/tmp/rc0/deploy && RC0_SECRETS=.. RC0_DEPLOY=. docker compose --profile two-ingest down
 docker rm -f $(docker ps -aq --filter name=^rc0) rc0-pg rc0-soak-pg 2>/dev/null
 docker network rm rc0-net rc0-edge rc0soak-net
@@ -537,3 +537,76 @@ Commits: `5e0e73dc` (configuration file), `bfa5bfe9` (OpenAPI and migration guid
 
   The soak was not touched: the probes and tests used only the primary deployment and the test PostgreSQL, with load
   on the same host until 17:56 UTC (`raw/activity-log.txt`).
+
+## 14. Soak verdict (2026-11-27)
+
+**Result: PASS** (verdict accepted by the owner on 2026-11-27; no further soak run required). `--- PASS: TestLoad (93024.54s)`, **0 gate failures** (`raw/soak/harness-result.txt`). Run
+2026-11-25 23:59:15 UTC – 2026-11-27 01:49 UTC (25 h 50 min: 24 h 10 min of load, the drain, 100 min idle), unit result
+`success`, the published index digest `sha256:8f4ee86d…` throughout. The verdict uses the criteria of the checklist
+(07J/09A): bounded, explainable memory; no cgroup memory event; descriptors back at baseline after idle; conservation exact.
+
+**Evidence** (`raw/soak/`): `harness-result.txt`; `soak-summary.md` (09A's summariser); `soak-analysis.txt`
+(`tools/soak-analysis.py`: hourly 10-s samples, slopes per segment, process reports, conservation, drain, the dashboard
+snapshots in summary); `gctrace-hourly.txt` (`tools/gctrace-hourly.py`, live heap after GC per hour from the containers'
+own logs, with Theil–Sen slopes); `search-plan-after-soak.txt`; `rc0soak-without-admin-overview.jsonl` (the harness output
+without its 1,447 per-minute dashboard snapshots, 3.8 MiB, summarised in `soak-analysis.txt`). Synthetic data only; the
+directory was scanned against every secret value of the run, token prefixes and DSNs.
+
+| Criterion | Result |
+|---|---|
+| Gates (credentials, restarts, statistics, drain, conservation, roll-ups, OOM, exit codes, ERROR lines, crawler panics) | **0 failures** |
+| Conservation (persisted aggregates after the graceful ingest stop) | **exact**: 3,257,969 received = acknowledged = enqueued = settled = torrents created = stored by the crawlers; 0 refused, 0 duplicates; **27** hourly rows covering 1,551 minutes of a 1,550-minute run; hourly, daily and monthly roll-ups agree |
+| Drain | queue empty in 5 ms after the crawlers stopped; 0 missing, 0 unverified, 0 quarantined |
+| Scheduled events | web cold restarts at 100 and 900 min (exit 0, 0.44 s and 0.59 s down); rotation (new token at once, old refused at once); disable/enable (refused after 1.0 s, accepted again at once); graceful ingest restart (ready after 0.5 s); **50-minute statistics lock**: 90,291 torrents added during it, first flush 1.0 s after release, dashboard fresh at once |
+| Errors | web: 0 timeouts, 0 other 5xx, 0 unexpected 4xx, 0 transport errors in 3.4 M requests; 28,580 administrator requests, 0 unexpected; no ERROR line in either service (web WARN lines are the access-log entries of the expected `busy 503` answers, and three development-mode cookie notices caused by the loopback deviation of §8); ingest 0 storage errors, 0 rejections, 0 lock losses |
+| cgroup memory events | **none** (`high`, `max`, `oom`, `oom_kill` = 0 for both) |
+| Peaks | web cgroup 740 MiB of 1 GiB (`GOMEMLIMIT` 768 MiB); ingest cgroup 291 MiB of 1 GiB |
+| PostgreSQL | 26–33 connections; no lock waiter and an oldest transaction ≤ 4.3 s outside the planned lock (during it: 2 waiters, 2,944 s, dead tuples up to 194,762 — the pinned vacuum horizon, gone within the next 30-minute window) |
+| Dashboard | 1,399 of 1,447 snapshots "up"; the 48 others (stale or unavailable) are exactly minutes 751–799, the planned lock |
+
+**Memory (F9).** No sustained trend; **F9 is not reproduced over 24 hours**, so no `diag` build was needed (none was
+mixed in).
+
+- **Web heap after GC** (the harness's complete gctrace series, 20,670 GCs, thinned to 608 points): 176 / 176 / 177 MiB
+  in the three thirds of the run. **Peak 269 MiB** over all 20,670 GCs (`heap_after_gc_mib_max` of the process report);
+  244 MiB is only the maximum of the thinned 608-point series (09A over 5 h: 175 / 176, peak 268). The containers' own timestamped log
+  covers the last 2 h of load (closed loop and interactive; Docker's log rotation dropped the earlier part): Theil–Sen
+  **+0.00 MB/h** at 176.5 MB.
+- **Web RSS and cgroup memory** (10-s samples, Theil–Sen): between the cold restarts, 110–900 min: RSS −0.17 %/h, cgroup
+  −0.03 %/h; 910–1,440 min: RSS −0.14 %/h, cgroup +0.09 %/h. The 2 %/h (heap) and 5 %/h (RSS) screening thresholds of
+  07J are not approached. Only the first 100 minutes rise (cgroup +7.9 %/h, RSS +1.1 %/h): the cache and page-cache fill
+  after the start. Threads 9–10 throughout; descriptors up to 125 under load, **7–8 after the idle phase** (07J: 7).
+- **Ingest heap after GC** (complete since its restart at 600 min): 77 MB flat for nine hours (+0.00 MB/h), then
+  77 → 83 MB between 19:00 and 23:00 UTC (+1.8 %/h, below the threshold), flat at 83 MB for the last 70 minutes of load
+  (+0.00 MB/h), **18 MB at idle**. Over the whole 14 h: +0.34 %/h. The memory is returned when the work stops, so it is
+  working memory, not a leak; its owner was not identified (no heap profile in the published image; 09A attributed the
+  77 MB to the brotli encoder tables, released at idle as here).
+- **Goroutines** are not visible in the published image (no `diag` endpoint); the descriptors and threads above are the
+  available proxy.
+
+**Observations (not gates):**
+
+1. **Web RSS during idle.** RSS fell to ≈ 250 MiB at the start of the idle phase, then rose to 497 MiB at minute 1,512 and
+   stayed there, with about 1 s of CPU over the rest of the idle phase, no traffic and 7–8 descriptors; the cgroup memory
+   **fell** at the same moment (483 → 468 MiB). **The cause is not known**: the recorded data (RSS, cgroup memory, CPU,
+   threads, descriptors) do not explain it, and the container no longer exists to inspect. It is recorded as an
+   observation only. It stayed below the limit, and the checklist does not require RSS to fall at idle.
+2. **Search latency grew with the soak's own inserts.** Interactive search p50/p95 per two hours went from 11 / 102 ms
+   (3.75 M torrents) to 742 / 2,046 ms (6.79 M); `busy 503` answers from 0.08 % to 4.6 % of requests; no timeouts. Cause,
+   confirmed with EXPLAIN on the soak database afterwards (`raw/soak/search-plan-after-soak.txt`): the newest-first search
+   for a common term walks `idx_torrents_discovered_on` backwards and discards the **3,274,203** newest rows, almost all of them the
+   crawlers' 3,257,969 synthetic `e2e torrent N` records, which match no term of the workload (1,155 ms), whereas oldest-first needs 1.7 ms. This
+   is the plan shape of **F5 / issue #57** (an ordered index scan filtering a non-matching run of rows), driven to an
+   extreme by an unrealistic dataset: real new torrents match common words at their usual rate. Admission control held
+   (503 instead of timeouts). Added to **issue #57** (comment of 2026-11-27), which stays non-blocking for 0.8.0; not a
+   new defect.
+3. **Harness:** the `samples` record kept web samples only (thinning every n-th entry of an interleaved web/ingest list
+   with an even step), so the ingest RSS series is missing; the ingest is judged on its gctrace, cgroup peak and memory
+   events. A test-tool defect, not a service one: **issue #61** (keep per-service, timestamped series in future measurements).
+
+**Resources.** The soak unit and its containers are gone (transient unit, the harness removed its containers); the soak
+database `rc0-soak-pg` and network `rc0soak-net` are kept (§12) until the owner asks for teardown.
+
+**Overlap.** The crawler race tests of PR #59 ran during the idle phase (≈ 00:30–00:50 UTC, CPU only, no container or
+database of the soak); the container logs were read at ≈ 01:01 UTC (`docker logs`, read-only); the EXPLAINs ran after the
+end (`raw/activity-log.txt`).
