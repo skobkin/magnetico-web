@@ -181,8 +181,11 @@ func ParsePrefixes(items []string) ([]netip.Prefix, error) {
 		p, err := netip.ParsePrefix(item)
 		if err != nil {
 			a, aerr := netip.ParseAddr(item)
-			if aerr != nil || a.Zone() != "" {
+			if aerr != nil {
 				return nil, fmt.Errorf("invalid CIDR %q: %w", item, err)
+			}
+			if a.Zone() != "" {
+				return nil, fmt.Errorf("invalid CIDR %q: an IPv6 zone is not allowed", item)
 			}
 			p = netip.PrefixFrom(a, a.BitLen())
 		}
