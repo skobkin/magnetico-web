@@ -540,7 +540,7 @@ Commits: `5e0e73dc` (configuration file), `bfa5bfe9` (OpenAPI and migration guid
 
 ## 14. Soak verdict (2026-11-27)
 
-**Result: PASS.** `--- PASS: TestLoad (93024.54s)`, **0 gate failures** (`raw/soak/harness-result.txt`). Run
+**Result: PASS** (verdict accepted by the owner on 2026-11-27; no further soak run required). `--- PASS: TestLoad (93024.54s)`, **0 gate failures** (`raw/soak/harness-result.txt`). Run
 2026-11-25 23:59:15 UTC – 2026-11-27 01:49 UTC (25 h 50 min: 24 h 10 min of load, the drain, 100 min idle), unit result
 `success`, the published index digest `sha256:8f4ee86d…` throughout. The verdict uses the criteria of the checklist
 (07J/09A): bounded, explainable memory; no cgroup memory event; descriptors back at baseline after idle; conservation exact.
@@ -568,7 +568,8 @@ directory was scanned against every secret value of the run, token prefixes and 
 mixed in).
 
 - **Web heap after GC** (the harness's complete gctrace series, 20,670 GCs, thinned to 608 points): 176 / 176 / 177 MiB
-  in the three thirds of the run, max 244 MiB (09A over 5 h: 175 / 176, max 268). The containers' own timestamped log
+  in the three thirds of the run. **Peak 269 MiB** over all 20,670 GCs (`heap_after_gc_mib_max` of the process report);
+  244 MiB is only the maximum of the thinned 608-point series (09A over 5 h: 175 / 176, peak 268). The containers' own timestamped log
   covers the last 2 h of load (closed loop and interactive; Docker's log rotation dropped the earlier part): Theil–Sen
   **+0.00 MB/h** at 176.5 MB.
 - **Web RSS and cgroup memory** (10-s samples, Theil–Sen): between the cold restarts, 110–900 min: RSS −0.17 %/h, cgroup
@@ -586,10 +587,10 @@ mixed in).
 **Observations (not gates):**
 
 1. **Web RSS during idle.** RSS fell to ≈ 250 MiB at the start of the idle phase, then rose to 497 MiB at minute 1,512 and
-   stayed there, with no CPU (the cgroup's CPU time did not advance), no traffic and 7–8 descriptors; the cgroup memory
-   **fell** at the same moment (483 → 468 MiB). Pages that the cgroup already held became mapped into the process (RSS
-   counts file-backed and shared pages); what mapped them is not visible in the recorded data and the container no longer
-   exists. It does not affect the limit, and the checklist does not require RSS to fall at idle.
+   stayed there, with about 1 s of CPU over the rest of the idle phase, no traffic and 7–8 descriptors; the cgroup memory
+   **fell** at the same moment (483 → 468 MiB). **The cause is not known**: the recorded data (RSS, cgroup memory, CPU,
+   threads, descriptors) do not explain it, and the container no longer exists to inspect. It is recorded as an
+   observation only. It stayed below the limit, and the checklist does not require RSS to fall at idle.
 2. **Search latency grew with the soak's own inserts.** Interactive search p50/p95 per two hours went from 11 / 102 ms
    (3.75 M torrents) to 742 / 2,046 ms (6.79 M); `busy 503` answers from 0.08 % to 4.6 % of requests; no timeouts. Cause,
    confirmed with EXPLAIN on the soak database afterwards (`raw/soak/search-plan-after-soak.txt`): the newest-first search
@@ -597,10 +598,11 @@ mixed in).
    crawlers' 3,257,969 synthetic `e2e torrent N` records, which match no term of the workload (1,155 ms), whereas oldest-first needs 1.7 ms. This
    is the plan shape of **F5 / issue #57** (an ordered index scan filtering a non-matching run of rows), driven to an
    extreme by an unrealistic dataset: real new torrents match common words at their usual rate. Admission control held
-   (503 instead of timeouts). Added to issue #57's evidence; not a new defect.
+   (503 instead of timeouts). Added to **issue #57** (comment of 2026-11-27), which stays non-blocking for 0.8.0; not a
+   new defect.
 3. **Harness:** the `samples` record kept web samples only (thinning every n-th entry of an interleaved web/ingest list
    with an even step), so the ingest RSS series is missing; the ingest is judged on its gctrace, cgroup peak and memory
-   events. A test-tool defect, not a service one.
+   events. A test-tool defect, not a service one: **issue #61** (keep per-service, timestamped series in future measurements).
 
 **Resources.** The soak unit and its containers are gone (transient unit, the harness removed its containers); the soak
 database `rc0-soak-pg` and network `rc0soak-net` are kept (§12) until the owner asks for teardown.
