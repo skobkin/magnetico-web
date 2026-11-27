@@ -6,7 +6,9 @@
 # Start it as a manual pipeline on master with the variable FORCE_REBUILD=true, and
 # optionally REBUILD_TAG=<release tag> (default: the newest stable Go-line release, see
 # ci/release-tag.sh). It pushes <tag>-rN (the next free rebuild number) and moves <tag> to
-# it in both registries (owner decision). Nothing else starts it, and ci.yaml leaves such
+# it in both registries (owner decision); it moves latest too only when latest references
+# that release in both registries, so rebuilding an older release never moves latest
+# backwards (decided by ci/prepare-rebuild.sh). Nothing else starts it, and ci.yaml leaves such
 # a manual run alone. ci/prepare-rebuild.sh refuses an unpublished release, a PHP-era
 # tag and a run without FORCE_REBUILD.
 #

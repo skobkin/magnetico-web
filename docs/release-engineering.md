@@ -14,12 +14,12 @@ requirement.)
 
 | Item | State |
 |---|---|
-| `Dockerfile`, `.dockerignore`, `.goreleaser.yaml`, `.woodpecker/ci.yaml`, `.woodpecker/release.yaml` | **configured and committed** |
-| Both workflow files | **linted** with `woodpecker-cli lint` (v3.20.1; `--plugins-privileged woodpeckerci/plugin-docker-buildx`, see below) and pinned by `internal/repocheck`; **never run on a Woodpecker server** |
+| `Dockerfile`, `.dockerignore`, `.goreleaser.yaml`, the four workflow files in `.woodpecker/` | **configured and committed**; the workflow files are linted with `woodpecker-cli lint` (v3.20.1; `--plugins-privileged woodpeckerci/plugin-docker-buildx`, see below) and pinned by `internal/repocheck` |
+| `ci.yaml` and `release.yaml` | **run on the Woodpecker server**: `0.8.0-rc0` and `0.8.0-rc1` were published by `release.yaml` (both images in both registries, a Forgejo prerelease with both archives and `checksums.txt`); the `0.8.0-rc0` image was unversioned, fixed in `0.8.0-rc1` (`docs/wip/rc0-automated-acceptance-report.md`, D1) |
+| `rebuild.yaml` | **not yet run on the Woodpecker server**: what `prepare-rebuild` writes was built (not pushed) by the real plugin image in dry-run mode outside Woodpecker (`docs/wip/rc0-automated-acceptance-report.md`, D1), and its registry reads (tags and manifest digests) were checked against the real Docker Hub and GHCR (see below) |
 | `goreleaser check` and a snapshot build of both archives, `ci/native-smoke.sh` | **verified locally** (also inside the pinned `goreleaser/goreleaser:v2.20.1` image) |
 | The image (amd64 and arm64 in one `docker buildx` invocation), `ci/image-smoke.sh` on amd64, Trivy for both platforms | **verified locally** during Task 08 and Task 09A; not part of any workflow |
 | arm64 image | **built and scanned; never executed** |
-| Real Woodpecker build, GoReleaser publication to Forgejo, the plugin's push to Docker Hub and GHCR | **never performed** (no tag exists, no credentials were used here): the owner verifies them with the `0.8.0-rc1` tag |
 
 ## Roles
 
@@ -42,9 +42,10 @@ backslashes, which made the expression invalid (`internal/repocheck` refuses a b
 that does not start with a version triggers **neither** workflow, so it can never publish. Because the suffix is not
 checked, the tag must still be valid for both consumers: SemVer for GoReleaser and the Docker tag alphabet
 (`[A-Za-z0-9_.-]`, at most 128 characters) for the image; a `+build` suffix, for example, would fail `release-docker`
-after `release-forgejo` succeeded (see the recovery section). A tag with a suffix publishes exactly its version tag
-(`0.8.0-rc1`) and a **prerelease** on Forgejo (GoReleaser's `prerelease: auto`); a stable tag publishes the stable version and a stable release. Every published image is also tagged **`latest`**;
-no other floating alias is applied.
+after `release-forgejo` succeeded (see the recovery section). A tag with a suffix publishes its version tag
+(`0.8.0-rc1`) and a **prerelease** on Forgejo (GoReleaser's `prerelease: auto`); a stable tag publishes the stable version and a stable release.
+**Every release tag, prereleases included, also moves `latest`** in both registries (owner decision): `latest` is the
+most recently published release, not the newest stable one. No other floating alias is applied.
 
 ## What runs when
 
@@ -114,7 +115,7 @@ otherwise first exercised by the real release build.
 tag ─► ci.yaml (every gate above, same commit)
    └─► release.yaml   (depends_on: [ci])
          release-forgejo   goreleaser release --clean   ► Forgejo release (+ both archives and checksums.txt)
-         release-docker    plugin-docker-buildx          ► docker.io/skobkin/magnetico-web:<tag> and ghcr.io/…:<tag>
+         release-docker    plugin-docker-buildx          ► docker.io/skobkin/magnetico-web:<tag> and ghcr.io/…:<tag>, both also :latest
 ```
 
 * **Publication waits for verification.** `depends_on: [ci]` is a standard Woodpecker workflow dependency: a failed
@@ -125,7 +126,7 @@ tag ─► ci.yaml (every gate above, same commit)
   `GOTOOLCHAIN=local`, which silently ignores `go.mod`'s `toolchain go1.27.4`: the step sets `GOTOOLCHAIN=go1.27.4+auto`.
   The Forgejo API URL is derived from `CI_FORGE_URL` (set by Woodpecker).
 * **`release-docker`** is `woodpeckerci/plugin-docker-buildx:6` with `linux/amd64,linux/arm64`, SBOM and provenance
-  attestations, `pull_image: true`, the release tag as the only tag, build arguments `VERSION` and `COMMIT`, and logins
+  attestations, `pull_image: true`, the tags `${CI_COMMIT_TAG}` and `latest`, build arguments `VERSION` and `COMMIT`, and logins
   for both registries. `build_args` must be a **mapping** (`VERSION: "${CI_COMMIT_TAG}"`): the plugin reads it as a
   JSON string map, Woodpecker encodes a mapping as JSON but a list as a single comma-joined string, which the plugin
   keeps under the key `*`, so a list silently builds `version=dev` with an empty commit (the `0.8.0-rc0` image did).
@@ -155,7 +156,13 @@ run. `ci/prepare-rebuild.sh` (step `prepare-rebuild`):
 * numbers the rebuild with the next `-rN` that neither registry has for that release (read anonymously: both
   images are public);
 * writes the image tags **`X.Y.Z-rN` and `X.Y.Z`**: the release tag moves to the rebuild (owner decision; whoever
-  pins the old digest keeps it, and the previous image stays reachable by its digest), and checks the release out.
+  pins the old digest keeps it, and the previous image stays reachable by its digest);
+* adds **`latest`** only when `latest` references the rebuilt release **in both registries** at that moment (the
+  manifest digest of `latest` equals that of `X.Y.Z`, compared per registry): rebuilding the release that `latest`
+  points to (including one rebuilt before) moves `latest` to the rebuild with it; rebuilding an older release never moves `latest` backwards; a
+  registry without `latest`, or registries that disagree, leave `latest` untouched everywhere (the step log says
+  which). A manifest that cannot be read fails the run;
+* checks the release out.
 
 `rebuild-docker` is `release-docker` with the cache off, the tags from `prepare-rebuild` (`tags_file`) and the build
 arguments `VERSION` (the release tag, so `magnetico --version` still reports the release) and `COMMIT` from its env
@@ -163,9 +170,9 @@ file: the plugin loads `env_file` (`.rebuild.env`, written by `prepare-rebuild`)
 and `build_args_from_env: [VERSION, COMMIT]` forwards those two variables as build arguments. The plugin ignores a
 missing env file, so `prepare-rebuild` failing to write it would build an unversioned image; the step fails instead of
 continuing without it. Its repositories, platforms, labels, SBOM, provenance and logins are pinned equal to `release-docker` by
-`internal/repocheck`. The Forgejo release and its archives are not touched. **Not verified on Woodpecker:** whether
-`evaluate` sees a variable of a manual run (if it does not, the rebuild simply does not start: say so and the gate
-moves into the step); the registry logic was checked against Docker Hub and GHCR with other public images.
+`internal/repocheck`. The Forgejo release and its archives are not touched. **Not yet verified on Woodpecker:**
+whether `evaluate` sees a variable of a manual run (if it does not, the rebuild simply does not start: say so and the
+gate moves into the step).
 
 ## Scheduled security check: `security.yaml`
 

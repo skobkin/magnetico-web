@@ -11,7 +11,9 @@
 #     release that neither registry has (that is published by release.yaml, not rebuilt);
 #   - numbers the rebuild with the next -rN that neither registry has for that tag;
 #   - writes the image tags (X.Y.Z-rN, and X.Y.Z, which moves to the rebuild: owner
-#     decision) and the build arguments for the buildx plugin, then checks the tag out.
+#     decision; plus latest when latest references this release in both registries, so a
+#     rebuild of an older release never moves latest backwards) and the build arguments
+#     for the buildx plugin, then checks the tag out.
 #
 # Registry access is anonymous (both images are public). Overridable for tests:
 # DOCKERHUB_REPO, GHCR_REPO, DOCKERHUB_REGISTRY, DOCKERHUB_AUTH, GHCR_REGISTRY,
@@ -60,6 +62,21 @@ tags_of() { # registry, repository, token
 	body="$(curl -fsS -H "Authorization: Bearer $3" "$1/v2/$2/tags/list?n=10000")" || return 1
 	printf '%s' "$body" | jq -r '.tags // [] | .[]'
 }
+# The digest of a tag's manifest; empty output when the registry has no such tag (404).
+manifest_types='application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json'
+digest_of() { # registry, repository, token, tag
+	headers="$(curl -sSI -H "Authorization: Bearer $3" -H "Accept: $manifest_types" "$1/v2/$2/manifests/$4")" || return 1
+	headers="$(printf '%s\n' "$headers" | tr -d '\r')"
+	case "$(printf '%s\n' "$headers" | awk 'NR == 1 { print $2 }')" in
+	200)
+		d="$(printf '%s\n' "$headers" | awk 'tolower($1) == "docker-content-digest:" { print $2 }')"
+		[ -n "$d" ] || return 1
+		printf '%s\n' "$d"
+		;;
+	404) ;;
+	*) return 1 ;;
+	esac
+}
 
 hub_token="$(token "$hub_auth?service=registry.docker.io&scope=repository:$hub_repo:pull")" || die "no Docker Hub token"
 ghcr_token="$(token "$ghcr_registry/token?service=ghcr.io&scope=repository:$ghcr_repo:pull")" || die "no GHCR token"
@@ -77,9 +94,31 @@ n="$(printf '%s\n%s\n' "$hub_tags" "$ghcr_tags" | awk -v p="$tag-r" '
 	index($0, p) == 1 { s = substr($0, length(p) + 1); if (s ~ /^[0-9]+$/ && s + 0 > m) m = s + 0 }
 	END { print m + 1 }')"
 
-printf '%s-r%s\n%s\n' "$tag" "$n" "$tag" >"$tags_file"
+# Every release moves latest (release.yaml). The rebuild moves it too only when latest is
+# this release in both registries now: never backwards to an older release, and never when
+# the registries disagree.
+digest() { # label, registry, repository, token, tag
+	digest_of "$2" "$3" "$4" "$5" || die "cannot read the manifest of $1/$3:$5"
+}
+hub_latest="$(digest docker.io "$hub_registry" "$hub_repo" "$hub_token" latest)"
+ghcr_latest="$(digest ghcr.io "$ghcr_registry" "$ghcr_repo" "$ghcr_token" latest)"
+hub_release="$(digest docker.io "$hub_registry" "$hub_repo" "$hub_token" "$tag")"
+ghcr_release="$(digest ghcr.io "$ghcr_registry" "$ghcr_repo" "$ghcr_token" "$tag")"
+latest_on=
+if [ -n "$hub_latest" ] && [ "$hub_latest" = "$hub_release" ]; then latest_on="docker.io"; fi
+if [ -n "$ghcr_latest" ] && [ "$ghcr_latest" = "$ghcr_release" ]; then latest_on="$latest_on ghcr.io"; fi
+latest_on="${latest_on# }"
+
+{
+	printf '%s-r%s\n%s\n' "$tag" "$n" "$tag"
+	if [ "$latest_on" = "docker.io ghcr.io" ]; then echo latest; fi
+} >"$tags_file"
 printf 'VERSION=%s\nCOMMIT=%s\n' "$tag" "$commit" >"$env_file"
 echo "prepare-rebuild: rebuilding $tag (commit $commit, published on $published)"
-echo "prepare-rebuild: image tags $tag-r$n and $tag (moved to the rebuild)"
+case "$latest_on" in
+"docker.io ghcr.io") echo "prepare-rebuild: image tags $tag-r$n, $tag and latest (moved to the rebuild)" ;;
+"") echo "prepare-rebuild: image tags $tag-r$n and $tag (moved to the rebuild); latest does not reference $tag and stays" ;;
+*) echo "prepare-rebuild: image tags $tag-r$n and $tag (moved to the rebuild); latest is $tag on $latest_on only, so it is left alone in both registries" ;;
+esac
 # Last: this replaces the script file being read with the tag's version.
 exec git checkout -q --detach "$commit"

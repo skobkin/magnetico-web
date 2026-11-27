@@ -120,10 +120,30 @@ func TestReleaseTagPicksTheNewestStableGoLineRelease(t *testing.T) {
 }
 
 // registryStubs puts a fake curl first on PATH: tokens for both registries, and the tag
-// lists given (nil: that registry's listing fails).
+// lists given (nil: that registry's listing fails). No registry has a manifest for any tag.
 func registryStubs(t *testing.T, hubTags, ghcrTags []string) []string {
 	t.Helper()
+	return registryStubsWithDigests(t, hubTags, ghcrTags, nil, nil)
+}
+
+// registryStubsWithDigests is registryStubs whose registries answer a manifest request
+// for the tags in the digest maps with that digest ("500": the request fails) and 404 for
+// any other tag.
+func registryStubsWithDigests(t *testing.T, hubTags, ghcrTags []string, hubDigests, ghcrDigests map[string]string) []string {
+	t.Helper()
 	dir := t.TempDir()
+	manifests := func(name string, digests map[string]string) {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for tag, d := range digests {
+			if err := os.WriteFile(filepath.Join(dir, name, tag), []byte(d), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	manifests("hub-manifests", hubDigests)
+	manifests("ghcr-manifests", ghcrDigests)
 	list := func(name string, tags []string) {
 		if tags == nil {
 			return
@@ -144,8 +164,17 @@ case "$url" in
 https://auth.test/*|https://ghcr.test/token*) echo '{"token":"t"}' ;;
 https://hub.test/v2/skobkin/magnetico-web/tags/list*) cat "` + dir + `/hub.json" 2>/dev/null || exit 22 ;;
 https://ghcr.test/v2/skobkin/magnetico-web/tags/list*) cat "` + dir + `/ghcr.json" 2>/dev/null || exit 22 ;;
+https://hub.test/v2/skobkin/magnetico-web/manifests/*) m="` + dir + `/hub-manifests/${url##*/}" ;;
+https://ghcr.test/v2/skobkin/magnetico-web/manifests/*) m="` + dir + `/ghcr-manifests/${url##*/}" ;;
 *) echo "unexpected URL $url" >&2; exit 22 ;;
 esac
+if [ -n "${m:-}" ]; then
+	case " $* " in *" -sSI "*) ;; *) echo "a manifest is read with a HEAD request" >&2; exit 2 ;; esac
+	if [ ! -f "$m" ]; then printf 'HTTP/2 404\r\n\r\n'
+	elif [ "$(cat "$m")" = 500 ]; then printf 'HTTP/2 500\r\n\r\n'
+	else printf 'HTTP/2 200\r\ncontent-type: application/vnd.oci.image.index.v1+json\r\nDocker-Content-Digest: %s\r\n\r\n' "$(cat "$m")"
+	fi
+fi
 `
 	if err := os.WriteFile(filepath.Join(dir, "curl"), []byte(stub), 0o755); err != nil {
 		t.Fatal(err)
@@ -180,6 +209,80 @@ func TestPrepareRebuildNumbersTheRebuildAndMovesTheReleaseTag(t *testing.T) {
 	}
 	if !strings.Contains(out, "published on docker.io ghcr.io") {
 		t.Errorf("output does not say where the release is published:\n%s", out)
+	}
+}
+
+// latest moves with a rebuild only when it references the rebuilt release in both
+// registries: rebuilding an older release must never move latest backwards.
+func TestPrepareRebuildMovesLatestOnlyWithTheReleaseItReferences(t *testing.T) {
+	requireTools(t, "git", "jq")
+	const (
+		stable = "sha256:aaaa" // 0.8.0 (and its earlier rebuild 0.8.0-r1)
+		newer  = "sha256:bbbb" // 0.8.1-rc1, published after it
+	)
+	tags := []string{"0.8.0", "0.8.0-r1", "0.8.1-rc1", "latest"}
+	for _, c := range []struct {
+		name        string
+		rebuildTag  string
+		hub, ghcr   map[string]string
+		wantTags    string
+		wantMessage string
+	}{
+		{"latest is the rebuilt release in both registries", "0.8.1-rc1",
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer, "latest": newer},
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer, "latest": newer},
+			"0.8.1-rc1-r1\n0.8.1-rc1\nlatest\n", "0.8.1-rc1 and latest (moved to the rebuild)"},
+		{"latest is an earlier rebuild of the release", "0.8.0",
+			map[string]string{"0.8.0": stable, "0.8.0-r1": stable, "latest": stable},
+			map[string]string{"0.8.0": stable, "0.8.0-r1": stable, "latest": stable},
+			"0.8.0-r2\n0.8.0\nlatest\n", "0.8.0 and latest (moved to the rebuild)"},
+		{"an older release (the default target, the newest stable)", "",
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer, "latest": newer},
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer, "latest": newer},
+			"0.8.0-r2\n0.8.0\n", "latest does not reference 0.8.0 and stays"},
+		{"no latest in either registry", "0.8.1-rc1",
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer},
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer},
+			"0.8.1-rc1-r1\n0.8.1-rc1\n", "latest does not reference 0.8.1-rc1 and stays"},
+		{"the registries disagree about latest", "0.8.0",
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer, "latest": stable},
+			map[string]string{"0.8.0": stable, "0.8.1-rc1": newer, "latest": newer},
+			"0.8.0-r2\n0.8.0\n", "latest is 0.8.0 on docker.io only, so it is left alone in both registries"},
+	} {
+		dir, _ := releaseRepo(t, "0.8.0", "0.8.1-rc1")
+		env := append(registryStubsWithDigests(t, tags, tags, c.hub, c.ghcr), "FORCE_REBUILD=true")
+		if c.rebuildTag != "" {
+			env = append(env, "REBUILD_TAG="+c.rebuildTag)
+		}
+		out, code := runScript(t, dir, env, "ci/prepare-rebuild.sh")
+		if code != 0 {
+			t.Errorf("%s: exit %d:\n%s", c.name, code, out)
+			continue
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, ".tags")); string(got) != c.wantTags {
+			t.Errorf("%s: .tags = %q, want %q", c.name, got, c.wantTags)
+		}
+		if !strings.Contains(out, c.wantMessage) {
+			t.Errorf("%s: output does not say %q:\n%s", c.name, c.wantMessage, out)
+		}
+	}
+}
+
+// A registry whose manifests cannot be read fails the rebuild: latest is never decided on a
+// guess.
+func TestPrepareRebuildRefusesWhenLatestCannotBeRead(t *testing.T) {
+	requireTools(t, "git", "jq")
+	dir, _ := releaseRepo(t, "0.8.0")
+	tags := []string{"0.8.0", "latest"}
+	env := append(registryStubsWithDigests(t, tags, tags,
+		map[string]string{"0.8.0": "sha256:aaaa", "latest": "sha256:aaaa"},
+		map[string]string{"0.8.0": "sha256:aaaa", "latest": "500"}), "FORCE_REBUILD=true")
+	out, code := runScript(t, dir, env, "ci/prepare-rebuild.sh")
+	if code == 0 || !strings.Contains(out, "cannot read the manifest of ghcr.io/skobkin/magnetico-web:latest") {
+		t.Errorf("exit %d, want a refusal naming the unreadable manifest:\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".tags")); err == nil {
+		t.Error(".tags was written although the rebuild was refused")
 	}
 }
 

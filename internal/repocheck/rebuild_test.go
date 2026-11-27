@@ -15,7 +15,8 @@ import (
 // The forced rebuild (rebuild.yaml) and the scheduled security check (security.yaml):
 // owner decisions after the first Woodpecker runs. The rebuild publishes, so it carries
 // the same guarantees as release-docker: the agreed repositories and platforms, no
-// registry cache, no latest, credentials in the publishing step only.
+// registry cache, latest only when ci/prepare-rebuild.sh writes it into the computed tags,
+// credentials in the publishing step only.
 
 func TestWorkflowFilesAreTheKnownSet(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(testkit.ModuleRoot(t), ".woodpecker"))
@@ -109,7 +110,7 @@ func TestRebuildPublishesLikeTheReleaseWithComputedTagsOnly(t *testing.T) {
 		t.Errorf("rebuild-docker build_args_from_env = %v, want VERSION and COMMIT", got)
 	}
 	if regexp.MustCompile(`\blatest\b`).MatchString(commentFree(w.raw)) {
-		t.Error("rebuild.yaml applies latest")
+		t.Error("rebuild.yaml names latest itself: only ci/prepare-rebuild.sh decides whether a rebuild moves it")
 	}
 }
 
