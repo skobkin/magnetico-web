@@ -7,6 +7,8 @@ import (
 	"net"
 	"syscall"
 	"time"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 // The MIT License (MIT)
@@ -15,6 +17,8 @@ import (
 // Dial new connection to the address. Does the BitTorrent protocol handshake.
 // Handles encryption. May try to connect again if encryption does not match with given setting.
 // Returns a net.Conn that is ready for sending/receiving BitTorrent peer protocol messages.
+// The default egress policy (netpolicy.Default()) applies; use DialContext to
+// pass another one.
 func Dial(
 	addr net.Addr,
 	deadline time.Time,
@@ -27,14 +31,18 @@ func Dial(
 
 // DialControl is the signature of net.Dialer.ControlContext. It runs with the
 // final resolved address before the connection is attempted; an error aborts
-// the dial.
+// the dial. A Policy's ControlContext method is one.
 type DialControl func(ctx context.Context, network, address string, c syscall.RawConn) error
 
 // DialContext is Dial that also aborts when ctx ends: the dial is
 // context-aware and the connection is closed if ctx is cancelled during the
 // handshake, so a blocked read returns promptly. After a successful return
-// the caller owns the connection and must watch ctx itself. control, when not
-// nil, is installed as the dialer's ControlContext (the egress policy).
+// the caller owns the connection and must watch ctx itself.
+//
+// control is installed as the dialer's ControlContext and is the egress
+// policy of the connection. A nil control means netpolicy.Default(), so no
+// caller can dial a non-globally-reachable peer by omission; a private DHT
+// passes its own policy (allowlist mode).
 func DialContext(
 	ctx context.Context,
 	control DialControl,
@@ -44,6 +52,9 @@ func DialContext(
 	ih [20]byte,
 	ourID [20]byte) (
 	conn net.Conn, cipher CryptoMethod, peerExtensions [8]byte, peerID [20]byte, err error) {
+	if control == nil {
+		control = netpolicy.Default().ControlContext
+	}
 	// First connection - Connecting to peer
 	dialer := net.Dialer{Deadline: deadline, ControlContext: control}
 	conn, err = dialer.DialContext(ctx, addr.Network(), addr.String())

@@ -1,9 +1,13 @@
 package btconn
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 // The MIT License (MIT)
@@ -16,6 +20,12 @@ var (
 	id2      = [20]byte{0x0D}
 	infoHash = [20]byte{0x0E}
 	sKeyHash = HashSKey(infoHash[:])
+
+	// loopbackControl is an explicit allowlist policy for these loopback
+	// tests: without it the default egress policy refuses 127.0.0.1.
+	loopbackControl = netpolicy.New(netpolicy.Options{
+		Allow: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")},
+	}).ControlContext
 )
 
 func TestUnencrypted(t *testing.T) {
@@ -29,7 +39,7 @@ func TestUnencrypted(t *testing.T) {
 	var gerr error
 	go func() {
 		defer close(done)
-		_, _, _, _, err2 := Dial(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}, time.Now().Add(10*time.Second), ext1, infoHash, id1)
+		_, _, _, _, err2 := DialContext(context.Background(), loopbackControl, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}, time.Now().Add(10*time.Second), ext1, infoHash, id1)
 		if err2 != nil {
 			gerr = err2
 		}
@@ -62,7 +72,7 @@ func TestEncrypted(t *testing.T) {
 	var gerr error
 	go func() {
 		defer close(done)
-		conn, cipher, ext, id, err2 := Dial(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}, time.Now().Add(10*time.Second), ext1, infoHash, id1)
+		conn, cipher, ext, id, err2 := DialContext(context.Background(), loopbackControl, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}, time.Now().Add(10*time.Second), ext1, infoHash, id1)
 		if err2 != nil {
 			gerr = err2
 			return

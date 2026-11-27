@@ -133,6 +133,11 @@ func TestHardFloorSurvivesOptOutAndAllowlist(t *testing.T) {
 			}
 		}
 	}
+	// Only the limited broadcast address is recognised; a subnet-directed
+	// broadcast of a public network is indistinguishable from unicast.
+	if !Default().Allowed(netip.MustParseAddr("8.8.8.255")) {
+		t.Error("8.8.8.255 refused; only 255.255.255.255 is treated as broadcast")
+	}
 	optOut := New(Options{AllowNonGlobal: true})
 	for _, s := range []string{"10.0.0.1", "127.0.0.1", "::1", "100.64.0.1"} {
 		if !optOut.Allowed(netip.MustParseAddr(s)) {

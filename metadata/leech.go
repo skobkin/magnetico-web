@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/bencode"
-	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/metadata/btconn"
 	"github.com/skobkin/magnetico-web/stats"
 )
@@ -69,7 +68,8 @@ type Leech struct {
 	conn     net.Conn
 	clientID [20]byte
 	// dialControl is the net.Dialer.ControlContext of the peer connection
-	// (the sink passes its egress policy); nil means netpolicy.Default().
+	// (the sink passes its egress policy); nil means btconn's default,
+	// netpolicy.Default().
 	dialControl btconn.DialControl
 
 	ut_metadata                    uint8
@@ -345,15 +345,9 @@ func (l *Leech) Do(deadline time.Time) {
 // DoContext runs the leech until the deadline or until ctx ends; on
 // cancellation the connection is closed, which unblocks every pending read.
 func (l *Leech) DoContext(ctx context.Context, deadline time.Time) {
-	// Without a guard from the sink the built-in policy still applies, as a
-	// nil policy does everywhere else.
-	control := l.dialControl
-	if control == nil {
-		control = netpolicy.Default().ControlContext
-	}
 	conn, _, peerExtensions, _, err := btconn.DialContext(
 		ctx,
-		control,
+		l.dialControl,
 		l.peerAddr,
 		deadline,
 		[8]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01},

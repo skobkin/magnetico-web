@@ -8,6 +8,12 @@
 // learned (so it never enters a routing table or peer list) and at the egress
 // chokepoints (the UDP send and the TCP dial), so no code path can bypass it.
 //
+// The built-in list covers the known special-purpose ranges of the IANA
+// registries (see builtin.go). It does not know a provider's internal or
+// otherwise sensitive networks, and it cannot prevent every abuse report
+// (BitTorrent traffic itself is reason enough for some providers). Such
+// ranges are added with Options.Deny (the crawler's deny-cidrs setting).
+//
 // The policy covers only DHT and BitTorrent traffic. The crawler's HTTP client
 // for the ingest service does not consult it: ingest is often reached over a
 // private network.
@@ -35,8 +41,9 @@ type Options struct {
 	// Deny lists ranges that are always refused; it wins over Allow.
 	Deny []netip.Prefix
 	// AllowNonGlobal disables the built-in list of non-globally-reachable
-	// ranges outside allowlist mode. Invalid, unspecified, multicast and
-	// broadcast addresses stay refused.
+	// ranges outside allowlist mode. Invalid, unspecified and multicast
+	// addresses and the IPv4 limited broadcast address 255.255.255.255 stay
+	// refused.
 	AllowNonGlobal bool
 }
 
@@ -142,6 +149,9 @@ func (p *Policy) Summary() string {
 }
 
 func (p *Policy) allowedOne(a netip.Addr) bool {
+	// Always refused, whatever the options. Only the limited broadcast
+	// address is recognised: a subnet-directed broadcast (the last address
+	// of some remote network) cannot be told apart from a unicast address.
 	if !a.IsValid() || a.IsUnspecified() || a.IsMulticast() || a == limitedBroadcast {
 		return false
 	}

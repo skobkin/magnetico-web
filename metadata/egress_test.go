@@ -57,6 +57,26 @@ func TestDialGuardRefusesBeforeConnecting(t *testing.T) {
 	}
 }
 
+// A leech built without a dial guard (any caller but the sink) still applies
+// the default egress policy: a loopback peer is refused and never connected.
+func TestLeechDefaultDialPathRefuses(t *testing.T) {
+	t.Parallel()
+	addr, accepted := listenLoopback(t)
+	var gotErr error
+	NewLeech([20]byte{1}, addr, randomID(), LeechEventHandlers{
+		OnSuccess: func(Metadata) { t.Error("unexpected success") },
+		OnError:   func(_ [20]byte, err error) { gotErr = err },
+	}).DoContext(context.Background(), time.Now().Add(2*time.Second))
+	if gotErr == nil || !strings.Contains(gotErr.Error(), netpolicy.ErrRefused.Error()) {
+		t.Fatalf("OnError = %v, want a refusal", gotErr)
+	}
+	select {
+	case <-accepted:
+		t.Fatal("the refused peer saw a connection")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 // A leech with a dial guard reports the refusal through OnError (as text: the
 // leech flattens the dial error).
 func TestLeechUsesDialGuard(t *testing.T) {

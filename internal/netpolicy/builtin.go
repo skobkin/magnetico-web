@@ -6,7 +6,8 @@ import "net/netip"
 // Registries (both last updated 2025-10-09): every block whose "Globally
 // Reachable" column is False is refused as a whole, so the few globally
 // reachable anycast exceptions inside 192.0.0.0/24 and 2001::/23 are refused
-// too; none of them is a DHT node or a BitTorrent peer.
+// too; none of them is a DHT node or a BitTorrent peer. Provider-specific
+// networks are not in any registry; they belong in the deny list.
 //
 // https://www.iana.org/assignments/iana-ipv4-special-registry/
 // https://www.iana.org/assignments/iana-ipv6-special-registry/
