@@ -22,3 +22,8 @@
 2026-11-26T17:51:50Z review corrections: second full Traefik probe pass with Set-Cookie redaction (until 17:52:00; the kept evidence), then a negative test with an unreachable backend (17:52:09-17:52:25)
 2026-11-26T17:55:15Z review corrections: go test -race (feed, opflags, apidocs, account) and the race-built real-binary RSS switch test (until 17:55:44); lint, vet, repocheck; test PostgreSQL removed at 17:56:09
 2026-11-26T19:53:02Z spec correction: disposable tmpfs test PostgreSQL; feed credential tests and repocheck (until 19:53:15, PostgreSQL stopped and removed)
+2026-11-27T00:09:38Z soak: load ended, queue drained; idle phase until 01:49
+2026-11-27T00:30:00Z crawler race tests for PR #59 (approximate start; until about 00:47, CPU only, nothing of the soak touched)
+2026-11-27T01:01:00Z soak: docker logs of rc0soak-web-5 and rc0soak-ingest-4 read (read-only, for the gctrace trend)
+2026-11-27T01:49:00Z soak: finished, PASS (harness stopped and removed its containers); collect, analysis
+2026-11-27T01:55:00Z soak database rc0-soak-pg: four read-only EXPLAIN/count statements (statement_timeout 30 s)
