@@ -199,6 +199,13 @@ volumes:
 
 Keep `crawler.env` out of version control (it contains only `MAGNETICO_CRAWL_INGEST_TOKEN=…`). Do **not** add a `MAGNETICO_CRAWL_DATABASE` line or any other `MAGNETICO_CRAWL_*` name that is not a crawler setting: unknown names stop the crawler at startup with a list of the known ones (the table above lists the common ones; `magnetico crawl --help` has all flags).
 
+**Configuration file (optional).** Outside containers the same settings can come from a YAML file passed with the
+global option `--config-file-path`, which must precede the subcommand (`magnetico --config-file-path config.yaml
+crawl …`). Crawl keys: `ingestURL`, `queueDir`, `queueMaxBytes`, `leechMaxActive`, `pyroscopeURL`, `indexerAddrs`,
+`indexerMaxNeighbors`, `leechDeadline`, `leechMaxN`, `maxRPS`, `bootstrappingNodes`, `filterNodesCIDRs`. The token is
+never read from the file or a flag, and the former `databaseURL` key was removed. The other crawler flags are unchanged
+from upstream.
+
 ## 7. Start, verify and operate
 
 **Order:** (1) PostgreSQL and the schemas (§2), (2) ingest and Traefik, (3) check the path from the crawler machine, (4) start the crawler.
