@@ -3,12 +3,15 @@ package mainline
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"log"
 	mrand "math/rand/v2"
 	"net"
 	"reflect"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/stats"
 )
 
@@ -25,6 +28,12 @@ type IndexingService struct {
 	getPeersRequests map[[2]byte][20]byte // GetPeersQuery.`t` -> infohash
 
 	bootstrapNodes []string
+
+	// policy is shared by the routing table and the transport.
+	policy *netpolicy.Policy
+	// refusedBootstrap remembers bootstrap addresses already reported as
+	// refused, so the log is not flooded while bootstrap retries every second.
+	refusedBootstrap sync.Map
 }
 
 type IndexingServiceEventHandlers struct {
@@ -44,7 +53,10 @@ func (ir IndexingResult) PeerAddrs() []net.TCPAddr {
 	return ir.peerAddrs
 }
 
-func NewIndexingService(laddr string, maxNeighbors uint, eventHandlers IndexingServiceEventHandlers, bootstrapNodes []string, filterNodes []net.IPNet) *IndexingService {
+func NewIndexingService(laddr string, maxNeighbors uint, eventHandlers IndexingServiceEventHandlers, bootstrapNodes []string, policy *netpolicy.Policy) *IndexingService {
+	if policy == nil {
+		policy = netpolicy.Default()
+	}
 	service := new(IndexingService)
 	service.protocol = NewProtocol(
 		laddr,
@@ -60,9 +72,11 @@ func NewIndexingService(laddr string, maxNeighbors uint, eventHandlers IndexingS
 			OnSampleInfohashesResponse:   service.onSampleInfohashesResponse,
 		},
 		maxNeighbors,
+		policy,
 	)
 	service.nodeID = randomNodeID()
-	service.nodes = newRoutingTable(maxNeighbors, filterNodes)
+	service.policy = policy
+	service.nodes = newRoutingTable(maxNeighbors, policy)
 	service.eventHandlers = eventHandlers
 
 	service.getPeersRequests = make(map[[2]byte][20]byte)
@@ -116,6 +130,12 @@ func (is *IndexingService) bootstrap() {
 		}
 
 		for _, ip := range bootstrappingIPs {
+			if !is.policy.AllowedIP(ip) {
+				if _, seen := is.refusedBootstrap.LoadOrStore(ip.String(), struct{}{}); !seen {
+					log.Printf("bootstrap node %s resolves to %s, which the egress policy refuses; skipping that address", node, ip)
+				}
+				continue
+			}
 			go is.protocol.SendMessage(
 				NewFindNodeQuery(is.nodeID, randomNodeID()),
 				&net.UDPAddr{IP: ip, Port: port},

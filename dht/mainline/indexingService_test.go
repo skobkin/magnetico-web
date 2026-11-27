@@ -69,7 +69,7 @@ func TestBasicIndexingService(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			is := NewIndexingService(tt.laddr, tt.maxNeighbors, tt.eventHandlers, []string{"dht.tgragnato.it"}, []net.IPNet{})
+			is := NewIndexingService(tt.laddr, tt.maxNeighbors, tt.eventHandlers, []string{"dht.tgragnato.it"}, nil)
 			if is == nil {
 				t.Error("NewIndexingService() = nil, wanted != nil")
 			}
@@ -140,7 +140,7 @@ func TestOnFindNodeResponse(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 			}
 			is.onFindNodeResponse(tt.response, tt.addr)
@@ -244,7 +244,7 @@ func TestOnAnnouncePeerQuery(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 				protocol: &Protocol{
 					transport: transport,
@@ -303,7 +303,7 @@ func TestOnPingQuery(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 				protocol: &Protocol{
 					transport: transport,
@@ -359,7 +359,7 @@ func TestOnPingORAnnouncePeerResponse(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 				protocol: &Protocol{
 					transport: transport,
@@ -415,7 +415,7 @@ func TestOnFindNodeQuery(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 				protocol: &Protocol{
 					transport: transport,
@@ -523,7 +523,7 @@ func TestOnGetPeersResponse(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 				protocol: &Protocol{
 					transport: transport,
@@ -651,7 +651,7 @@ func TestOnSampleInfohashesResponse(t *testing.T) {
 			is := &IndexingService{
 				nodes: newRoutingTable(
 					10,
-					[]net.IPNet{*cidr},
+					allowCIDRs(*cidr),
 				),
 				protocol: &Protocol{
 					transport: transport,
@@ -687,9 +687,9 @@ func TestOnGetPeersQuery(t *testing.T) {
 	is := &IndexingService{
 		nodes: newRoutingTable(
 			10,
-			[]net.IPNet{*cidr},
+			allowCIDRs(*cidr),
 		),
-		protocol: NewProtocol("0.0.0.0:0", ProtocolEventHandlers{}, 1000),
+		protocol: NewProtocol("0.0.0.0:0", ProtocolEventHandlers{}, 1000, nil),
 	}
 	addr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 6881}
 
@@ -721,7 +721,7 @@ func TestOnSampleInfohashesResponseSliceBoundaries(t *testing.T) {
 		maxNeighbors: 10,
 	}
 	is := &IndexingService{
-		nodes:            newRoutingTable(10, []net.IPNet{*cidr}),
+		nodes:            newRoutingTable(10, allowCIDRs(*cidr)),
 		protocol:         &Protocol{transport: transport},
 		nodeID:           randomNodeID(),
 		getPeersRequests: make(map[[2]byte][20]byte),

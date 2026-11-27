@@ -9,7 +9,7 @@ import (
 func TestSink_NewSink(t *testing.T) {
 	t.Parallel()
 
-	sink := NewSink(time.Second, 10, []net.IPNet{})
+	sink := NewSink(time.Second, 10, nil)
 	if sink == nil ||
 		len(sink.PeerID) != 20 ||
 		sink.deadline != time.Second ||
@@ -37,7 +37,7 @@ func (tr *TestResult) PeerAddrs() []net.TCPAddr {
 func TestSink_Sink(t *testing.T) {
 	t.Parallel()
 
-	sink := NewSink(time.Minute, 2, []net.IPNet{})
+	sink := NewSink(time.Minute, 2, nil)
 	testResult := &TestResult{
 		infoHash:  [20]byte{255},
 		peerAddrs: []net.TCPAddr{{IP: net.ParseIP("1.0.0.1"), Port: 443}},
@@ -51,7 +51,7 @@ func TestSink_Sink(t *testing.T) {
 func TestSink_Terminate(t *testing.T) {
 	t.Parallel()
 
-	sink := NewSink(time.Minute, 1, []net.IPNet{})
+	sink := NewSink(time.Minute, 1, nil)
 	sink.Terminate()
 
 	if !sink.closed {
@@ -66,7 +66,7 @@ func TestSink_Terminate(t *testing.T) {
 func TestSink_DrainAfterTerminateIsClosedNotPanic(t *testing.T) {
 	t.Parallel()
 
-	sink := NewSink(time.Minute, 1, []net.IPNet{})
+	sink := NewSink(time.Minute, 1, nil)
 	sink.Terminate()
 	if _, open := <-sink.Drain(); open {
 		t.Error("Drain channel must be closed")
@@ -79,7 +79,7 @@ func TestSink_DrainAfterTerminateIsClosedNotPanic(t *testing.T) {
 func TestSink_DeliverDropsWhenTerminatingWithFullDrain(t *testing.T) {
 	t.Parallel()
 
-	sink := NewSink(time.Minute, 1, []net.IPNet{})
+	sink := NewSink(time.Minute, 1, nil)
 	for i := 0; i < drainCapacity; i++ {
 		sink.drain <- Metadata{}
 	}

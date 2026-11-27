@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha1"
+	"errors"
 	mrand "math/rand/v2"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/stats"
 )
 
@@ -34,10 +36,11 @@ type ProtocolEventHandlers struct {
 	OnSampleInfohashesResponse func(*Message, *net.UDPAddr)
 }
 
-func NewProtocol(laddr string, eventHandlers ProtocolEventHandlers, maxNeighbors uint) (p *Protocol) {
+// NewProtocol builds a Protocol; a nil policy means netpolicy.Default().
+func NewProtocol(laddr string, eventHandlers ProtocolEventHandlers, maxNeighbors uint, policy *netpolicy.Policy) (p *Protocol) {
 	p = new(Protocol)
 	p.eventHandlers = eventHandlers
-	p.transport = NewTransport(laddr, p.onMessage, maxNeighbors)
+	p.transport = NewTransport(laddr, p.onMessage, maxNeighbors, policy)
 	return
 }
 
@@ -166,7 +169,9 @@ func (p *Protocol) SendMessage(msg *Message, addr *net.UDPAddr) {
 		return
 	}
 
-	if err := p.transport.WriteMessages(msg, addr); err != nil {
+	// A destination refused by the egress policy is counted by the policy,
+	// not as a socket write error.
+	if err := p.transport.WriteMessages(msg, addr); err != nil && !errors.Is(err, netpolicy.ErrRefused) {
 		go stats.GetInstance().IncUDPError(true)
 	}
 }

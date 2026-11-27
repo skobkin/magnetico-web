@@ -16,6 +16,7 @@ import (
 	"github.com/skobkin/magnetico-web/dht/mainline"
 	"github.com/skobkin/magnetico-web/internal/crawler"
 	"github.com/skobkin/magnetico-web/internal/crawlqueue"
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/opflags"
 	"github.com/skobkin/magnetico-web/persistence"
@@ -126,18 +127,32 @@ func crawl(opFlags *opflags.CrawlOptions) int {
 		return 1
 	}
 
+	// One egress policy for the DHT and the metadata sink: it refuses
+	// destinations that are not globally reachable (and the operator's deny
+	// list) wherever an address is learned or contacted. The ingest client
+	// above is not subject to it.
+	policy := netpolicy.New(netpolicy.Options{
+		Allow:          netpolicy.PrefixesFromIPNets(opFlags.FilterNodesIpNets),
+		Deny:           opFlags.DenyPrefixes,
+		AllowNonGlobal: opFlags.AllowNonGlobalAddrs,
+	})
+	if policy.AllowNonGlobal() && !policy.AllowlistMode() {
+		log.Print("WARNING: allow-non-global-addrs is set: the crawler also contacts private, reserved and other " +
+			"non-globally-reachable addresses. On a public host this traffic is commonly reported as port scanning.")
+	}
+
 	mainline.DefaultThrottleRate = int(opFlags.MaxRPS)
 	trawlingManager := dht.NewManager(
 		opFlags.IndexerAddrs,
 		opFlags.IndexerMaxNeighbors,
 		opFlags.BootstrappingNodes,
-		opFlags.FilterNodesIpNets,
+		policy,
 	)
 	sink := metadata.NewSinkWithOptions(metadata.SinkOptions{
 		Deadline:        time.Duration(opFlags.LeechDeadline) * time.Second,
 		MaxPeersPerHash: int(opFlags.LeechMaxN),
 		MaxActive:       int(opFlags.LeechMaxActive),
-		FilterNodes:     opFlags.FilterNodesIpNets,
+		Policy:          policy,
 	})
 	pipeline := crawler.New(crawler.Config{
 		Queue: queue, Client: client, Sink: sink, Limits: codec.DefaultLimits(),
@@ -163,7 +178,7 @@ func crawl(opFlags *opflags.CrawlOptions) int {
 			stopped = true
 
 		case <-summary.C:
-			log.Print(pipeline.Summary())
+			log.Print(pipeline.Summary() + " | " + policy.Summary())
 
 		case result, ok := <-trawlingManager.Output():
 			if !ok {
@@ -179,6 +194,6 @@ func crawl(opFlags *opflags.CrawlOptions) int {
 		log.Printf("shutdown incomplete: %v", err)
 		exitCode = 3
 	}
-	log.Print(pipeline.Summary())
+	log.Print(pipeline.Summary() + " | " + policy.Summary())
 	return exitCode
 }

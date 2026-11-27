@@ -143,6 +143,12 @@ networks:
 - For several crawlers on one IP, give each its own port; each crawler needs its **own queue directory** (it is locked: one crawler per queue).
 - The bootstrap hosts and the DHT depend on outbound UDP; some VPS providers filter it, and many residential connections cap UDP flows. If `leech started` stays at 0 while the process is healthy, suspect the network first.
 
+**Outbound address filter.** DHT nodes also hand out private and reserved addresses, and providers report traffic to them as port scanning. The crawler therefore never sends a DHT datagram or opens a BitTorrent connection to an address that is not globally reachable: private (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`), carrier-grade NAT (`100.64/10`), loopback, link-local, documentation, benchmarking, reserved and multicast ranges, following the IANA special-purpose address registries. The check runs when an address is learned and again on every UDP send and TCP connection, so it also covers replies to incoming queries and the resolved addresses of the bootstrap hosts. An IPv6 address that carries an IPv4 address (NAT64 `64:ff9b::/96`, 6to4 `2002::/16`) must pass for both. The connection to ingest is not filtered.
+
+- `MAGNETICO_CRAWL_DENY_CIDRS` (comma separated) adds ranges that are always refused, for example your provider's internal networks; it applies in filter mode (`MAGNETICO_CRAWL_FILTER_NODES_CIDRS`, a private DHT) too, where the allowlist replaces the built-in list.
+- `MAGNETICO_CRAWL_ALLOW_NON_GLOBAL_ADDRS=true` turns the built-in list off, for a lab network only; the crawler logs a warning at start. Unspecified, multicast and broadcast addresses stay refused.
+- The summary line (§7) ends with `egress refused learned=… udp=… tcp=…`. `learned` grows steadily on the live DHT: that is the filter at work, not a fault.
+
 The main server needs inbound TCP 443 (Traefik) only; PostgreSQL stays on the private network.
 
 ## 6. The crawler container and its persistent queue
@@ -165,6 +171,8 @@ Settings (environment, which is the recommended way in containers; every setting
 | `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` | limit of queued + quarantined payload bytes; at the limit new metadata is dropped and counted | `1073741824` |
 | `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE` | concurrent metadata downloads | `32` |
 | `MAGNETICO_CRAWL_INDEXER_ADDR` | UDP bind address(es), see §5 | `0.0.0.0:0` |
+| `MAGNETICO_CRAWL_DENY_CIDRS` | extra ranges never contacted, see §5 ("Outbound address filter") | empty |
+| `MAGNETICO_CRAWL_ALLOW_NON_GLOBAL_ADDRS` | also contact non-globally-reachable addresses (lab use only), see §5 | `false` |
 
 **The queue volume.** Mount a persistent volume at the queue directory (`/data` below). It must be a **local filesystem that honours `fsync`** (ext4 or xfs; not NFS or SMB). The directory is created `0700`, holds `queue.db` (+ WAL) and a `LOCK` file, and must be writable by the container's user. Provision disk beyond the byte limit: the limit counts payload bytes only, not WAL or index overhead. The crawler's memory use is small (about 30 MiB RSS measured); it needs no `GOMEMLIMIT`.
 
@@ -201,7 +209,8 @@ Keep `crawler.env` out of version control (it contains only `MAGNETICO_CRAWL_ING
 **Configuration file (optional).** Outside containers the same settings can come from a YAML file passed with the
 global option `--config-file-path`, which must precede the subcommand (`magnetico --config-file-path config.yaml
 crawl …`). Crawl keys: `ingestURL`, `queueDir`, `queueMaxBytes`, `leechMaxActive`, `pyroscopeURL`, `indexerAddrs`,
-`indexerMaxNeighbors`, `leechDeadline`, `leechMaxN`, `maxRPS`, `bootstrappingNodes`, `filterNodesCIDRs`. The token is
+`indexerMaxNeighbors`, `leechDeadline`, `leechMaxN`, `maxRPS`, `bootstrappingNodes`, `filterNodesCIDRs`, `denyCIDRs`,
+`allowNonGlobalAddrs`. The token is
 never read from the file or a flag, and the former `databaseURL` key was removed. The other crawler flags are unchanged
 from upstream.
 
@@ -280,6 +289,7 @@ Log lines are quoted as the crawler prints them; the crawler's log lines never i
 | `enqueue: the local queue is full; new metadata is dropped until the sender frees space` | Delivery has been blocked long enough to fill `QUEUE_MAX_BYTES`. Fix the delivery problem; raise the limit only with matching disk headroom. Dropped records are rediscovered later. |
 | `the local queue failed (…); committed records stay on disk. Shutting down.` (exit 1) | A disk error (full disk, I/O error, a filesystem that does not honour `fsync`). Fix the storage, run `check-queue`, restart. |
 | `crawl summary:` shows `leech started=0` for hours, process healthy | No DHT traffic reaches the crawler or it cannot fetch metadata: inbound UDP port not published or forwarded (§5), outbound UDP/TCP filtered by the provider, bootstrap host not resolving. |
+| `bootstrap node … resolves to …, which the egress policy refuses; skipping that address` | A bootstrap host resolves to a private or reserved address (split-horizon DNS, or your own node on a private network), or to a range in `MAGNETICO_CRAWL_DENY_CIDRS`. Use public bootstrap hosts; for a private DHT use filter mode (`MAGNETICO_CRAWL_FILTER_NODES_CIDRS`) with your own bootstrap nodes. Logged once per address. |
 | `precheck: the ingest existence lookup failed; continuing without it (fail-open…)` | The existence endpoint is unreachable or erroring; the crawler keeps working (more duplicate downloads) and retries. Same causes as `status 0` above. |
 | Ingest refuses to start (`import … incomplete`, `fsync`, schema missing) | Finish and verify the torrent import first (`docs/migration_0.8.0.md`), use PostgreSQL with `fsync=on`, run `magnetico migrate ingest-schema-init`. |
 | Torrents never appear although the queue is delivered | `SELECT count(*) FROM magnetico_ingest.queue` high: the single consumer is blocked or erroring (read ingest's log); `quarantine` on the ingest side non-empty: see §7 ("Quarantine"). |

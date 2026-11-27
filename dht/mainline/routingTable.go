@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/stats"
 )
 
@@ -12,32 +13,32 @@ type routingTable struct {
 	sync.RWMutex
 	nodes        map[string]uint
 	maxNeighbors uint
-	filterNodes  []net.IPNet
+	policy       *netpolicy.Policy
 	info_hashes  [10][20]byte
 }
 
-func newRoutingTable(maxNeighbors uint, filterNodes []net.IPNet) *routingTable {
+// newRoutingTable builds a routing table; a nil policy means
+// netpolicy.Default().
+func newRoutingTable(maxNeighbors uint, policy *netpolicy.Policy) *routingTable {
+	if policy == nil {
+		policy = netpolicy.Default()
+	}
 	return &routingTable{
 		nodes:        map[string]uint{},
 		maxNeighbors: maxNeighbors,
-		filterNodes:  filterNodes,
+		policy:       policy,
 		info_hashes:  [10][20]byte{},
 	}
 }
 
 func (rt *routingTable) isAllowed(node net.UDPAddr) bool {
-	if len(rt.filterNodes) > 0 {
-		for _, filterNode := range rt.filterNodes {
-			if filterNode.Contains(node.IP) {
-				return true
-			}
-		}
-
+	if !rt.policy.AdmitLearned(node.IP) {
 		return false
 	}
 
-	if !node.IP.IsGlobalUnicast() || node.IP.IsPrivate() {
-		return false
+	// In allowlist mode (a private DHT) any port is accepted, as before.
+	if rt.policy.AllowlistMode() {
+		return true
 	}
 
 	if node.Port != 80 && node.Port != 443 &&

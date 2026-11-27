@@ -3,7 +3,14 @@ package mainline
 import (
 	"net"
 	"testing"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
+
+// allowCIDRs is the allowlist-mode policy (filterNodesCIDRs) for nets.
+func allowCIDRs(nets ...net.IPNet) *netpolicy.Policy {
+	return netpolicy.New(netpolicy.Options{Allow: netpolicy.PrefixesFromIPNets(nets)})
+}
 
 func Test_routingTable_isEmpty(t *testing.T) {
 	t.Parallel()
@@ -202,7 +209,7 @@ func Test_routingTable_isAllowed(t *testing.T) {
 
 	t.Run("allowed with filter", func(t *testing.T) {
 		_, ipNet, _ := net.ParseCIDR("8.8.8.0/24")
-		rt := newRoutingTable(1, []net.IPNet{*ipNet})
+		rt := newRoutingTable(1, allowCIDRs(*ipNet))
 		node := net.UDPAddr{IP: net.IPv4(8, 8, 8, 8), Port: 1234}
 		if !rt.isAllowed(node) {
 			t.Error("expected node to be allowed")
@@ -211,7 +218,7 @@ func Test_routingTable_isAllowed(t *testing.T) {
 
 	t.Run("not allowed with filter", func(t *testing.T) {
 		_, ipNet, _ := net.ParseCIDR("8.8.8.0/24")
-		rt := newRoutingTable(1, []net.IPNet{*ipNet})
+		rt := newRoutingTable(1, allowCIDRs(*ipNet))
 		node := net.UDPAddr{IP: net.IPv4(9, 9, 9, 9), Port: 1234}
 		if rt.isAllowed(node) {
 			t.Error("expected node to be not allowed")

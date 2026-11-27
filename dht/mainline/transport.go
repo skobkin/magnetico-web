@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/bencode"
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/stats"
 )
 
@@ -33,10 +34,19 @@ type Transport struct {
 	throttleTicketsChannel chan struct{} //channel giving tickets (allowance) to make send a message
 	maxNeighbors           uint
 	queuedCommunications   uint64
+
+	// policy is checked for every outgoing datagram, whatever produced it
+	// (queries, replies to incoming queries, bootstrap).
+	policy *netpolicy.Policy
 }
 
-func NewTransport(laddr string, onMessage func(*Message, *net.UDPAddr), maxNeighbors uint) *Transport {
+// NewTransport builds a Transport; a nil policy means netpolicy.Default().
+func NewTransport(laddr string, onMessage func(*Message, *net.UDPAddr), maxNeighbors uint, policy *netpolicy.Policy) *Transport {
+	if policy == nil {
+		policy = netpolicy.Default()
+	}
 	t := new(Transport)
+	t.policy = policy
 	/*   The field size sets a theoretical limit of 65,535 bytes (8 byte header + 65,527 bytes of
 	 * data) for a UDP datagram. However the actual limit for the data length, which is imposed by
 	 * the underlying IPv4 protocol, is 65,507 bytes (65,535 − 8 byte UDP header − 20 byte IP
@@ -175,6 +185,12 @@ func (t *Transport) Throttle() {
 func (t *Transport) WriteMessages(msg *Message, addr *net.UDPAddr) error {
 	if msg == nil || addr == nil {
 		return nil
+	}
+
+	// Refuse before taking a throttle ticket: a refused destination costs
+	// nothing and never reaches the socket.
+	if err := t.policy.CheckUDP(addr.IP); err != nil {
+		return err
 	}
 
 	data, err := bencode.Marshal(msg)

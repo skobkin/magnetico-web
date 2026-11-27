@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/skobkin/magnetico-web/dht/mainline"
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 type Service interface {
@@ -23,14 +24,19 @@ type Manager struct {
 	indexingServices []Service
 }
 
-func NewManager(addrs []string, maxNeighbors uint, bootstrappingNodes []string, filterNodes []net.IPNet) *Manager {
+// NewManager starts one indexing service per address. They share policy, the
+// egress policy (nil means netpolicy.Default()).
+func NewManager(addrs []string, maxNeighbors uint, bootstrappingNodes []string, policy *netpolicy.Policy) *Manager {
+	if policy == nil {
+		policy = netpolicy.Default()
+	}
 	manager := new(Manager)
 	manager.output = make(chan Result, 20)
 
 	for _, addr := range addrs {
 		service := mainline.NewIndexingService(addr, maxNeighbors, mainline.IndexingServiceEventHandlers{
 			OnResult: manager.onIndexingResult,
-		}, bootstrappingNodes, filterNodes)
+		}, bootstrappingNodes, policy)
 		manager.indexingServices = append(manager.indexingServices, service)
 		service.Start()
 	}

@@ -4,6 +4,8 @@ import (
 	"net"
 	"reflect"
 	"testing"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 func TestInfoHashes_Push(t *testing.T) {
@@ -91,11 +93,7 @@ func Test_infoHashes_isAllowedFilter(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	ih := &infoHashes{
-		filterPeers: []net.IPNet{
-			*ipnet,
-		},
-	}
+	ih := newInfoHashes(0, netpolicy.New(netpolicy.Options{Allow: netpolicy.PrefixesFromIPNets([]net.IPNet{*ipnet})}))
 
 	tests := []struct {
 		peer net.TCPAddr

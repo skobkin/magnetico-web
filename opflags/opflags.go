@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"reflect"
 	"strings"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 // OpFlags is the root of the command line structure of the single `magnetico`
@@ -205,6 +208,14 @@ type CrawlOptions struct {
 	// filterNodesIpNets key that would then be ignored.
 	FilterNodesIpNets []net.IPNet `yaml:"-"`
 
+	// DenyCIDRs lists extra destinations the crawler never contacts (DHT or
+	// BitTorrent); AllowNonGlobalAddrs disables the built-in list of
+	// non-globally-reachable ranges (internal/netpolicy). DenyPrefixes is
+	// derived by check() from DenyCIDRs.
+	DenyCIDRs           []string       `long:"deny-cidrs" description:"Extra CIDRs the crawler never sends DHT or BitTorrent traffic to (always refused, also in filter mode)." default:"" yaml:"denyCIDRs"`
+	AllowNonGlobalAddrs bool           `long:"allow-non-global-addrs" description:"Also contact private, reserved and other non-globally-reachable addresses (lab use only: on a public host this traffic is reported as port scanning)." yaml:"allowNonGlobalAddrs"`
+	DenyPrefixes        []netip.Prefix `yaml:"-"`
+
 	// CheckQueue is the diagnostic `crawl check-queue`; Subcommand records
 	// which subcommand (if any) was selected.
 	CheckQueue CheckQueueOptions `command:"check-queue" description:"Run SQLite integrity diagnostics on the local queue directory and print its counts (read-only; run it while the crawler is stopped)." yaml:"-"`
@@ -272,6 +283,11 @@ func (o *CrawlOptions) checkDHT() error {
 			return fmt.Errorf("error while parsing CIDR %s: %s", cidr, err.Error())
 		}
 	}
+	deny, err := netpolicy.ParsePrefixes(o.DenyCIDRs)
+	if err != nil {
+		return fmt.Errorf("deny-cidrs: %w", err)
+	}
+	o.DenyPrefixes = deny
 	if len(o.FilterNodesIpNets) != 0 && reflect.DeepEqual(o.BootstrappingNodes, []string{"dht.tgragnato.it:80", "dht.tgragnato.it:443", "dht.tgragnato.it:1337", "dht.tgragnato.it:6969", "dht.tgragnato.it:6881", "dht.tgragnato.it:25401"}) {
 		return fmt.Errorf("you should specify your own internal bootstrapping nodes in filter mode")
 	}

@@ -105,7 +105,7 @@ func TestSinkSameHashChurnLeavesNoOrphans(t *testing.T) {
 	addr := l.Addr().(*net.TCPAddr)
 	_ = l.Close()
 
-	sink := NewSinkWithOptions(SinkOptions{Deadline: time.Second, MaxPeersPerHash: 3, MaxActive: 4, FilterNodes: loopbackNets})
+	sink := NewSinkWithOptions(SinkOptions{Deadline: time.Second, MaxPeersPerHash: 3, MaxActive: 4, Policy: loopbackPolicy})
 	var wg sync.WaitGroup
 	for g := 0; g < 4; g++ {
 		wg.Add(1)

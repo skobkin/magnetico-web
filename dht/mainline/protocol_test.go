@@ -320,7 +320,7 @@ func TestNewProtocol(t *testing.T) {
 		OnPingORAnnouncePeerResponse: service.onPingORAnnouncePeerResponse,
 		OnSampleInfohashesQuery:      service.onSampleInfohashesQuery,
 		OnSampleInfohashesResponse:   service.onSampleInfohashesResponse,
-	}, 1000)
+	}, 1000, nil)
 	protocol.Start()
 	protocol.Terminate()
 }
@@ -344,7 +344,7 @@ func TestProtocol_Start(t *testing.T) {
 		OnPingORAnnouncePeerResponse: service.onPingORAnnouncePeerResponse,
 		OnSampleInfohashesQuery:      service.onSampleInfohashesQuery,
 		OnSampleInfohashesResponse:   service.onSampleInfohashesResponse,
-	}, 1000)
+	}, 1000, nil)
 	protocol.Start()
 	protocol.Start()
 }
@@ -368,7 +368,7 @@ func TestProtocol_Terminate(t *testing.T) {
 		OnPingORAnnouncePeerResponse: service.onPingORAnnouncePeerResponse,
 		OnSampleInfohashesQuery:      service.onSampleInfohashesQuery,
 		OnSampleInfohashesResponse:   service.onSampleInfohashesResponse,
-	}, 1000)
+	}, 1000, nil)
 	protocol.Terminate()
 	protocol.Terminate()
 }
@@ -411,7 +411,7 @@ func TestOnMessage_PingQuery(t *testing.T) {
 		OnPingQuery: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewPingQuery([]byte("abcdefghij0123456789")),
@@ -431,7 +431,7 @@ func TestOnMessage_FindNodeQuery(t *testing.T) {
 		OnFindNodeQuery: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewFindNodeQuery([]byte("abcdefghij0123456789"), []byte("mnopqrstuvwxyz123456")),
@@ -451,7 +451,7 @@ func TestOnMessage_GetPeersQuery(t *testing.T) {
 		OnGetPeersQuery: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewGetPeersQuery([]byte("abcdefghij0123456789"), []byte("mnopqrstuvwxyz123456")),
@@ -471,7 +471,7 @@ func TestOnMessage_AnnouncePeerQuery(t *testing.T) {
 		OnAnnouncePeerQuery: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewAnnouncePeerQuery(
@@ -497,7 +497,7 @@ func TestOnMessage_SampleInfohashesQuery(t *testing.T) {
 		OnSampleInfohashesQuery: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewSampleInfohashesQuery(
@@ -521,7 +521,7 @@ func TestOnMessage_GetPeersResponse(t *testing.T) {
 		OnGetPeersResponse: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewGetPeersResponseWithValues(
@@ -548,7 +548,7 @@ func TestOnMessage_FindNodeResponse(t *testing.T) {
 		OnFindNodeResponse: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewFindNodeResponse(
@@ -577,7 +577,7 @@ func TestOnMessage_PingORAnnouncePeerResponse(t *testing.T) {
 		OnPingORAnnouncePeerResponse: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		NewPingResponse([]byte("aa"), []byte("abcdefghij0123456789")),
@@ -597,7 +597,7 @@ func TestOnMessage_SampleInfohashesResponse(t *testing.T) {
 		OnSampleInfohashesResponse: func(m *Message, a *net.UDPAddr) {
 			called = true
 		},
-	}, 1000)
+	}, 1000, nil)
 
 	protocol.onMessage(
 		&Message{

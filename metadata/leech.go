@@ -67,6 +67,9 @@ type Leech struct {
 
 	conn     net.Conn
 	clientID [20]byte
+	// dialControl, when set, is the net.Dialer.ControlContext of the peer
+	// connection (the sink passes its egress policy).
+	dialControl btconn.DialControl
 
 	ut_metadata                    uint8
 	metadataReceived, metadataSize uint
@@ -343,6 +346,7 @@ func (l *Leech) Do(deadline time.Time) {
 func (l *Leech) DoContext(ctx context.Context, deadline time.Time) {
 	conn, _, peerExtensions, _, err := btconn.DialContext(
 		ctx,
+		l.dialControl,
 		l.peerAddr,
 		deadline,
 		[8]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x01},

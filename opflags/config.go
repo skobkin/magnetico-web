@@ -155,6 +155,20 @@ var crawlSettings = []crawlSetting{
 		copyFrom:      func(dst, src *CrawlOptions) { dst.FilterNodesCIDRs = src.FilterNodesCIDRs },
 		setFromString: func(o *CrawlOptions, v string) error { l, err := setStringList(v); o.FilterNodesCIDRs = l; return err },
 	},
+	{
+		longName: "deny-cidrs", yamlKey: "denyCIDRs", envName: "MAGNETICO_CRAWL_DENY_CIDRS",
+		copyFrom:      func(dst, src *CrawlOptions) { dst.DenyCIDRs = src.DenyCIDRs },
+		setFromString: func(o *CrawlOptions, v string) error { l, err := setStringList(v); o.DenyCIDRs = l; return err },
+	},
+	{
+		longName: "allow-non-global-addrs", yamlKey: "allowNonGlobalAddrs", envName: "MAGNETICO_CRAWL_ALLOW_NON_GLOBAL_ADDRS",
+		copyFrom: func(dst, src *CrawlOptions) { dst.AllowNonGlobalAddrs = src.AllowNonGlobalAddrs },
+		setFromString: func(o *CrawlOptions, v string) error {
+			b, err := parseBool(v)
+			o.AllowNonGlobalAddrs = b
+			return err
+		},
+	},
 }
 
 // applyConfig overlays the configuration file and the environment onto the

@@ -3,6 +3,8 @@ package metadata
 import (
 	"net"
 	"sync"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 // infoHashes holds the candidate peers of every in-flight leech.
@@ -19,7 +21,7 @@ type infoHashes struct {
 	infoHashes  map[[20]byte]*ihEntry
 	nextToken   uint64
 	maxNLeeches int
-	filterPeers []net.IPNet
+	policy      *netpolicy.Policy
 }
 
 type ihEntry struct {
@@ -27,27 +29,27 @@ type ihEntry struct {
 	peers []net.TCPAddr
 }
 
-func newInfoHashes(maxNLeeches int, filterPeers []net.IPNet) *infoHashes {
+// newInfoHashes builds the candidate store; a nil policy means
+// netpolicy.Default().
+func newInfoHashes(maxNLeeches int, policy *netpolicy.Policy) *infoHashes {
+	if policy == nil {
+		policy = netpolicy.Default()
+	}
 	return &infoHashes{
 		infoHashes:  make(map[[20]byte]*ihEntry),
 		maxNLeeches: maxNLeeches,
-		filterPeers: filterPeers,
+		policy:      policy,
 	}
 }
 
 func (ih *infoHashes) isAllowed(peer net.TCPAddr) bool {
-	if len(ih.filterPeers) > 0 {
-		for _, filterPeer := range ih.filterPeers {
-			if filterPeer.Contains(peer.IP) {
-				return true
-			}
-		}
-
+	if !ih.policy.AdmitLearned(peer.IP) {
 		return false
 	}
 
-	if !peer.IP.IsGlobalUnicast() || peer.IP.IsPrivate() {
-		return false
+	// In allowlist mode (a private DHT) any port is accepted, as before.
+	if ih.policy.AllowlistMode() {
+		return true
 	}
 
 	if peer.Port < 1024 || peer.Port > 65535 {

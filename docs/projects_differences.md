@@ -223,6 +223,8 @@ flowchart LR
 
 **Trade-offs and limits.** More components and failure modes than direct writes; at-least-once delivery means the same torrent can be offered twice (stored idempotently by info hash); the queue quota must be sized for the longest expected database outage. **Live-DHT acceptance of the whole chain has not been run** (it is part of the release-candidate phase); the pipeline was qualified on synthetic data with 2-hour soaks, large-record and multi-crawler runs (`docs/wip/06-crawler-ingest-results.md`).
 
+**Outbound address filter.** DHT nodes hand out private and reserved addresses, and a crawler that contacts them is reported to its hosting provider as a port scanner (the repository owner received such abuse reports with the original crawler). `boramalper/magnetico` v0.12.0 has no address filter (it ignores only port 0). `tgragnato` at `f80660653e7d` drops learned nodes and peers that fail Go's `IsGlobalUnicast`/`IsPrivate` checks, which miss ranges such as carrier-grade NAT `100.64.0.0/10`, and it does not check the send itself (replies to incoming queries, bootstrap addresses). 0.8.0 applies one policy, built from the IANA special-purpose address registries, when an address is learned and again on every UDP send and TCP connection; it adds an operator deny list, refusal counters in the crawl summary and a lab-only opt-out (`docs/crawler.md` §5).
+
 ---
 
 ## 6. Migration

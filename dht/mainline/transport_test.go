@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
 const (
@@ -109,6 +111,7 @@ func TestTransport_WriteMessages(t *testing.T) {
 				net.JoinHostPort("::1", strconv.Itoa(rand.IntN(64511)+1024)),
 				func(m *Message, u *net.UDPAddr) {},
 				1000,
+				netpolicy.New(netpolicy.Options{AllowNonGlobal: true}),
 			)
 			transport.throttlingRate = tt.throttlingRate
 			transport.Start()
@@ -167,7 +170,7 @@ func TestTransportFull(t *testing.T) {
 // sees it, and a valid message sent afterwards is still delivered.
 func TestTransportDropsDeeplyNestedDatagram(t *testing.T) {
 	got := make(chan *Message, 4)
-	tr := NewTransport("127.0.0.1:0", func(m *Message, _ *net.UDPAddr) { got <- m }, 10)
+	tr := NewTransport("127.0.0.1:0", func(m *Message, _ *net.UDPAddr) { got <- m }, 10, nil)
 	tr.Start()
 	defer tr.Terminate()
 

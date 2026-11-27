@@ -2,15 +2,17 @@ package metadata
 
 import (
 	"net"
+	"net/netip"
 	"runtime"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 )
 
-var loopbackNets = func() []net.IPNet {
-	_, n, _ := net.ParseCIDR("127.0.0.0/8")
-	return []net.IPNet{*n}
+var loopbackPolicy = func() *netpolicy.Policy {
+	return netpolicy.New(netpolicy.Options{Allow: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8")}})
 }()
 
 // stallPeer accepts TCP connections and never answers, like a peer that
@@ -64,7 +66,7 @@ func result(n byte, peers ...net.TCPAddr) *TestResult {
 
 func TestTrySinkBoundsActiveLeechesAndJoinsDuplicates(t *testing.T) {
 	peer := newStallPeer(t)
-	sink := NewSinkWithOptions(SinkOptions{Deadline: time.Minute, MaxPeersPerHash: 5, MaxActive: 3, FilterNodes: loopbackNets})
+	sink := NewSinkWithOptions(SinkOptions{Deadline: time.Minute, MaxPeersPerHash: 5, MaxActive: 3, Policy: loopbackPolicy})
 	defer sink.Terminate()
 
 	for i := 1; i <= 3; i++ {
@@ -97,7 +99,7 @@ func TestTrySinkAppliesAddressPolicyToFirstPeer(t *testing.T) {
 		t.Fatal("connected to a disallowed address")
 	}
 	// A disallowed first peer is skipped in favour of the first allowed one.
-	filtered := NewSinkWithOptions(SinkOptions{Deadline: time.Minute, MaxPeersPerHash: 5, FilterNodes: loopbackNets})
+	filtered := NewSinkWithOptions(SinkOptions{Deadline: time.Minute, MaxPeersPerHash: 5, Policy: loopbackPolicy})
 	defer filtered.Terminate()
 	if st := filtered.TrySink(result(1, net.TCPAddr{IP: net.ParseIP("8.8.8.8"), Port: 6881}, peer.addr())); st != SinkStarted {
 		t.Fatalf("filter mode: %v, want SinkStarted", st)
@@ -118,7 +120,7 @@ func TestTerminateCancelsBlockedLeechesWithoutLeaks(t *testing.T) {
 	peer := newStallPeer(t)
 	before := runtime.NumGoroutine()
 
-	sink := NewSinkWithOptions(SinkOptions{Deadline: time.Hour, MaxPeersPerHash: 5, MaxActive: 8, FilterNodes: loopbackNets})
+	sink := NewSinkWithOptions(SinkOptions{Deadline: time.Hour, MaxPeersPerHash: 5, MaxActive: 8, Policy: loopbackPolicy})
 	for i := 1; i <= 8; i++ {
 		if st := sink.TrySink(result(byte(i), peer.addr())); st != SinkStarted {
 			t.Fatalf("hash %d: %v", i, st)

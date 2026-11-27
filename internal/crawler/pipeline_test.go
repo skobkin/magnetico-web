@@ -13,6 +13,7 @@ import (
 
 	"github.com/skobkin/magnetico-web/dht"
 	"github.com/skobkin/magnetico-web/internal/crawlqueue"
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/metadata"
 	"github.com/skobkin/magnetico-web/persistence"
 )
@@ -343,7 +344,7 @@ func TestShutdownWithFullQueueAndInFlightLeeches(t *testing.T) {
 	client, _ := NewClient(dead.URL, token, nil)
 
 	_, loop, _ := net.ParseCIDR("127.0.0.0/8")
-	sink := metadata.NewSinkWithOptions(metadata.SinkOptions{Deadline: time.Hour, MaxPeersPerHash: 4, MaxActive: 8, FilterNodes: []net.IPNet{*loop}})
+	sink := metadata.NewSinkWithOptions(metadata.SinkOptions{Deadline: time.Hour, MaxPeersPerHash: 4, MaxActive: 8, Policy: netpolicy.New(netpolicy.Options{Allow: netpolicy.PrefixesFromIPNets([]net.IPNet{*loop})})})
 	peer := newStallPeer(t)
 	for i := 100; i < 108; i++ {
 		if st := sink.TrySink(&fakeRes{h: hashN(i), peers: []net.TCPAddr{*peer.ln.Addr().(*net.TCPAddr)}}); st != metadata.SinkStarted {

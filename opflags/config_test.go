@@ -148,6 +148,11 @@ func TestApplyYamlConfig_DerivedFieldRejected(t *testing.T) {
 			data: "queueDir: /q/x\nfilterNodesIpNets:\n  - ip: [10, 0, 0, 0]\n    mask: [255, 255, 0, 0]\n",
 			key:  "filterNodesIpNets",
 		},
+		{
+			name: "derived deny prefixes",
+			data: "queueDir: /q/x\ndenyPrefixes: []\n",
+			key:  "denyPrefixes",
+		},
 	}
 
 	for _, tt := range tests {
@@ -462,4 +467,56 @@ func TestKeyValueDSNEscapeShapesAcceptedByPgx(t *testing.T) {
 	if bare.Password != `HEAD SECRET_TAIL` {
 		t.Fatalf("bare password = %q, want %q", bare.Password, `HEAD SECRET_TAIL`)
 	}
+}
+
+func TestEgressPolicySettings(t *testing.T) {
+	// t.Setenv forbids parallel execution.
+	t.Run("YAML", func(t *testing.T) {
+		o := &OpFlags{Crawl: defaults()}
+		data := []byte("denyCIDRs:\n  - 203.0.113.0/24\nallowNonGlobalAddrs: true\n")
+		if err := o.applyYamlConfig(data, map[string]bool{}); err != nil {
+			t.Fatalf("applyYamlConfig() error = %v", err)
+		}
+		if len(o.Crawl.DenyCIDRs) != 1 || !o.Crawl.AllowNonGlobalAddrs {
+			t.Fatalf("DenyCIDRs = %v, AllowNonGlobalAddrs = %v", o.Crawl.DenyCIDRs, o.Crawl.AllowNonGlobalAddrs)
+		}
+		if o.Crawl.DenyPrefixes != nil {
+			t.Fatalf("DenyPrefixes = %v, want nil before check() derives it", o.Crawl.DenyPrefixes)
+		}
+		crawl := o.Crawl
+		if err := crawl.check(); err != nil {
+			t.Fatalf("check() error = %v", err)
+		}
+		if len(crawl.DenyPrefixes) != 1 || crawl.DenyPrefixes[0].String() != "203.0.113.0/24" {
+			t.Fatalf("DenyPrefixes = %v, want the derived 203.0.113.0/24", crawl.DenyPrefixes)
+		}
+	})
+
+	t.Run("Env", func(t *testing.T) {
+		t.Setenv("MAGNETICO_CRAWL_DENY_CIDRS", "10.0.0.0/8, 2001:db8::/32")
+		t.Setenv("MAGNETICO_CRAWL_ALLOW_NON_GLOBAL_ADDRS", "true")
+		o := &OpFlags{Crawl: defaults()}
+		if err := o.applyEnvConfig(map[string]bool{}); err != nil {
+			t.Fatalf("applyEnvConfig() error = %v", err)
+		}
+		if len(o.Crawl.DenyCIDRs) != 2 || !o.Crawl.AllowNonGlobalAddrs {
+			t.Fatalf("DenyCIDRs = %v, AllowNonGlobalAddrs = %v", o.Crawl.DenyCIDRs, o.Crawl.AllowNonGlobalAddrs)
+		}
+	})
+
+	t.Run("EnvBadBool", func(t *testing.T) {
+		t.Setenv("MAGNETICO_CRAWL_ALLOW_NON_GLOBAL_ADDRS", "maybe")
+		o := &OpFlags{Crawl: defaults()}
+		if err := o.applyEnvConfig(map[string]bool{}); err == nil {
+			t.Fatal("applyEnvConfig() accepted a non-boolean value")
+		}
+	})
+
+	t.Run("InvalidDenyCIDR", func(t *testing.T) {
+		crawl := defaults()
+		crawl.DenyCIDRs = []string{"10.0.0.0/33"}
+		if err := crawl.checkDHT(); err == nil || !strings.Contains(err.Error(), "deny-cidrs") {
+			t.Fatalf("checkDHT() error = %v, want a deny-cidrs error", err)
+		}
+	})
 }

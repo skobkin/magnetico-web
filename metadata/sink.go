@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/skobkin/magnetico-web/dht"
+	"github.com/skobkin/magnetico-web/internal/netpolicy"
 	"github.com/skobkin/magnetico-web/persistence"
 )
 
@@ -61,8 +62,11 @@ type SinkOptions struct {
 	// historical "leech max n").
 	MaxPeersPerHash int
 	// MaxActive bounds concurrently running leeches (default 32).
-	MaxActive   int
-	FilterNodes []net.IPNet
+	MaxActive int
+	// Policy decides which peers may be contacted; nil means
+	// netpolicy.Default(). It is applied when peers are added and again when
+	// a connection is dialled.
+	Policy *netpolicy.Policy
 }
 
 // Sink fetches torrent metadata from peers. It is context-aware: Terminate
@@ -75,6 +79,7 @@ type Sink struct {
 	drain    chan Metadata
 
 	incomingInfoHashes *infoHashes
+	policy             *netpolicy.Policy
 	sem                chan struct{}
 
 	ctx    context.Context
@@ -89,8 +94,8 @@ type Sink struct {
 
 // NewSink keeps the historical signature; the active-leech limit is
 // DefaultMaxActiveLeeches.
-func NewSink(deadline time.Duration, maxNLeeches int, filterNodes []net.IPNet) *Sink {
-	return NewSinkWithOptions(SinkOptions{Deadline: deadline, MaxPeersPerHash: maxNLeeches, FilterNodes: filterNodes})
+func NewSink(deadline time.Duration, maxNLeeches int, policy *netpolicy.Policy) *Sink {
+	return NewSinkWithOptions(SinkOptions{Deadline: deadline, MaxPeersPerHash: maxNLeeches, Policy: policy})
 }
 
 // NewSinkWithOptions builds a Sink.
@@ -98,11 +103,15 @@ func NewSinkWithOptions(o SinkOptions) *Sink {
 	if o.MaxActive <= 0 {
 		o.MaxActive = DefaultMaxActiveLeeches
 	}
+	if o.Policy == nil {
+		o.Policy = netpolicy.Default()
+	}
 	ms := new(Sink)
+	ms.policy = o.Policy
 	ms.PeerID = randomID()
 	ms.deadline = o.Deadline
 	ms.drain = make(chan Metadata, drainCapacity)
-	ms.incomingInfoHashes = newInfoHashes(o.MaxPeersPerHash, o.FilterNodes)
+	ms.incomingInfoHashes = newInfoHashes(o.MaxPeersPerHash, o.Policy)
 	ms.sem = make(chan struct{}, o.MaxActive)
 	ms.ctx, ms.cancel = context.WithCancel(context.Background())
 	return ms
@@ -174,10 +183,12 @@ func (ms *Sink) run(infoHash [20]byte, token uint64, peer net.TCPAddr) {
 	next := &peer
 	for next != nil && ms.ctx.Err() == nil {
 		var result *Metadata
-		NewLeech(infoHash, next, ms.PeerID, LeechEventHandlers{
+		leech := NewLeech(infoHash, next, ms.PeerID, LeechEventHandlers{
 			OnSuccess: func(m Metadata) { result = &m },
 			OnError:   func([20]byte, error) {},
-		}).DoContext(ms.ctx, time.Now().Add(ms.deadline))
+		})
+		leech.dialControl = ms.policy.ControlContext
+		leech.DoContext(ms.ctx, time.Now().Add(ms.deadline))
 		if result != nil {
 			ms.deliver(*result)
 			return
