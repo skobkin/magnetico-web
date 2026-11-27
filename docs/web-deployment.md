@@ -1,6 +1,6 @@
 # `magnetico web` — configuration, database and reverse-proxy notes (W1–W9)
 
-Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Running the service from the container image (`docker.io/skobkin/magnetico-web`, user `10001:10001`, the Compose example, the `/healthz` and `/readyz` healthchecks, shutdown and the resource limits) is covered in [`container.md`](container.md). The service itself is covered by real-binary tests (see `docs/wip/07J-web-integration-security-report.md`), but **no real reverse proxy (Traefik, Nginx, Caddy) has been exercised yet**: proxy option names and defaults below must be checked against the version you run, and the proxy checks are listed in `docs/wip/rc0-acceptance-checklist.md`. The application is meant to run behind a TLS-terminating reverse proxy; it has no TLS of its own and none is planned.
+Normative behaviour is in `docs/specs/web-v1.md`; this page is the operator's quick reference. Running the service from the container image (`docker.io/skobkin/magnetico-web`, user `10001:10001`, the Compose example, the `/healthz` and `/readyz` healthchecks, shutdown and the resource limits) is covered in [`container.md`](container.md). The service itself is covered by real-binary tests (see `docs/wip/07J-web-integration-security-report.md`). Of the reverse proxies, only **Traefik 3.8.0** was exercised (timeouts and the access log, in the RC0 acceptance); Nginx and Caddy were not, so check their option names and defaults below against the version you run. Migrating from the legacy PHP version, including its accounts, is described in [`migration_0.8.0.md`](migration_0.8.0.md). The application is meant to run behind a TLS-terminating reverse proxy; it has no TLS of its own and none is planned.
 
 ## 1. Configuration
 
@@ -58,7 +58,7 @@ Searches may legitimately run for `SEARCH_TIMEOUT` (60 s) and the service may st
 - **Nginx.** `proxy_read_timeout 90s;` (or more) and `send_timeout`/`proxy_send_timeout` accordingly; `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`.
 - **Caddy.** In `reverse_proxy`, `transport http { response_header_timeout 90s }` (and a read timeout if you set one); trusted proxies for Caddy's own client-IP handling are configured with `trusted_proxies` in the server options.
 
-The service logs the effective deadlines and this requirement at startup. Full deployment integration testing is out of scope for W1.
+The service logs the effective deadlines and this requirement at startup.
 
 ### Proxy access logs
 
@@ -129,47 +129,62 @@ Order of operations on a fresh database (all explicit; the web service never cre
 
 1. `magnetico migrate schema-init` — the torrent schema (`magneticod`).
 2. `magnetico migrate web-schema-init` — the `magnetico_web` schema: accounts, sessions, invitations, API and RSS tokens, one-time links, trackers, settings, and the `web_version` table. It also seeds the approved historical tracker list **once** (never again, so later operator edits are kept). It is non-destructive and idempotent: an already initialized, structurally identical schema is accepted; **anything else (a different version, a missing constraint or index, an extra column or trigger, …) is refused without any change** — there is no automatic repair. The target database comes from `--database`, `MAGNETICO_MIGRATE_DATABASE` or the `migrateDatabaseURL` file key (the same as the other `migrate` commands) and needs a role that may create schemas.
-3. Start `magnetico web` with `MAGNETICO_WEB_DATABASE`. **Default deployment: one PostgreSQL account for ingest and web** (the account that owns the schemas created above; `magnetico ingest` and `magnetico web` both connect with it). The minimum-grant roles below are **optional hardening** that an operator may adopt (a restricted runtime role for the web service); separate least-privilege roles for ingest and web are a possible future hardening step, not something the default deployment needs. Neither choice changes the schemas, grants or the startup privilege verification.
+3. Start `magnetico web` with `MAGNETICO_WEB_DATABASE`.
 
-At every start the service verifies the torrent schema, the exact `magnetico_web` structure and these privileges, and refuses to start (exit status 1, with the missing privilege named) if anything is off. The version table is deliberately named `web_version`: the torrent-schema verification treats a table called `schema_version` in *any* schema as one of its own markers.
+**Default deployment: one PostgreSQL account.** The account that owns the database runs the init commands, the migration (`docs/migration_0.8.0.md`), `ingest`, `web` and every administrator command (`web user …`, `web tracker …`, `ingest crawler …`). It owns every schema and table, so it needs no `GRANT` statement. Creating it is shown in [`migration_0.8.0.md`](migration_0.8.0.md) §4.2.
 
-### Minimum grants (optional hardening)
+At every start the service verifies the torrent schema, the exact `magnetico_web` structure and its own privileges, and refuses to start (exit status 1, with the missing privilege named) if anything is off. The version table is deliberately named `web_version`: the torrent-schema verification treats a table called `schema_version` in *any* schema as one of its own markers.
 
-A restricted runtime role (instead of the shared account) reads the torrent schema (including `magneticod.schema_version`, which the startup verification reads) and has DML — but no DDL — on `magnetico_web`. The operator role (used by the administrator commands) adds tracker writes. Replace the role names as needed.
+### Optional hardening: restricted web roles
+
+This is for administrators who want the web service to run without DDL rights; a normal installation does not need it. A **runtime role** (`magnetico_web_rt` below) runs `web`: it reads the torrent schema (including `magneticod.schema_version`, which the startup verification reads) and has DML, but no DDL, on `magnetico_web`. An **operator role** (`magnetico_web_op`) runs the `web user …` and `web tracker …` commands and can also edit the tracker list. The owner account still runs the init commands, the migration (the user import must run as the owner of the `magnetico_web` tables) and `ingest`; running `ingest` as another role is not a documented configuration.
+
+| Statements | Run them as |
+|---|---|
+| `CREATE ROLE …` | a superuser, or a role with `CREATEROLE` |
+| the grants below (object privileges) | the owner account (the owner of the schemas) or a superuser, after `web-schema-init` (and, for the statistics grants, after `ingest-schema-init` and `stats-schema-init`) |
+| `GRANT magnetico_web_rt TO magnetico_web_op`, if you prefer role membership to the direct grants below | on PostgreSQL 16 and newer, a superuser or a role with `ADMIN OPTION` on `magnetico_web_rt` (a `CREATEROLE` role has it for the roles it created); the database owner alone gets `permission denied to grant role` |
+
+```sql
+-- as a superuser or a CREATEROLE role; \password asks without echo
+CREATE ROLE magnetico_web_rt LOGIN;
+\password magnetico_web_rt
+CREATE ROLE magnetico_web_op LOGIN;
+\password magnetico_web_op
+```
+
+If `CONNECT` on the database was revoked from `PUBLIC`, also grant it to both roles. Then, as the owner account:
 
 <!-- grants:begin -->
 ```sql
--- runtime role (the web service)
-GRANT USAGE ON SCHEMA magneticod TO magnetico_web_rt;
-GRANT SELECT ON magneticod.torrents, magneticod.torrent_file_blobs, magneticod.schema_version TO magnetico_web_rt;
-GRANT USAGE ON SCHEMA magnetico_web TO magnetico_web_rt;
-GRANT SELECT ON magnetico_web.web_version, magnetico_web.settings, magnetico_web.trackers TO magnetico_web_rt;
+-- the torrent schema, read-only (the startup verification also reads schema_version)
+GRANT USAGE ON SCHEMA magneticod TO magnetico_web_rt, magnetico_web_op;
+GRANT SELECT ON magneticod.torrents, magneticod.torrent_file_blobs, magneticod.schema_version TO magnetico_web_rt, magnetico_web_op;
+-- magnetico_web: DML, no DDL
+GRANT USAGE ON SCHEMA magnetico_web TO magnetico_web_rt, magnetico_web_op;
+GRANT SELECT ON magnetico_web.web_version, magnetico_web.settings, magnetico_web.trackers TO magnetico_web_rt, magnetico_web_op;
 GRANT SELECT, INSERT, UPDATE ON magnetico_web.users, magnetico_web.api_tokens,
-      magnetico_web.rss_tokens, magnetico_web.invites TO magnetico_web_rt;
-GRANT SELECT, INSERT, UPDATE, DELETE ON magnetico_web.sessions, magnetico_web.one_time_tokens TO magnetico_web_rt;
+      magnetico_web.rss_tokens, magnetico_web.invites TO magnetico_web_rt, magnetico_web_op;
+GRANT SELECT, INSERT, UPDATE, DELETE ON magnetico_web.sessions, magnetico_web.one_time_tokens TO magnetico_web_rt, magnetico_web_op;
 
--- operator role (administrator commands): everything above plus tracker writes
-GRANT magnetico_web_rt TO magnetico_web_op;
+-- the operator role (administrator commands) also edits the tracker list
 GRANT INSERT, UPDATE, DELETE ON magnetico_web.trackers TO magnetico_web_op;
 ```
 <!-- grants:end -->
 
-These statements are executed verbatim by the integration tests, which start the real service as the restricted role and check that revoking any of them (for example `SELECT` on `magneticod.schema_version`) makes startup fail with a controlled message.
+These statements are executed verbatim by the integration tests, which start the real service as the restricted role, run the administrator commands as the operator role, and check that revoking any of them (for example `SELECT` on `magneticod.schema_version`) makes startup fail with a controlled message. With these roles, `MAGNETICO_WEB_DATABASE` of the service names the runtime role and that of the administrator commands the operator role.
 
 ### Optional: ingestion statistics and the administrator pages (`magnetico_stats`)
 
 The administrator section reads the optional `magnetico_stats` schema (created once by
 `magnetico migrate stats-schema-init`; non-destructive, idempotent, refuses a structurally different schema and never repairs
 one — statistics are disposable: `DROP SCHEMA magnetico_stats CASCADE;` and initialise again). `ingest` and `web` **start without
-it**; the dashboard then says "statistics schema not initialised". Grants, for the default single account none are needed:
+it**; the dashboard then says "statistics schema not initialised". With the default single account no grant is needed. With the
+restricted runtime role, run these as the owner account after `ingest-schema-init` and `stats-schema-init`:
 
 <!-- stats-grants:begin -->
 ```sql
--- the ingest role writes statistics (its own role; it also needs SELECT on magnetico_ingest.crawlers)
-GRANT USAGE ON SCHEMA magnetico_stats TO magnetico_ingest_rt;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA magnetico_stats TO magnetico_ingest_rt;
-
--- the web role reads statistics, and only the safe columns of the crawler registry and the quarantine
+-- the web runtime role reads statistics, and only the safe columns of the crawler registry and the quarantine
 GRANT USAGE ON SCHEMA magnetico_stats TO magnetico_web_rt;
 GRANT SELECT ON ALL TABLES IN SCHEMA magnetico_stats TO magnetico_web_rt;
 GRANT USAGE ON SCHEMA magnetico_ingest TO magnetico_web_rt;
@@ -177,6 +192,9 @@ GRANT SELECT (crawler_id, name, enabled, created_at, token_rotated_at, disabled_
 GRANT SELECT (id, reason_code, detail, attempts, payload_bytes, received_at, quarantined_at) ON magnetico_ingest.quarantine TO magnetico_web_rt;
 ```
 <!-- stats-grants:end -->
+
+`ingest` writes the statistics as the owner account. After a reinitialisation of `magnetico_stats` run the grants again
+(`ON ALL TABLES` covers only the tables that exist at that moment).
 
 The Users and Invitations pages read `magnetico_web.users` and `invites` with explicit column lists (no `password_hash`, no invitation `code`), using the table grants of §4 that the service needs anyway; the tests run them through a role that holds only the safe columns, so the guarantee does not depend on the grant.
 
@@ -188,7 +206,7 @@ service always starts.
 
 ## 5. Administrator commands (W2)
 
-`magnetico web user …` and `magnetico web tracker …` administer accounts, invitations and the public tracker list. They use the same database settings as the service (`--database` without a password, or `MAGNETICO_WEB_DATABASE`, or the `web:` file section), open two connections, and refuse to run unless the `magnetico_web` schema is exactly the supported version and the role holds the operator grants of §4. Commands that print absolute links (`user add`, `user reset-password`, `user invite add|list`) also need the public URL (`MAGNETICO_WEB_PUBLIC_URL`); the other commands validate only what they use. Results and requested links go to stdout, failures to stderr with exit status 1; nothing secret is printed except the link you asked for.
+`magnetico web user …` and `magnetico web tracker …` administer accounts, invitations and the public tracker list. They use the same database settings as the service (`--database` without a password, or `MAGNETICO_WEB_DATABASE`, or the `web:` file section), open two connections, and refuse to run unless the `magnetico_web` schema is exactly the supported version and the role may do what the commands need (the owner account of the default deployment can; with the optional restricted roles of §4, use the operator role). Commands that print absolute links (`user add`, `user reset-password`, `user invite add|list`) also need the public URL (`MAGNETICO_WEB_PUBLIC_URL`); the other commands validate only what they use. Results and requested links go to stdout, failures to stderr with exit status 1; nothing secret is printed except the link you asked for.
 
 | Command | Effect |
 |---|---|
@@ -204,7 +222,7 @@ service always starts.
 
 ## 6. Sign-in, sessions and rate limits (W3)
 
-**Routes.** `GET/POST /login`, `POST /logout` and an interim page at the exact root `/` (replaced by the torrent pages in W4). Every other path, including legacy PHP routes, is 404. Sign-out is `POST` only.
+**Routes.** `GET/POST /login` and `POST /logout`; the root `/` redirects to `/torrents` (§7). Legacy PHP routes are 404. Sign-out is `POST` only.
 
 **Cookies.** Production (https public URL): `__Host-magnetico_session` (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no `Domain`). An ordinary session is a browser-session cookie; a "keep me signed in" session carries `Expires`/`Max-Age` equal to the server-side absolute expiry and is never extended by activity. Before sign-in the login form is bound to a one-hour `__Host-magnetico_presession` cookie (`SameSite=Strict`). **Development mode** (loopback `http://` public URL only) uses the names `magnetico_session` / `magnetico_presession` without the prefix and without `Secure`, and logs a warning at startup. The `__Host-` prefix requires the browser to see `https://`, so the reverse proxy must terminate TLS for the public URL.
 
@@ -287,40 +305,11 @@ Measured on one host with synthetic data (3.5 million torrents, about 20,000 wit
 * **Reverse proxy timeouts** are unchanged (§3): `/api/v2/torrents` is a search route (`SEARCH_TIMEOUT` + 10 s write deadline); every other new route is an ordinary request (`REQUEST_TIMEOUT` + 5 s).
 
 
-## 10. Migrating the legacy PHP accounts (W8)
+## 10. Migrating the legacy PHP accounts
 
-`magnetico migrate users` imports the accounts of the legacy PHP/Symfony application into `magnetico_web` in **one target transaction**: a failed, cancelled or interrupted run changes nothing. The design, decisions and cutover rationale are in `docs/wip/07H-user-migration-plan.md`; the implementation record is `docs/wip/07H-user-migration-report.md`. Nothing here connects to production by itself: you point the command at databases you choose.
-
-**What it does.** Users and invitations keep their numeric ids and relationships; usernames are copied byte for byte (case-sensitive); password hashes are copied unchanged (the web service verifies them directly and rehashes on the first successful login); every migrated account is an active `user`; historical email addresses are copied as written and are **unverified** (use the account page to verify; until then they are not used for self-service recovery, and an administrator-issued reset link is the fallback). Every legacy API token becomes a **legacy RSS token** (`rss_tokens`, SHA-256 only, original creation time, `legacy = true`) so existing `…/api/v1/feed/rss/last?api-token=…` URLs keep working; **no** `api_tokens`, sessions or one-time links are created. Not migrated: PHP sessions, remember-me cookies, password-reset tokens, reCAPTCHA state.
-
-**Databases and configuration.**
-
-| | Setting |
-|---|---|
-| Target (has `magnetico_web`) | `--database`, `MAGNETICO_MIGRATE_DATABASE`, or the `migrateDatabaseURL` file key (the other `migrate` commands' convention) |
-| Source (legacy PHP database, schema `users`) | `MAGNETICO_MIGRATION_USERS_SOURCE_DSN` or the `migrateUsersSourceDatabaseURL` file key **only**: no flag (it can never appear in `ps`), no default, never the target or the torrent source (`MAGNETICO_MIGRATION_SOURCE_DSN`) |
-| `--source-timezone` | **required**, an IANA zone (`php -r 'echo date_default_timezone_get();'` in the legacy container); legacy timestamps carry no zone |
-
-DSNs, hashes, token keys, invitation codes, emails and usernames are never printed or written to a report: records are identified by numeric id and finding code, and database errors are reduced to the SQLSTATE and constraint name.
-
-**Privileges.** The source role needs `CONNECT`, `USAGE` on schema `users`, and `SELECT` on `users.users`, `users.invites`, `users.api_tokens` and the Doctrine `migration_versions` table; every source transaction is `READ ONLY`, and a role that can write a legacy table is reported as a warning. A `--dry-run` needs only `SELECT` on the six user-owned `magnetico_web` tables and on their three identity sequences (`users`, `invites`, `rss_tokens`). A **final run uses the owner of the `magnetico_web` tables** (the identity `RESTART` is an `ALTER TABLE`): it needs `INSERT` on `users`, `invites`, `rss_tokens`, and with `--replace-users` also `DELETE` on all six. It is never run as the runtime or operator role, and no grant or schema change is made.
-
-**Commands.**
-
-```text
-magnetico migrate users --source-timezone ZONE --dry-run [--accept-needs-reset N]
-        [--replace-users [--delete-unmatched-user-ids ID,ID]] [--report-json FILE]
-magnetico migrate users --source-timezone ZONE --source-writes-stopped [--accept-needs-reset N]
-        [--replace-users --confirm-plan DIGEST [--delete-unmatched-user-ids ID,ID]] [--report-json FILE]
-magnetico migrate users verify --source-timezone ZONE [--report-json FILE]
-```
-
-* **`--dry-run`** is read-only on both databases (a `READ ONLY` target transaction, no locks, no sequence calls: sequence state is untouched). It checks the source schema fingerprint (exactly the five known Doctrine migrations and the legacy columns), validates every row against the target constraints, classifies the target and prints the **plan digest**. It may run during normal operation. It exits 0 only when a final run would be accepted; otherwise it names the reasons (`would_refuse`) and exits 1.
-* **A final run is an offline operation.** Stop the legacy application and prevent legacy writes first, then pass `--source-writes-stopped`: it is an operator assertion, not a proof. The migrator reports what it can observe (other client backends, a database-level read-only default) and re-reads the source before committing, but that is defence in depth only: there is no cross-database atomic snapshot. The `ACCESS EXCLUSIVE` table locks it takes serialise against conflicting database operations only; they do **not** prove the web service is stopped, so stop the service and operator commands yourself.
-* **Refusals** (exit 1, nothing written): `config`, `source-schema`, `target-schema`, `privileges`, `source-empty`, `data-blocked` (unstorable values, orphans, duplicates; nothing is transformed or dropped), `unvetted-hash-format`, `needs-reset-unacknowledged`, `target-not-empty`, `unmatched-target-accounts`, `plan-mismatch`, `source-writes-not-asserted`, `lock-timeout`, `source-changed`, `verify-failed`, `storage`.
-* **Password hashes** fall in three categories. *Verified*: exact parameters with PHP-generated vectors. *Unvetted*: the verifier parses them but no exact vectors exist; a final run refuses until vectors are added in a reviewed change. *Unsupported*: they cannot log in; acknowledge the exact number with `--accept-needs-reset N` and issue administrator reset links afterwards (completing a reset permanently revokes that user's legacy RSS URLs). The aggregate-only audit for the legacy database is `docs/wip/07H-audit.sql`.
-* **Re-running** a completed, untouched import is a no-op (`already-migrated`); that requires the exact rows and every id sequence above its table's maximum id. A populated target that is not exactly the expected import is refused unless `--replace-users` is given.
-* **`--replace-users` is destructive**: it deletes every account and all user-owned data in the target (sessions, one-time links, API and RSS tokens, invitations, users) and imports again, in the same transaction. It never touches torrents, trackers, settings or schema versions, and never moves an id sequence backward. A target account that is not in the source (same id **and** username) is protected: the run refuses unless `--delete-unmatched-user-ids` equals that set exactly. A real run requires `--confirm-plan` with the digest of a previous `--dry-run --replace-users` with identical options (the preview needs none and prints what would be discarded). The digest binds the source data, the time zone, the target state (including the next value of the user, invitation and RSS-token id sequences), the destructive operation, the deletion scope and the acknowledgement, so changing any of them invalidates the confirmation.
-* **Reports.** `--report-json FILE` writes a secret-free JSON report (counts, ids, classes, digests) with mode 0600, created exclusively: an existing file is never overwritten.
-
-**Cutover.** Run the audit, rehearse on copies, then: stop the legacy application and prevent its writes, back up both databases, stop the web service, `--dry-run`, run for real, `verify`, promote the first administrator with `magnetico web user set-role <username> admin`, start the web service. The full checklist is §9 of the plan.
+The procedure, including `magnetico migrate users`, its verification and the first administrator, is in
+[`migration_0.8.0.md`](migration_0.8.0.md) (§§4.5, 4.7 and 8). In short: the import copies users, invitations and
+password hashes (rehashed at the first sign-in) and turns every legacy API token into a legacy RSS token, in one target
+transaction, as the owner of the `magnetico_web` tables; the legacy source is set with
+`MAGNETICO_MIGRATION_USERS_SOURCE_DSN` only and is never written; `migrate users verify` runs right after the import,
+before any account is changed. The design record is `docs/wip/07H-user-migration-plan.md`.

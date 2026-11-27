@@ -12,7 +12,8 @@ loopback-only containers. **Branch of this report:** `prerelease-fixes`.
    upgrade correctly.
 
 The procedure was executed as an administrator would do it: from the docs, with the published image, one command at a
-time. Deviations from the docs are recorded as findings. The owner chose the following options before the run: hybrid
+time. Section numbers in §§3–7 are those of the guide **as shipped in `0.8.0-rc1`**; the corrected guide is organised
+differently, and §8 records how every finding was resolved. Deviations from the docs are recorded as findings. The owner chose the following options before the run: hybrid
 roles, the PHP time zone `Europe/Moscow`, Mailpit for SMTP, a loopback `http://` web, web and ingest running at the end
 (no crawler), and this report committed to a branch.
 
@@ -27,13 +28,15 @@ username of a migrated user or torrent name. Records are referred to by counts a
 | User migration | **Works on the real legacy accounts.** Audit: all 35 hashes *verified* (argon2id and argon2i), and every data-shape check was 0. Dry run, final preview, final import (35 users, 366 invitations, 6 legacy tokens → RSS tokens, 0.6 s), `users verify` and the idempotent re-run all behaved exactly as documented. No warnings, no refusals |
 | Services | `web` starts as the restricted runtime role with the documented minimum grants. Search (ASCII, Cyrillic, CJK), the 123,480-file torrent (directory pages), both file-browser modes, magnet redirects, legacy token in RSS v1 and v2 (200) and on the JSON API (401), the account page, the administrator pages and an email verification over STARTTLS all work. `ingest` starts as documented and refuses unauthenticated requests |
 | Code defects | **None found in the migration or service code.** Only small UX items (§4.4) |
-| Documentation | **Not release-ready.** 3 major documentation errors (one documented command fails as written; `UPGRADE.md` contradicts itself; the post-migration checklist cannot be satisfied), `UPGRADE.md` is not a brief entry point, and several gaps and stale statements remain (§4) |
+| Documentation | **Not release-ready as shipped in RC1.** 3 major documentation errors (one documented command fails as written; `UPGRADE.md` contradicts itself; the post-migration checklist cannot be satisfied), `UPGRADE.md` is not a brief entry point, and several gaps and stale statements remain (§4). **Corrected on `prerelease-fixes`** (§8) |
+| Migrated login | The owner signed in with their migrated account and its original password; the hash was rehashed on that first sign-in (`web user list`: `current`). This is one real account: the other 34 migrated passwords were not tested and stay `legacy` until their owners sign in |
 | Owner request | `verify-decode` is **not needed** as a cutover gate when `verify-content` passed (§5). Documenting that removes one full-database scan from the procedure |
 
 **Go / no-go.** The migration code and the image are ready for production use as far as this rehearsal can show: no data
 defect, every verification passed, and resume works after both a graceful and an abrupt stop. The release should wait for
 the documentation fixes **D1–D3** and the **`UPGRADE.md` rewrite (G1)**. The other items can follow, but they are cheap
-to fix in the same pass.
+to fix in the same pass. *Update:* the documentation findings are resolved on `prerelease-fixes` without a code change
+(§8); the UX items X1–X5 are deferred.
 
 ## 2. Artifact, environment and dataset
 
@@ -86,7 +89,7 @@ User-migration reports (`--report-json`) contained counts, numeric ids and diges
 
 The migrated passwords are unknown to the tester, so the session checks used a rehearsal account created with
 `web user add` + `web user set-password` (stdin), as §8.2 allows. It is still in the database (id 37, role `user`).
-A migrated user's login is left to the owner (§6).
+The owner then signed in with their own migrated account and original password (§6).
 
 | Check | Result |
 |---|---|
@@ -278,8 +281,8 @@ measured `verify-decode` at 58 min and 42 min. On the full database (≈ 10×) d
 | `verify-content` passed with no findings and `verify-decode` passed, before any new torrent | ✅ both PASS at data revision 0 |
 | Torrent count of the new database equals the legacy count minus unresolved errors | ✅ 3,457,046 = 3,457,046, 0 errors |
 | `migrate users verify` exited 0; reports stored | ✅ before the promotion; ❌ afterwards, by design (D3) |
-| `web user list`: `needs-reset` count equals N; administrator can sign in | ✅ N = 0; administrator sign-in **pending the owner** |
-| A migrated user with a supported hash signs in | **pending the owner** (afterwards `web user list` should show `current`) |
+| `web user list`: `needs-reset` count equals N; administrator can sign in | ✅ N = 0; the owner signed in as the promoted administrator with the migrated password |
+| A migrated user with a supported hash signs in | ✅ for one account (the owner's; like all 35, its hash is in a *verified* family of the audit); `web user list` then showed `current` for it. The other 34 migrated passwords were not tested |
 | Legacy token works on the v2 feed and is refused (401) by the JSON API | ✅ |
 | v1 feed on: the legacy RSS URL works unchanged; off: 404 | ✅ on (main instance); ✅ off (a temporary second instance with `MAGNETICO_WEB_RSS_V1_ENABLED=false`: 404 with and without a token, v2 feed still 200) |
 | Search finds ASCII and non-ASCII names; a very large torrent opens | ✅ |
@@ -291,11 +294,94 @@ measured `verify-decode` at 58 min and 42 min. On the full database (≈ 10×) d
 
 ## 7. Not covered
 
-- A login with a migrated password, and the rehash on first login. This needs a real password; the owner tests it on the
-  running instance.
-- Traefik, TLS, the access-log configuration, a crawler and live DHT traffic. These are out of scope here and were
-  covered by the RC0 acceptance.
+- Logins with the other 34 migrated passwords. One real migrated login (the owner's) and its rehash were tested; every
+  account's hash was classified *verified* by the audit and the dry run, which is what predicts that the others work.
+- Traefik, TLS and the access-log configuration: out of scope here; Traefik 3.8.0 was covered by the RC0 acceptance.
+- A crawler and live DHT traffic: out of scope here and **not** covered by RC0 either. The live-DHT acceptance on a
+  separate host is still open (`docs/wip/rc0-acceptance-checklist.md`).
 - `migrate cleanup --execute` and `retry-errors`. Cleanup was previewed only, and the import produced no record errors to
   retry.
 - The full (100 %) database. The timings above scale roughly linearly with the source size, and the verifications are
   the long part.
+
+## 8. Disposition of the findings (`prerelease-fixes`)
+
+The owner accepted the rehearsal and decided:
+
+- one target account for everything by default, with restricted roles as optional, separate hardening;
+- `verify-content` as the only torrent verification of the normal procedure, with `verify-decode` a target-only
+  diagnostic;
+- `users verify` right after the import and before any account change;
+- no change to the external `docker-stacks` repository in this pass.
+
+The corrections below change documentation and one test path only: no runtime behaviour, schema, verification
+semantics, cleanup gate, CLI text or release engineering changed. A new release candidate is not needed for them.
+
+| Finding | Disposition |
+|---|---|
+| D1 container example uses the torrent source variable | **Fixed.** `container.md` shows the three variables in an env file and says that the user migration reads only `MAGNETICO_MIGRATION_USERS_SOURCE_DSN` |
+| D2 `UPGRADE.md` lists `TOKEN` for ingest | **Fixed** by the rewrite (G1). The removal of the shared token is kept, in the part for development-build installations |
+| D3 checklist requires `users verify` after promotion | **Fixed.** Guide §8.3: verify right after the import, before promotion, sign-in or any `web user` command. It keeps the report and explains why later mismatches are expected and why re-importing is wrong. Checklist §12 refers to that verification and does not require another. Verification code unchanged |
+| D4 stale "no release / not run on real data" | **Fixed** in the guide, `container.md` and `crawler.md`. RC1 is recorded as published and rehearsed on real data. `UPGRADE.md` heading: "0.8.0 (unreleased; release candidate `0.8.0-rc1` published 2026-11-27)" |
+| D5 incomplete deployment order in `UPGRADE.md` | **Fixed.** Removed; the guide's phases are the only order |
+| D6 statistics grants name `magnetico_ingest_rt` | **Fixed.** The block grants to the restricted web role only. It is run by the owner account. The default single account needs no grant; `ingest` runs as the owner |
+| D7 membership grant needs `ADMIN OPTION` | **Fixed.** `web-deployment.md` §4 says who runs each statement. The marked grants block now grants to both roles directly (`TO magnetico_web_rt, magnetico_web_op`), so the owner account can run all of it, and role membership is not needed. Membership is described as an alternative, with its PostgreSQL 16+ requirement |
+| D8 two sources of truth for the user migration | **Fixed in the docs.** `web-deployment.md` §10 is a short pointer to the guide; the README no longer lists "user migration" for it. *Deferred:* `migrate users --help` still names `docs/web-deployment.md §10`. That section stays as a pointer, so the reference still resolves; changing the text is a CLI change for a later release |
+| G1 `UPGRADE.md` not a brief entry point | **Fixed.** A short 0.8.0 entry: what changes, the main breaks, the decisions, one link to the guide. The development-branch notes are dropped (the email-link change, the web-schema-init lock key, code pointers). A separate part for installations of development builds keeps what runtime messages point to: the removed crawl database setting, the removed ingest token, and the ingest and statistics schema reinitialisation (`internal/repocheck` checks the ingest one). The ingest memory figures and the quarantine SQL moved to `crawler.md` |
+| G2 verification ordering | **Fixed.** Guide §7: one run at a time (shared lock, exit 1 with the observed message). `verify-content` is the only required gate. `verify-decode` is Appendix A (target-only diagnostic, its prerequisites and limits). Both verdicts are required only in Appendix B (optional cleanup), which does not suggest waiving gates. Gate G7 is unchanged |
+| G3 audit SQL under `docs/wip/` | **Fixed.** Moved to `docs/legacy-users-audit.sql` (test updated). For image-only installations the guide gives the release-tag download (the GitHub mirror; Forgejo's raw URLs answer `curl` with a bot-protection redirect) and a `docker run postgres:17 psql` command with a libpq env file. It says the dry run is authoritative |
+| G4 no role or database SQL | **Fixed.** Guide §4.2: target account and database, and the legacy read-only account with exact grants. Guide §5: the freeze statements |
+| G5 report ownership and durability | **Fixed.** Run one-shot commands with `--user "$(id -u):$(id -g)"` and a directory you own on durable storage. Otherwise use a `10001`-owned directory and read through the image (`--entrypoint cat`) or as root. Guide §§4.1, 14; `container.md` |
+| G6 loopback testing in a container | **Fixed.** Guide §9.2 and `container.md`: host networking with a loopback listen address and an SSH tunnel, or a private TLS hostname. The guard is unchanged |
+| G7 no complete deployment example | **As the owner decided:** the `docker-stacks` link is marked as the PHP deployment, incompatible with 0.8.0, in README, `UPGRADE.md` and `container.md`. The owner updates that repository at the production deployment |
+| X1–X5 UX items | **Deferred** (code changes): X1 the lock message names the operation, X2 the verification ETA and `blobs=` counter, X3 duplicated final progress lines, X4 a configuration error printed as a run summary, X5 timestamps without a zone |
+
+**Found during this pass and fixed:**
+
+- `container.md` claimed that environment variables keep credentials out of process listings, but its examples passed
+  `-e NAME=postgres://…password…`, which is visible in `ps` on the host and stays in the shell history. The examples now
+  use `--env-file`, and the guide does the same; it no longer has `export` lines with credentials. The doc also says
+  that Docker access gives access to a running container's environment.
+- `crawler.md` began with a box describing the removed shared ingest token. It also said that the live-DHT acceptance
+  happened in the release-candidate phase, and one troubleshooting row still said "ingest was not restarted".
+- The guide still said there is no administrator UI and recommended "query-string masking" at the proxy, and its
+  §7.3 used a separate operator role. `web-deployment.md` said that no real reverse proxy had been exercised
+  (Traefik 3.8.0 was, in RC0) and described an interim root page.
+- `UPGRADE.md`, `crawler.md` and `container.md` pointed to each other for option tables and measurements that the
+  rewrite moved.
+
+**Recorded, not changed:**
+
+- The README says that stable releases also update `latest`. `.woodpecker/release.yaml` still never applies `latest`,
+  so publishing it needs a release-engineering change before 0.8.0. The operator docs now say only that release
+  candidates never move `latest`.
+- The administrator overview caches the statistics state for up to 60 s. A grant applied while `web` runs shows up
+  within a minute.
+
+**Validation of the corrections.** These checks ran on a disposable PostgreSQL 17.12 with the `0.8.0-rc1` image; the
+SQL was extracted from the documents themselves.
+
+- **Target account and database.** The guide's statements created them, and `schema-init` (including `pg_trgm`),
+  `web-schema-init`, `ingest-schema-init` and `stats-schema-init` ran through the guide's wrapper function as that
+  non-superuser owner. One env file held all three migration variables, and the user dry run read the users source and
+  wrote its report as the operator's uid, mode `0600`.
+- **Legacy read-only account.** The statements gave exactly `SELECT` on the documented tables.
+- **Freeze.** The statements refused the legacy writer roles and kept the read-only account connected.
+- **Restricted roles.** The marked grants block and the statistics block ran as the owner account. The owner's
+  `GRANT magnetico_web_rt TO magnetico_web_op` failed with the documented message, and a `CREATEROLE` creator could grant
+  it.
+- **Restricted roles in use.** `web` started as the runtime role with the guide's loopback host-network command. Every
+  administrator command ran as the operator role, and all six administrator pages loaded without a privilege warning.
+  As a negative control, revoking a statistics grant produced the warning.
+- **Audit.** The documented `docker run … psql -f -` audit ran read-only against the rehearsal's legacy application
+  database.
+- **Repository tests** (`MAGNETICO_TEST_REQUIRE_POSTGRES=1`). These passed: `internal/repocheck` (documentation
+  checks, links, the reinitialisation section), `internal/web/webschema` (the documented grants suffice; every missing
+  privilege is named), `internal/migration/users` (the audit at its new path agrees with the Go classifier) and
+  `internal/e2e/cli` (the documented grants applied verbatim, with the real binary starting as the runtime role and the
+  administrator commands running as the operator role). `go vet` and `golangci-lint` report 0 issues on the changed
+  package.
+  The two `--version` format tests of `internal/e2e/cli` fail on this workstation only, because its `go env` sets
+  `GOEXPERIMENT=nodwarf5` and the toolchain then reports `go1.27.4-X:nodwarf5`. With `GOEXPERIMENT=dwarf5` (the
+  default) they pass.
+

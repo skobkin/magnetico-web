@@ -1,16 +1,18 @@
--- Task 07H — read-only, aggregate-only audit of the LEGACY PHP database.
+-- Read-only, aggregate-only audit of the password hashes and data shape of the
+-- LEGACY PHP/Symfony 0.7.x application database (schema "users"), for the
+-- 0.8.0 migration (docs/migration_0.8.0.md, "Audit the legacy accounts").
 --
--- The owner runs this separately, with psql, against the legacy database
--- (schema "users"), for example:
+-- Run it with psql as the read-only legacy account, for example:
 --
---     psql "$LEGACY_DSN" -X -f docs/wip/07H-audit.sql
+--     psql -X -f legacy-users-audit.sql      # connection from PGHOST, PGUSER, ... or ~/.pgpass
 --
 -- It never writes (READ ONLY transaction, rolled back). Its output contains
 -- only counts and parameters: no password hash (not even a salt), no
--- username, no email, no token, no invitation code. The task assignment, the
--- plan (§3 D1) and the migrator's own dry-run are authoritative; the category
--- column here is an advisory SQL re-implementation of
--- internal/migration/users CategorizeHash and is tested against it.
+-- username, no email, no token, no invitation code. It is advisory: the
+-- migrator's own `magnetico migrate users --dry-run` is authoritative. The
+-- category column is an SQL re-implementation of internal/migration/users
+-- CategorizeHash and is tested against it (internal/migration/users/audit_test.go).
+-- (In the 0.8.0-rc1 tag this file was docs/wip/07H-audit.sql.)
 --
 -- category:
 --   verified     a hash the Go verifier accepts in full (every field

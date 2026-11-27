@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// runAudit executes docs/wip/07H-audit.sql (the owner's read-only audit) and
-// returns the rows of its two result sets as text cells.
+// runAudit executes docs/legacy-users-audit.sql (the operator's read-only
+// audit) and returns the rows of its two result sets as text cells.
 func runAudit(t *testing.T, dsn string) (formats, shape [][]string, header []string) {
 	t.Helper()
-	sql, err := os.ReadFile("../../../docs/wip/07H-audit.sql")
+	sql, err := os.ReadFile("../../../docs/legacy-users-audit.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

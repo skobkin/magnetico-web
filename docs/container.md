@@ -3,18 +3,17 @@
 One universal image holds the single `magnetico` executable and supports every subcommand (`crawl`, `ingest`, `web`,
 `migrate`, `dev`). You choose the service by the command you pass.
 
-> **Status.** The image and its publication are **configured** (`Dockerfile`, `.woodpecker/release.yaml`) and were
-> verified locally (build, smoke test, vulnerability scan), but **no image has been published yet**
-> and the pipeline has not run on Woodpecker. See [`release-engineering.md`](release-engineering.md) for what is verified
-> and what is not. The examples below use `0.8.0` as a placeholder for the release you pin.
+> **Status.** `0.8.0-rc1` is published on both registries and was used for a real-data migration rehearsal
+> ([report](wip/real-data-migration-report-0.8.0-rc1.md)). How releases are built and verified:
+> [`release-engineering.md`](release-engineering.md). The examples below use `0.8.0` for the release you pin.
 
 | | |
 |---|---|
 | Docker Hub | [`docker.io/skobkin/magnetico-web`](https://hub.docker.com/r/skobkin/magnetico-web) |
 | GitHub Container Registry | [`ghcr.io/skobkin/magnetico-web`](https://github.com/skobkin/magnetico-web/pkgs/container/magnetico-web) |
 | Platforms | `linux/amd64`, `linux/arm64` (one multi-platform image; the two registries carry the identical digest) |
-| Tags | the exact release only: `0.8.0-rc1`, `0.8.0`, … — **no** `latest`, `0.8`, `stable` or `edge` (the owner enables `latest` explicitly later). Pin the digest in production: `…/magnetico-web:0.8.0@sha256:…` |
-| Deployment stack | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) — it temporarily still describes the **old PHP** deployment until it is updated separately |
+| Tags | every release under its exact version (`0.8.0-rc1`, `0.8.0`, …); there are no `0.8`, `stable` or `edge` tags, and release candidates never move `latest`. Pin an exact version in production (optionally with its digest: `…/magnetico-web:0.8.0@sha256:…`) |
+| Deployment stack | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) still describes the **old PHP** deployment and is **incompatible with 0.8.0**; it will be updated separately. Use the examples on this page |
 
 ## What is in the image
 
@@ -42,9 +41,10 @@ The container runs as a non-root user with a read-only root filesystem, all capa
 `no-new-privileges` (`docker run --read-only --cap-drop ALL --security-opt no-new-privileges …`): that is how the smoke
 test runs it. Writable paths are only the volumes you mount (`/data` for the crawler; `/reports` for exports).
 
-**Bind mounts must be owned by `10001:10001`** (`chown 10001:10001 ./reports`); a root-owned bind mount is refused with
-`Permission denied` (the smoke test checks both directions). Named volumes created on first use inherit the ownership of
-`/data` and `/reports` from the image.
+**Bind mounts must be writable by the container user**: owned by `10001:10001` (`chown 10001:10001 ./reports`), or
+the one-shot command runs as your own user (`--user "$(id -u):$(id -g)"`, see below). A root-owned bind mount is refused
+with `Permission denied` (the smoke test checks both directions). Named volumes created on first use inherit the
+ownership of `/data` and `/reports` from the image.
 
 ## Web and ingest behind a TLS-terminating reverse proxy
 
@@ -53,13 +53,15 @@ timeouts, forwarded headers and what the proxy must not log are in [`web-deploym
 [`crawler.md`](crawler.md) §4). Listen on `0.0.0.0` **inside the container network only** and publish no host port.
 
 Initialise the schemas once, with the same image (non-destructive and idempotent; they refuse a legacy or incompatible
-schema):
+schema). `migrate.env` holds `MAGNETICO_MIGRATE_DATABASE=postgres://…` (see "Passing credentials" below). When you
+migrate from the PHP version, follow [`migration_0.8.0.md`](migration_0.8.0.md) instead: it runs these at specific
+points of the procedure.
 
 ```sh
-docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate schema-init
-docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate web-schema-init
-docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate ingest-schema-init
-docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… docker.io/skobkin/magnetico-web:0.8.0 migrate stats-schema-init   # optional: ingestion statistics for the Admin section
+docker run --rm --network db --env-file ./migrate.env docker.io/skobkin/magnetico-web:0.8.0 migrate schema-init
+docker run --rm --network db --env-file ./migrate.env docker.io/skobkin/magnetico-web:0.8.0 migrate web-schema-init
+docker run --rm --network db --env-file ./migrate.env docker.io/skobkin/magnetico-web:0.8.0 migrate ingest-schema-init
+docker run --rm --network db --env-file ./migrate.env docker.io/skobkin/magnetico-web:0.8.0 migrate stats-schema-init   # optional: statistics for the administrator section
 ```
 
 An older **development** `magnetico_ingest` schema without the `crawlers` table is refused, never repaired; see
@@ -130,7 +132,14 @@ networks:
 
 Both services verify their schema read-only at start and **fail closed** when it is missing, unsupported or the role
 lacks privileges (exit 1, a fixed message, no credentials). An unknown `MAGNETICO_WEB_*` / `MAGNETICO_INGEST_*` variable
-stops the service at start with the list of known ones.
+stops the service at start with the list of known ones. By default both connect with the same account, the owner of
+the database ([`web-deployment.md`](web-deployment.md) §4).
+
+**Testing before the public cutover.** The web service accepts a loopback `http://` public URL (development mode) only
+with a loopback listen address. With the bridge network above the listener is not on the host's loopback, so the service
+refuses to start; for a private test run one container with `network_mode: host` (or `--network host`),
+`MAGNETICO_WEB_LISTEN=127.0.0.1:PORT` and `MAGNETICO_WEB_PUBLIC_URL=http://127.0.0.1:PORT`, and reach it through an SSH
+tunnel, or use a private TLS hostname behind the proxy ([`migration_0.8.0.md`](migration_0.8.0.md) §9.2).
 
 ## Crawler with a persistent local queue and a UDP port
 
@@ -153,37 +162,60 @@ docker run -d --name magnetico-crawl --restart unless-stopped --init \
 
 ## Migration and administrative commands
 
-One-shot containers. Give them only the variables they need (connection strings in the **environment**, never on the
-command line, so they do not show up in process listings) and mount `/reports` for anything they write:
+One-shot containers. The complete migration procedure is [`migration_0.8.0.md`](migration_0.8.0.md); this section
+shows how to run its commands with the image.
+
+**Passing credentials.** Keep connection strings and passwords out of command arguments: an argument such as
+`-e MAGNETICO_MIGRATE_DATABASE=postgres://user:password@…` is visible in the process list of the host (`ps`) and stays in
+the shell history. Use either an env file or a name without a value:
+
+- `--env-file ./migrate.env`: one `NAME=value` per line, no quotes (Docker takes the value literally), `chmod 600`,
+  never committed;
+- `-e MAGNETICO_MIGRATE_DATABASE` (no `=`): Docker copies the value from your shell's environment, for example after
+  `set -a; . ./migrate.sh; set +a`.
+
+Inside the container the values are environment variables, which the process never logs. Anyone who may run
+`docker inspect` on a running container (root or the `docker` group) can read them, so treat Docker access as access to
+the credentials.
 
 ```sh
-mkdir -p reports && sudo chown 10001:10001 reports        # a bind mount must belong to the container user
+# migrate.env (chmod 600). The user migration reads only MAGNETICO_MIGRATION_USERS_SOURCE_DSN, never the torrent source.
+MAGNETICO_MIGRATE_DATABASE=postgres://magnetico:PASSWORD@db:5432/magnetico?sslmode=require
+MAGNETICO_MIGRATION_SOURCE_DSN=postgres://magnetico_legacy_ro:PASSWORD@legacy-db:5432/LEGACY_TORRENT_DB?sslmode=require
+MAGNETICO_MIGRATION_USERS_SOURCE_DSN=postgres://magnetico_legacy_ro:PASSWORD@legacy-db:5432/LEGACY_APP_DB?sslmode=require
+```
+
+**Reports.** Mount a directory on durable storage (not `/tmp`, which may be a RAM disk) at `/reports`. Run the command
+as your own user so that you can read what it writes; the files are created with mode `0600`:
+
+```sh
+mkdir -p /srv/magnetico/reports && chmod 700 /srv/magnetico/reports
 
 # the torrent import (resumable: re-run the same command after any interruption; exit 2 = interrupted)
-docker run --rm -e MAGNETICO_MIGRATION_SOURCE_DSN=postgres://… -e MAGNETICO_MIGRATE_DATABASE=postgres://… \
+docker run --rm --network db --env-file ./migrate.env \
   docker.io/skobkin/magnetico-web:0.8.0 migrate torrents --defer-secondary-indexes
 
 # the forensic export of the migration's operational state, kept OUTSIDE the container
-docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… -v "$PWD/reports:/reports" \
+docker run --rm --network db --env-file ./migrate.env --user "$(id -u):$(id -g)" -v /srv/magnetico/reports:/reports \
   docker.io/skobkin/magnetico-web:0.8.0 migrate errors export --output /reports/export.jsonl --manifest
 
-# the user migration, with its secret-free report
-docker run --rm -e MAGNETICO_MIGRATE_DATABASE=postgres://… -e MAGNETICO_MIGRATION_SOURCE_DSN=postgres://… \
-  -v "$PWD/reports:/reports" docker.io/skobkin/magnetico-web:0.8.0 \
-  migrate users --source-timezone Europe/Moscow --dry-run --report-json /reports/users-dry-run.json
+# the user migration's dry run, with its secret-free report
+docker run --rm --network db --env-file ./migrate.env --user "$(id -u):$(id -g)" -v /srv/magnetico/reports:/reports \
+  docker.io/skobkin/magnetico-web:0.8.0 migrate users --source-timezone Europe/Moscow --dry-run --report-json /reports/users-dry-run.json
 ```
 
-The retained export's manifest is what `migrate cleanup --execute --evidence-manifest /reports/export.jsonl.manifest.json`
-validates; the complete procedure, with every gate, is [`migration_0.8.0.md`](migration_0.8.0.md).
+Without `--user`, the directory must be owned by `10001:10001` and the files belong to uid `10001`; read them as root
+or through the image: `docker run --rm -v /srv/magnetico/reports:/reports:ro --entrypoint cat
+docker.io/skobkin/magnetico-web:0.8.0 /reports/users-dry-run.json`.
 
 **Interactive password entry.** `web user set-password` reads the password from the terminal with echo off (twice)
 when stdin is a terminal, and one line from stdin otherwise. Never put a password in an argument or an environment
 variable:
 
 ```sh
-docker run --rm -it -e MAGNETICO_WEB_DATABASE=postgres://… -e MAGNETICO_WEB_PUBLIC_URL=https://magnet.example.org \
-  docker.io/skobkin/magnetico-web:0.8.0 web user set-password alice          # interactive, echo off
-printf '%s\n' "$PW" | docker run --rm -i -e MAGNETICO_WEB_DATABASE=… docker.io/skobkin/magnetico-web:0.8.0 web user set-password alice
+# web.env (chmod 600): MAGNETICO_WEB_DATABASE=postgres://… and MAGNETICO_WEB_PUBLIC_URL=https://magnet.example.org
+docker run --rm -it --network db --env-file ./web.env docker.io/skobkin/magnetico-web:0.8.0 web user set-password alice   # interactive, echo off
+printf '%s\n' "$PW" | docker run --rm -i --network db --env-file ./web.env docker.io/skobkin/magnetico-web:0.8.0 web user set-password alice
 ```
 
 `web user add` and the other link-printing commands need `MAGNETICO_WEB_PUBLIC_URL` (the printed setup link points at
@@ -220,8 +252,8 @@ Measured, not guessed; see the reports for the dataset and configuration of each
 | Service | Container limit | `GOMEMLIMIT` | Source |
 |---|---|---|---|
 | `web` | **1 GiB** (512–640 MiB survived the typical-shape test but leave no margin for adversarial file lists and are not recommended) | `768MiB` (a soft Go heap target, a different number from the container limit) | `docs/wip/07J-web-integration-security-report.md` §6, `web-deployment.md` §7 |
-| `ingest` | **1 GiB** (512 MiB is not recommended: OOM-killed in the worst case without `GOMEMLIMIT`) | `256MiB` (observed 139 MiB resident at 20 records/s) | `docs/wip/06-crawler-ingest-results.md`, `UPGRADE.md` |
-| `crawl` | no value was measured under a limit; resident memory is ≈ 30 MiB. Provision disk beyond `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` (WAL and indexes are extra) | not needed | `UPGRADE.md`, `crawler.md` §6 |
+| `ingest` | **1 GiB** (512 MiB is not recommended: OOM-killed in the worst case without `GOMEMLIMIT`) | `256MiB` (observed 139 MiB resident at 20 records/s) | `docs/wip/06-crawler-ingest-results.md`, `crawler.md` §2 |
+| `crawl` | no value was measured under a limit; resident memory is ≈ 30 MiB. Provision disk beyond `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` (WAL and indexes are extra) | not needed | `crawler.md` §6 |
 
 `GOMEMLIMIT` is a target, not a limit: the process can exceed it. The recommendations are for synthetic data of the
 documented shape and are not a claim about every workload; the RC0 checklist asks for confirmation with the real image.

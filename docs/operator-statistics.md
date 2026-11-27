@@ -18,8 +18,8 @@ Every page is read-only. Changes are made with the command line (`magnetico web 
 ## Setting it up
 
 1. `magnetico migrate stats-schema-init` once (idempotent, uses the default account like the other `*-schema-init` commands). Without it `ingest` and `web` still start; the dashboard says "statistics schema not initialised".
-2. Give the `web` role the read grants of [`docs/web-deployment.md`](web-deployment.md) (statistics tables, column-level on the crawler registry and the quarantine). Without them only the affected pages say what is missing.
-3. Register crawlers (below). The default single-account deployment needs nothing else.
+2. Only if `web` runs as the optional restricted runtime role: give it the read grants of [`docs/web-deployment.md`](web-deployment.md) §4 (statistics tables, column-level on the crawler registry and the quarantine). Without them only the affected pages say what is missing. The default single account needs no grant.
+3. Register crawlers (below).
 
 `MAGNETICO_INGEST_STATS_DISABLED=true` is the kill switch: no writer and none of its three database connections. The statistics use three PostgreSQL connections per `ingest` process (flush, heartbeat, sampler); count them in `max_connections`.
 

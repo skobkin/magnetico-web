@@ -4,159 +4,88 @@ User-facing and breaking changes that require action when deploying a new versio
 Entries are grouped by release date. Read the section covering your current version
 before upgrading.
 
-## Unreleased 0.8.0 (development branch)
+## 0.8.0 (unreleased; release candidate `0.8.0-rc1` published 2026-11-27)
 
 > [!WARNING]
-> **0.8.0 is a major, partially manual, backward-incompatible migration.** It replaces the PHP/Symfony
-> application and the old crawler, stores torrents in a **new database in a new format**, and imports
-> accounts with a separate tool. There is no in-place upgrade, the cutover cannot be fully undone, and
-> several steps need operator decisions (password-hash audit, time zone, administrator accounts,
-> maintenance window). **Do not deploy it over an existing installation.** Follow the step-by-step guide
-> in [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md) and keep the old databases and backups until
-> you have validated the new system.
+> **0.8.0 is not an in-place upgrade.** It is an incompatible rewrite that needs a new database and an explicit,
+> partly manual migration with a one-way cutover. Do not point the new image at your existing deployment. Follow
+> [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md), rehearse it on copies, and keep the old databases and backups
+> until you have validated the new system.
 
-### Starting the Go application with the old PHP deployment's environment (temporary warning)
+**What 0.8.0 is**
 
-Magnetico Web 0.8.0 is a rewrite in Go: the PHP application's configuration and database layout are **incompatible**
-with it, and nothing is migrated or translated automatically. To save operators who point the new image at their old
-deployment from reading unrelated configuration errors, every command except `--help`, `-h` and `--version` first checks
-the process environment for the **names** `APP_DATABASE_URL` and
-`MAGNETICOD_DATABASE_URL` (the two variables only the PHP application used; the generic `APP_ENV`, `APP_SECRET`,
-`MAILER_DSN`, … are deliberately not triggers). If one is present it prints a boxed warning on standard error, before
-the configuration is read:
+- **A rewrite in Go.** One executable, `magnetico`, replaces the PHP/Symfony application and the old crawler. Its
+  subcommands are `web` (the site and the API), `crawl` (the DHT crawler), `ingest` (receives the crawlers' records next
+  to PostgreSQL) and `migrate` (schemas and the migration). The image keeps its name, `docker.io/skobkin/magnetico-web`,
+  but it is a different program: it has no default command, runs as `10001:10001` and reads only `MAGNETICO_*`
+  settings. No PHP configuration is reused.
+- **A new database.** Torrents are stored in a new compact format in a **new, separate PostgreSQL database**. The legacy
+  databases are only read, never upgraded in place.
+- **An explicit migration.** `magnetico migrate torrents` copies the torrents and `magnetico migrate users` imports the
+  accounts. Nothing is migrated at startup. Started with the old PHP environment (`APP_DATABASE_URL` or
+  `MAGNETICOD_DATABASE_URL` set), 0.8.0 only prints a warning that points here. The warning is temporary and planned
+  for removal around 0.10.0.
+- **A new crawler.** The legacy crawler is retired. The new `magnetico crawl` has no database access: it queues records
+  locally and delivers them over HTTPS to `magnetico ingest`, with a separate credential for each crawler
+  ([`docs/crawler.md`](docs/crawler.md)).
 
-```
-================================================================================
-WARNING: the environment of the previous PHP deployment of Magnetico Web was detected
-         (variables set: APP_DATABASE_URL).
+**Main compatibility breaks** (the complete table is in the guide, §1)
 
-Magnetico Web has been rewritten in Go. The old deployment configuration and the old
-database layout are incompatible with this application. Explicit migration and
-configuration changes are required; nothing is migrated or translated automatically
-and no database is modified by this notice.
+- Everyone signs in again, because sessions are not migrated. Passwords carry over. Accounts whose hash format is
+  unsupported need a reset link issued by an administrator.
+- Legacy API tokens become RSS-only tokens. The v1 JSON API is removed: API clients need a new token and `/api/v2`. The
+  v1 RSS URL keeps working (it is deprecated and can be switched off).
+- Email addresses are imported unverified. SMTP is optional.
+- Legacy page URLs answer `404` (there are no redirects), reCAPTCHA is gone, and search covers torrent names only.
+- The [`docker-stacks`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) deployment still
+  describes the PHP version and does not work with 0.8.0.
 
-Upgrade instructions: https://github.com/skobkin/magnetico-web/blob/master/UPGRADE.md
-(Temporary notice; planned for removal around version 0.10.0.)
-================================================================================
-```
+**Decisions to prepare** (guide §3):
 
-The old PHP image had no command of its own, so a deployment whose image tag is merely bumped starts this image
-**without arguments**: the banner is printed before the usage error then too (the usage text and exit status 1 are
-unchanged). The warning prints variable **names only**, never a value, a DSN or a credential; it changes no exit code, never
-connects to anything and does not weaken the fail-closed schema verification or the required-configuration checks (the
-real error follows it unchanged). The link targets `master`: the instructions are this file's 0.8.0 section and
-[`docs/migration_0.8.0.md`](docs/migration_0.8.0.md), which reach `master` when the owner merges the 0.8.0 branch.
+- the legacy PHP time zone;
+- the outcome of the password-hash audit, and which accounts will need a reset link;
+- the first administrator;
+- SMTP;
+- the public URL and the reverse-proxy settings, including its access log;
+- the maintenance window, sized by a rehearsal (the torrent import plus `migrate verify-content`);
+- whether to run the optional `migrate cleanup` (the default is to keep the migration state).
 
-**This warning is temporary and is intended to be removed around version 0.10.0** (the code is the one call in
-`internal/app/app.go` and the package `internal/legacywarn`; its tests are `internal/legacywarn` and
-`internal/e2e/cli/legacywarn_test.go`).
+**Procedure:** [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md) is the authoritative step-by-step procedure; this
+entry is only an overview. `0.8.0-rc1` was rehearsed on a copy of a real 0.7.x installation
+([report](docs/wip/real-data-migration-report-0.8.0-rc1.md)).
 
-### The crawler no longer connects to PostgreSQL (distributed crawler/ingest)
+### Only for installations of 0.8.0 development builds
 
-`magnetico crawl` now delivers metadata to a separate **`magnetico ingest`** service over
-authenticated HTTP. The crawler keeps a durable local queue (SQLite, WAL) so records survive
-ingest or network outages; the ingest service queues them durably in PostgreSQL and a single
-consumer stores them. Design: `docs/specs/crawler-ingest-delivery-v1.md`.
+Skip this part when you upgrade from 0.7.x. It is for installations that ran a pre-release development build of 0.8.0,
+and some startup errors point here.
 
-**Removed from `crawl`** (stale values fail loudly at startup, with a pointer to this file):
-
-| Removed | Replacement |
-|---|---|
-| `--database`, `MAGNETICO_CRAWL_DATABASE`, yaml `databaseURL` | none — the crawler has no database |
-
-**New crawler settings**
-
-| Flag | Environment | YAML | Default |
-|---|---|---|---|
-| `--ingest-url` | `MAGNETICO_CRAWL_INGEST_URL` | `ingestURL` | — (required; `https://`, or `http://` to a loopback host only) |
-| *(none)* | `MAGNETICO_CRAWL_INGEST_TOKEN` | *(none)* | — (required: **this crawler's own** token from `magnetico ingest crawler add`; ≥ 32 bytes; **environment only**) |
-| `--queue-dir` | `MAGNETICO_CRAWL_QUEUE_DIR` | `queueDir` | `magnetico-crawl-queue` |
-| `--queue-max-bytes` | `MAGNETICO_CRAWL_QUEUE_MAX_BYTES` | `queueMaxBytes` | `1073741824` |
-| `--leech-max-active` | `MAGNETICO_CRAWL_LEECH_MAX_ACTIVE` | `leechMaxActive` | `32` |
-
-Put the queue directory on a **local** filesystem that honours `fsync` (ext4/xfs; not NFS/SMB) and
-mount it as a persistent volume in Docker. The directory is locked: one crawler per queue. `magnetico
-crawl check-queue [--queue-dir DIR] [--full]` runs SQLite integrity diagnostics (run it while the
-crawler is stopped). Queued records are never discarded on shutdown; on `SIGTERM` the crawler stops
-the DHT, cancels leeches, commits what is buffered (5 s), lets the sender finish its request (30 s)
-and closes the queue with a bounded wait. If the SQLite writer is stuck in the operating system the
-process exits with status 3 and SQLite recovers the queue at the next start.
-
-**New `ingest` service** (`magnetico ingest`; environment `MAGNETICO_INGEST_*`, see
-`magnetico ingest --help`): `LISTEN` (default `127.0.0.1:8080`, plain HTTP — terminate TLS in a
-reverse proxy such as Traefik), `TOKEN` (required, ≥ 32 bytes, environment only, must equal the
-crawler's), `DATABASE`, optional `QUEUE_DATABASE`, `QUEUE_MAX_BYTES` (default 2 GiB),
-`CACHE_MAX_BYTES` (default 8 MiB), `CACHE_DISABLED`, `ALLOW_NON_DURABLE_DB` (development only).
-PostgreSQL must run with `fsync=on` (ingest refuses to start otherwise). The proxy must allow request
-bodies of at least 17 MiB on `/api/ingest/v1/torrents`.
-
-**Memory:** set `GOMEMLIMIT=256MiB` on `magnetico ingest` (measured on synthetic load at 40 records/s over two
-hours plus bursts: mean RSS 459 → 304 MiB, peak 621 → 354 MiB; ingest CPU rose slightly, from about 5.0 % to
-5.2 % of one core, with no measurable throughput or backlog regression and GC CPU still small; see
-`docs/wip/06-crawler-ingest-results.md`). This is a Go runtime memory *target*, not a hard RSS or container
-limit: the process can exceed it. For initial staging give the container a **1 GiB** memory limit: with
-`GOMEMLIMIT=256MiB` it survived every tested case, including records near the 16 MiB limit and eight
-simultaneous near-limit submissions (peak 518 MiB). A 512 MiB limit is not recommended (the default runtime was
-OOM-killed there in that worst case; with `GOMEMLIMIT` it ran at the limit). 1 GiB has been tested on synthetic
-data only and is not claimed to suffice for every workload. The crawler needs no setting (RSS ≈ 30 MiB).
-
-**Per-crawler credentials replace the shared ingest token.** `MAGNETICO_INGEST_TOKEN` is **removed from the
-ingest service** with no fallback: setting it is a startup error naming the replacement. Register each crawler with
-`magnetico ingest crawler add <name>` (the generated UUID and the `mgc_…` token are printed once), and give that token to
-the crawler as `MAGNETICO_CRAWL_INGEST_TOKEN`. A crawler's identity comes only from its credential; the crawler no
-longer sends or stores an identity. Rotation (`rotate-token`), `disable` and `enable` take effect on a running ingest
-within 60 seconds. Protocol version 1 is unchanged.
-
-**Deployment order** (new databases or after the migration):
-
-1. `magnetico migrate schema-init`
-2. `magnetico migrate torrents` (legacy import), verification, optional `cleanup` (offline only, before any ingest; by default the migration schema is kept)
-3. `magnetico migrate ingest-schema-init` (creates the `magnetico_ingest` schema; idempotent)
-4. optionally `magnetico migrate stats-schema-init` (the statistics of the administrator section; `ingest` and `web` run without it)
-5. register each crawler (`magnetico ingest crawler add <name>`), start `magnetico ingest`, then the crawlers
-
-`ingest` refuses to start while an import is running or incomplete. Records ingested after the
-import make earlier migration-verification verdicts stale.
-
-**Reinitialising an older development statistics schema.** Task 09A changed the initial definition of `magnetico_stats` (version 1, never released): a quota-utilisation gauge, per-quantity approximation flags, the unevaluated-reconciliation count and a three-state storage reconciliation. A development `magnetico_stats` created before it fails the structural check (`ingest` and `web` start without it, the dashboard says so); nothing alters it. Statistics are disposable: `DROP SCHEMA magnetico_stats CASCADE;` then `magnetico migrate stats-schema-init`, and grant the roles again as in `docs/web-deployment.md`. Only the collected aggregates are lost. The advisory-lock key of `migrate web-schema-init` also changed (it used to equal the ingest consumer's, so the command waited while ingest ran); no action is needed, a lock is held only by a running process.
+- **`crawl` has no database setting.** `--database`, `MAGNETICO_CRAWL_DATABASE` and the YAML key `databaseURL` were
+  removed and are refused at startup. Set `MAGNETICO_CRAWL_INGEST_URL` (`ingestURL`) and the crawler's own
+  `MAGNETICO_CRAWL_INGEST_TOKEN` (environment only) instead ([`docs/crawler.md`](docs/crawler.md) §6).
+- **The shared ingest token was removed.** `MAGNETICO_INGEST_TOKEN` is refused at startup, with no fallback. Register
+  each crawler with `magnetico ingest crawler add <name>` and give it the printed token as
+  `MAGNETICO_CRAWL_INGEST_TOKEN` ([`docs/crawler.md`](docs/crawler.md) §3).
 
 **Reinitialising an older development ingest schema.** The `crawlers` table (per-crawler credentials) is part of the
-initial `magnetico_ingest` definition, which has never been released, so there is no upgrade command. A development
-database whose `magnetico_ingest` predates it is refused by `ingest` and `magnetico ingest crawler …` with
-`missing table crawlers`; nothing repairs or alters it. Reinitialise it by hand:
+initial `magnetico_ingest` definition, so there is no upgrade command. `ingest` and `magnetico ingest crawler …` refuse a
+development database whose `magnetico_ingest` predates it, with `missing table crawlers`. Nothing repairs or alters it.
+Reinitialise it by hand:
 
-1. stop `magnetico ingest` (records already acknowledged to crawlers but not yet processed are **lost** by the next
-   step; let the queue drain first if they matter);
+1. Stop `magnetico ingest`. The next step **loses** records that crawlers already had acknowledged but that were not
+   processed yet; if they matter, let the queue drain first.
 2. `DROP SCHEMA magnetico_ingest CASCADE;`
 3. `magnetico migrate ingest-schema-init`
 4. `magnetico ingest crawler add <name>` once per crawler, and give each crawler its token.
 
 Only `magnetico_ingest` is touched: the torrent dataset (`magneticod`), the web schema (`magnetico_web`: users, tokens,
-invitations) and `magnetico_stats` are left as they are. Statistics rows of crawlers of the dropped registry
-(`magnetico_stats.crawler_activity`) stay, unreferenced and harmless: the Crawlers page lists the registry, so they are
-not shown; drop `magnetico_stats` as well (`DROP SCHEMA magnetico_stats CASCADE;`, then `migrate stats-schema-init`) only
-if you want its history gone — statistics are disposable.
+invitations) and `magnetico_stats` stay as they are. Statistics rows of crawlers from the dropped registry
+(`magnetico_stats.crawler_activity`) stay too, unreferenced and harmless; the Crawlers page lists only the registry.
 
-**Quarantine.** Both sides keep records that are permanently invalid in a quarantine table
-(`quarantine` in the crawler's SQLite file, `magnetico_ingest.quarantine` in PostgreSQL). Nothing is
-deleted automatically and quarantined bytes count toward the quota. Inspect with SQL, for example
-`SELECT reason_code, count(*) FROM magnetico_ingest.quarantine GROUP BY 1;`; to retry after fixing
-the cause, `INSERT INTO magnetico_ingest.queue (info_hash, format, payload, payload_bytes) SELECT
-info_hash, format, payload, payload_bytes FROM magnetico_ingest.quarantine WHERE …;` followed by the
-matching `DELETE` in the same transaction (the usage counter is maintained by triggers).
-
-### A password change now cancels pending email confirmation links
-
-No action is required and there is no schema change. Every password write of an existing account (the account page's
-password change, a completed password reset or setup link, `magnetico web user set-password`) now also deletes that
-account's outstanding **email confirmation** links in the same transaction; before, a link mailed before the change
-stayed usable for up to 24 hours and could still confirm or replace the address afterwards. The stored email address
-and its verification status are **not** changed: a verified address stays verified and keeps working for password
-recovery, an unverified one stays stored and unverified. Only the link that was waiting is cancelled, so a pending
-replacement address has to be requested again from the account page (the link in an already delivered email then shows
-the generic "link cannot be used" page). A request that was authorized before the change cannot create a new pending
-link after it. Sessions, API tokens and RSS tokens are revoked exactly as before. `set-password` prints how many
-links it cancelled; the reset and setup email and page, the confirmation email and the account page say the same.
+**Reinitialising an older development statistics schema.** A development `magnetico_stats` created before the final
+definition fails the structural check. `ingest` and `web` start without it, and the administrator overview says so;
+nothing alters it. Statistics are disposable: `DROP SCHEMA magnetico_stats CASCADE;`, then
+`magnetico migrate stats-schema-init`, then apply its grants again if you use the restricted web role
+([`docs/web-deployment.md`](docs/web-deployment.md) §4). Only the collected aggregates are lost.
 
 ## 2026-11-21 (PHP 0.7.x line, unreleased; superseded by 0.8.0)
 

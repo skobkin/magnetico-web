@@ -12,7 +12,7 @@ Upgrading from the PHP/Symfony 0.7.x version is a manual migration: see [`UPGRAD
 |---|---|
 | **Docker Hub** | [`skobkin/magnetico-web`](https://hub.docker.com/r/skobkin/magnetico-web) (`docker.io/skobkin/magnetico-web`) |
 | **GitHub Container Registry** | [`ghcr.io/skobkin/magnetico-web`](https://github.com/skobkin/magnetico-web/pkgs/container/magnetico-web) |
-| **Deployment stack** | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) |
+| **Deployment stack** | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web): still the **PHP 0.7.x** deployment, **incompatible with 0.8.0** until it is updated; use [`docs/container.md`](docs/container.md) |
 | **Native binaries** | Linux amd64 and arm64 archives with SHA-256 checksums on the [Forgejo releases](https://git.skobk.in/skobkin/magnetico-web/releases) |
 
 One multi-platform image (`linux/amd64`, `linux/arm64`) holds the single `magnetico` executable and every subcommand.
@@ -60,7 +60,7 @@ export/import modes, and the SQLite, legacy-PostgreSQL, RabbitMQ, ZeroMQ and Bit
 | [`UPGRADE.md`](UPGRADE.md) | Breaking changes per release |
 | [`docs/migration_0.8.0.md`](docs/migration_0.8.0.md) | Step-by-step migration from the legacy PHP/Symfony version |
 | [`docs/container.md`](docs/container.md) | Running the image: services, volumes, healthchecks, shutdown, resources |
-| [`docs/web-deployment.md`](docs/web-deployment.md) | Web service configuration, database roles, reverse proxy, administrator commands, user migration |
+| [`docs/web-deployment.md`](docs/web-deployment.md) | Web service configuration, database roles, reverse proxy, administrator commands |
 | [`docs/crawler.md`](docs/crawler.md) | Running `magnetico crawl` on a separate machine with `magnetico ingest` next to PostgreSQL |
 | [`docs/operator-statistics.md`](docs/operator-statistics.md) | Ingest statistics and the administrator section |
 | [`docs/projects_differences.md`](docs/projects_differences.md) | How 0.8.0 differs from `boramalper/magnetico` and `tgragnato/magnetico`: lineage, architecture, rationale and trade-offs |
