@@ -16,9 +16,9 @@ Upgrading from the PHP/Symfony 0.7.x version is a manual migration: see [`UPGRAD
 | **Native binaries** | Linux amd64 and arm64 archives with SHA-256 checksums on the [Forgejo releases](https://git.skobk.in/skobkin/magnetico-web/releases) |
 
 One multi-platform image (`linux/amd64`, `linux/arm64`) holds the single `magnetico` executable and every subcommand.
-Every release is tagged with its exact version (`0.8.0`, …), and stable releases also update `latest`; pin the
-digest in production. The image runs as `10001:10001`, with `/data`
-(the crawler queue) and `/reports` (migration reports and exports) as the only writable places.
+Every release is tagged with its exact version (`0.8.0`, …), and stable releases also update `latest`. The image runs
+as `10001:10001`, with `/data` (the crawler queue) and `/reports` (migration reports and exports) as the only writable
+places.
 
 ```sh
 docker run --rm docker.io/skobkin/magnetico-web:0.8.0 --version
