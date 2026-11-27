@@ -43,9 +43,8 @@ that does not start with a version triggers **neither** workflow, so it can neve
 checked, the tag must still be valid for both consumers: SemVer for GoReleaser and the Docker tag alphabet
 (`[A-Za-z0-9_.-]`, at most 128 characters) for the image; a `+build` suffix, for example, would fail `release-docker`
 after `release-forgejo` succeeded (see the recovery section). A tag with a suffix publishes exactly its version tag
-(`0.8.0-rc1`) and a **prerelease** on Forgejo (GoReleaser's `prerelease: auto`); a stable tag publishes the stable version and a stable release. **No floating alias is applied**
-(`latest` is the owner's later, deliberate decision: add it to the `tags` of `release-docker` and update
-`internal/repocheck` on purpose).
+(`0.8.0-rc1`) and a **prerelease** on Forgejo (GoReleaser's `prerelease: auto`); a stable tag publishes the stable version and a stable release. Every published image is also tagged **`latest`**;
+no other floating alias is applied.
 
 ## What runs when
 
@@ -87,7 +86,7 @@ GoReleaser's changelog.
 | `govulncheck` | pinned v1.10.0 on the step's Go 1.27.4 toolchain, both tag sets |
 | `openapi` | the OpenAPI document and the real binary's responses against it |
 | `native-snapshot`, `native-smoke` | `goreleaser check`, a snapshot build of both archives and `ci/native-smoke.sh`: checksums, licence files, the uPlot script embedded in the executable, `CGO_ENABLED=0`, the right `GOARCH`, no build tags, the Go floor |
-| `workflow-invariants` | `internal/repocheck` and the CI tools' tests: the workflow files' own security properties (no secret or privilege in `ci.yaml`, tag-only release, no `latest`, the Go floor, ...) |
+| `workflow-invariants` | `internal/repocheck` and the CI tools' tests: the workflow files' own security properties (no secret or privilege in `ci.yaml`, tag-only release, the release tag plus `latest`, the Go floor, ...) |
 
 Timing-sensitive suites run alone: `-p 3` is verified for a quiet agent and failures are never rerun, so `test` waits for
 lint, vet, build and the Dockerfile check, the lighter checks run after `test`, and `migration-e2e` (pull requests)

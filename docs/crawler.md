@@ -154,7 +154,7 @@ docker pull docker.io/skobkin/magnetico-web:0.8.0
 docker image inspect --format '{{index .RepoDigests 0}}' docker.io/skobkin/magnetico-web:0.8.0   # record the digest
 ```
 
-Release candidates never move `latest`. The image's entrypoint is `magnetico` (pass the subcommand as the command) and it runs as **`10001:10001`**: a named volume at `/data` is writable out of the box, a **bind mount must be `chown 10001:10001`**. `MAGNETICO_CRAWL_QUEUE_DIR=/data` is the image default.
+`latest` follows the most recently published release; pin an exact version instead. The image's entrypoint is `magnetico` (pass the subcommand as the command) and it runs as **`10001:10001`**: a named volume at `/data` is writable out of the box, a **bind mount must be `chown 10001:10001`**. `MAGNETICO_CRAWL_QUEUE_DIR=/data` is the image default.
 
 Settings (environment, which is the recommended way in containers; every setting except the token also has a flag and a YAML key; `magnetico crawl --help` lists them all):
 

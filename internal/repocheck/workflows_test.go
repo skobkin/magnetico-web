@@ -472,20 +472,15 @@ func TestDockerReleaseKeepsTheAgreedRepositoriesPlatformsAndTag(t *testing.T) {
 	if got := toStrings(set["platforms"]); strings.Join(got, ",") != "linux/amd64,linux/arm64" {
 		t.Errorf("platforms = %v, want linux/amd64 and linux/arm64", got)
 	}
-	// Only the release tag is applied. `latest` is the owner's later, deliberate decision.
-	if got := toStrings(set["tags"]); len(got) != 1 || got[0] != "${CI_COMMIT_TAG}" {
-		t.Errorf("tags = %v, want exactly ${CI_COMMIT_TAG}", got)
+	// The release tag and latest (the owner's decision for the first stable release, 0.8.0).
+	if got := toStrings(set["tags"]); strings.Join(got, ",") != "${CI_COMMIT_TAG},latest" {
+		t.Errorf("tags = %v, want exactly ${CI_COMMIT_TAG} and latest", got)
 	}
 	if set["default_labels"] != false {
 		t.Error("the plugin's automatic labels must stay off (they override the Dockerfile's source label with the Forgejo URL)")
 	}
 	if set["dockerfile"] != "Dockerfile" {
 		t.Errorf("dockerfile = %v", set["dockerfile"])
-	}
-	for _, l := range strings.Split(commentFree(load(t, "release.yaml").raw), "\n") {
-		if regexp.MustCompile(`\blatest\b`).MatchString(l) {
-			t.Errorf("release.yaml applies latest: %q", strings.TrimSpace(l))
-		}
 	}
 }
 

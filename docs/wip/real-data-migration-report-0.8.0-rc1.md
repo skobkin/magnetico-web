@@ -352,9 +352,9 @@ semantics, cleanup gate, CLI text or release engineering changed. A new release 
 
 **Recorded, not changed:**
 
-- The README says that stable releases also update `latest`. `.woodpecker/release.yaml` still never applies `latest`,
-  so publishing it needs a release-engineering change before 0.8.0. The operator docs now say only that release
-  candidates never move `latest`.
+- The README says that stable releases also update `latest`, but `.woodpecker/release.yaml` never applied it. On the
+  owner's decision, `latest` was added to the image's tags in a separate commit, before the first stable release
+  (0.8.0).
 - The administrator overview caches the statistics state for up to 60 s. A grant applied while `web` runs shows up
   within a minute.
 
