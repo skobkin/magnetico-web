@@ -357,10 +357,14 @@ func TestShutdownCutsLingerAndAttemptsOneFinalDispatch(t *testing.T) {
 	})
 }
 
+// The queue is filled before the sender runs, as in the backlog test above: with the sender
+// already running, 520 race-slowed durable appends can outlast the linger, and the idle poll
+// then dispatches whatever has been appended so far as a partial batch.
 func TestRecoveryAfterIngestOutageKeepsBackoffAndDrainsInFullBatches(t *testing.T) {
 	sub := &countingSubmitter{results: []SubmitResult{{Kind: SubmitRetryable, Status: 503}, {Kind: SubmitRetryable, Status: 503}}}
-	r := startRun(t, 800*time.Millisecond, sub)
-	r.add(t, 1, 520) // 256 + 256 + 8
+	r := newUnstartedRun(t, 800*time.Millisecond, sub)
+	r.add(t, 1, 520) // 256 + 256 + 8; Wake before the sender runs is harmless
+	r.start(t)
 	waitUntil(t, "the first two full batches after the outage", 8*time.Second, func() bool {
 		ok := 0
 		for _, c := range sub.snapshot() {
