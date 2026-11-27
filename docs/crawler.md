@@ -96,7 +96,7 @@ Recommendations:
 # docker-compose.ingest.yml — main server (the image runs as 10001:10001 and its entrypoint is `magnetico`)
 services:
   ingest:
-    image: docker.io/skobkin/magnetico-web:0.8.0    # pin the release (and, better, its digest); ghcr.io/skobkin/magnetico-web carries the same digest
+    image: docker.io/skobkin/magnetico-web:0.8.0    # ghcr.io/skobkin/magnetico-web carries the same image
     command: ["ingest"]
     restart: unless-stopped
     environment:
@@ -147,14 +147,13 @@ The main server needs inbound TCP 443 (Traefik) only; PostgreSQL stays on the pr
 
 ## 6. The crawler container and its persistent queue
 
-Image: `docker.io/skobkin/magnetico-web` (also `ghcr.io/skobkin/magnetico-web`, the identical digest), one multi-platform image for every subcommand; see [`container.md`](container.md). `0.8.0` in this guide stands for the release you pin. Pin the exact release (optionally its digest) and pull it explicitly:
+Image: `docker.io/skobkin/magnetico-web` (also `ghcr.io/skobkin/magnetico-web`, the identical digest), one multi-platform image for every subcommand; see [`container.md`](container.md). `0.8.0` in this guide stands for the release you run:
 
 ```bash
 docker pull docker.io/skobkin/magnetico-web:0.8.0
-docker image inspect --format '{{index .RepoDigests 0}}' docker.io/skobkin/magnetico-web:0.8.0   # record the digest
 ```
 
-`latest` follows the most recently published release; pin an exact version instead. The image's entrypoint is `magnetico` (pass the subcommand as the command) and it runs as **`10001:10001`**: a named volume at `/data` is writable out of the box, a **bind mount must be `chown 10001:10001`**. `MAGNETICO_CRAWL_QUEUE_DIR=/data` is the image default.
+`latest` follows the most recently published release. The image's entrypoint is `magnetico` (pass the subcommand as the command) and it runs as **`10001:10001`**: a named volume at `/data` is writable out of the box, a **bind mount must be `chown 10001:10001`**. `MAGNETICO_CRAWL_QUEUE_DIR=/data` is the image default.
 
 Settings (environment, which is the recommended way in containers; every setting except the token also has a flag and a YAML key; `magnetico crawl --help` lists them all):
 
@@ -176,7 +175,7 @@ Settings (environment, which is the recommended way in containers; every setting
 # docker-compose.crawler.yml — crawler machine
 services:
   crawler:
-    image: docker.io/skobkin/magnetico-web:0.8.0    # pin the release (and, better, its digest)
+    image: docker.io/skobkin/magnetico-web:0.8.0
     command: ["crawl"]
     restart: unless-stopped
     environment:
@@ -260,7 +259,7 @@ How to read the three lists:
 
 ## 8. Upgrades and token rotation
 
-Upgrade by pinning the next release in the image reference, `docker compose pull`, `docker compose up -d`. Deploy ingest first when a release changes the ingest API (check `UPGRADE.md`), then the crawlers; a newer crawler that the server rejects stops quarantining after a run of consecutive rejections and keeps the records (`guard_trips` in the summary). For token rotation (`magnetico ingest crawler rotate-token`, effective on a running ingest within 60 seconds) see §3.
+Upgrade with `docker compose pull` and `docker compose up -d` (change the image tag first if you use a version tag). Deploy ingest first when a release changes the ingest API (check `UPGRADE.md`), then the crawlers; a newer crawler that the server rejects stops quarantining after a run of consecutive rejections and keeps the records (`guard_trips` in the summary). For token rotation (`magnetico ingest crawler rotate-token`, effective on a running ingest within 60 seconds) see §3.
 
 ## 9. Troubleshooting
 

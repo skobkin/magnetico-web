@@ -145,7 +145,7 @@ PostgreSQL administrators ([`web-deployment.md`](web-deployment.md) §4). This g
 
 The release is published as native Linux binaries (amd64, arm64) on the
 [Forgejo releases](https://git.skobk.in/skobkin/magnetico-web/releases) and as the image
-`docker.io/skobkin/magnetico-web` (also `ghcr.io/skobkin/magnetico-web`, same digest). Pin the exact version. Run
+`docker.io/skobkin/magnetico-web` (also `ghcr.io/skobkin/magnetico-web`, same digest). Run
 `magnetico --version`, `magnetico --help` and `magnetico migrate --help` once to confirm the version and the
 subcommands.
 
@@ -602,7 +602,7 @@ is validated (the period is yours; do not shorten it because the checklist passe
 - the reports: the user-migration reports (`users-final-preview.json`, `users-final.json`, the successful
   `users-verify.json`), the torrent-error exports and their manifests, the console output of `verify-content` and the
   audit output;
-- the pinned release binary or image that performed the migration.
+- the release binary or image that performed the migration (note its version).
 
 The reports are secret-free (counts, numeric ids, digests), but treat them as operational records. They are written
 with mode `0600`; keep the directory on durable storage that is backed up (not `/tmp`) and copy them next to the

@@ -5,14 +5,14 @@ One universal image holds the single `magnetico` executable and supports every s
 
 > **Status.** `0.8.0-rc1` is published on both registries and was used for a real-data migration rehearsal
 > ([report](wip/real-data-migration-report-0.8.0-rc1.md)). How releases are built and verified:
-> [`release-engineering.md`](release-engineering.md). The examples below use `0.8.0` for the release you pin.
+> [`release-engineering.md`](release-engineering.md). The examples below use `0.8.0` for the release you run.
 
 | | |
 |---|---|
 | Docker Hub | [`docker.io/skobkin/magnetico-web`](https://hub.docker.com/r/skobkin/magnetico-web) |
 | GitHub Container Registry | [`ghcr.io/skobkin/magnetico-web`](https://github.com/skobkin/magnetico-web/pkgs/container/magnetico-web) |
 | Platforms | `linux/amd64`, `linux/arm64` (one multi-platform image; the two registries carry the identical digest) |
-| Tags | every release under its exact version (`0.8.0-rc1`, `0.8.0`, …); each published release also moves `latest`; there are no `0.8`, `stable` or `edge` tags. Pin an exact version in production (optionally with its digest: `…/magnetico-web:0.8.0@sha256:…`) |
+| Tags | every release under its exact version (`0.8.0-rc1`, `0.8.0`, …); each published release also moves `latest`; there are no `0.8`, `stable` or `edge` tags |
 | Deployment stack | [`docker-stacks/magnetico-web`](https://git.skobk.in/skobkin/docker-stacks/src/branch/master/magnetico-web) still describes the **old PHP** deployment and is **incompatible with 0.8.0**; it will be updated separately. Use the examples on this page |
 
 ## What is in the image
@@ -71,7 +71,7 @@ An older **development** `magnetico_ingest` schema without the `crawlers` table 
 # docker-compose.yml — web and ingest (placeholders; secrets live in the env files, chmod 600, never committed)
 services:
   web:
-    image: docker.io/skobkin/magnetico-web:0.8.0     # pin the release (and, better, its digest)
+    image: docker.io/skobkin/magnetico-web:0.8.0
     command: ["web"]
     restart: unless-stopped
     environment:
