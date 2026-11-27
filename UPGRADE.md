@@ -4,7 +4,7 @@ User-facing and breaking changes that require action when deploying a new versio
 Entries are grouped by release date. Read the section covering your current version
 before upgrading.
 
-## 0.8.0 (unreleased; release candidate `0.8.0-rc1` published 2026-11-27)
+## 0.8.0
 
 > [!WARNING]
 > **0.8.0 is not an in-place upgrade.** It is an incompatible rewrite that needs a new database and an explicit,
