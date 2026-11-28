@@ -122,6 +122,6 @@ An interrupted `0.8.0-rc1` verification resumes with `0.8.0-rc2`:
 - The CLI flags and exit codes do not change.
 
 The same change adds a one-time log line when `verify-content` or `verify-decode` adopts an interrupted run. The line
-names the verification run ID, the last committed target checkpoint, the source checkpoint (`verify-content`; `none`
-before the first source commit) and the cumulative counters. It is printed before the first progress line and never
+names the verification run ID, the last committed target checkpoint, the source checkpoint (`verify-content`) and the
+cumulative counters. A checkpoint that has not been committed yet prints as `none`. It is printed before the first progress line and never
 again. It only reads values the runner already had. Resume logic and persisted state are unchanged.

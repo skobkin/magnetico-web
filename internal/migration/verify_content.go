@@ -270,11 +270,17 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	}
 	report := func() {
 		if in.Progress != nil {
+			// A copy: expectedSource is the commit CAS expectation, never
+			// handed to a callback that could mutate it.
+			var sourceCheckpoint *int64
+			if expectedSource != nil {
+				sourceCheckpoint = i64ptr(*expectedSource)
+			}
 			in.Progress(VerifyProgress{
 				Kind: result.Kind, VerificationID: run.VerificationID,
 				Phase: m.phase, Resumed: resumed,
 				Checkpoint:       targetAfter,
-				SourceCheckpoint: expectedSource,
+				SourceCheckpoint: sourceCheckpoint,
 				ExpectedTargets:  derefInt64(run.ExpectedTargetIDs),
 				Observed:         m.observed(), Verified: m.verified, Mismatched: m.mismatch,
 				Unverifiable: m.unverifiable, AssumedSingle: m.assumed, Issues: m.issues,

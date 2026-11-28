@@ -750,11 +750,22 @@ func TestVerifyContentInterruptResumes(t *testing.T) {
 	}
 	// The first snapshot precedes any unit and carries what the CLI resume
 	// notice prints, including the stored source checkpoint.
-	if len(snaps) == 0 || !snaps[0].Resumed || snaps[0].VerificationID != interrupted.VerificationID ||
-		snaps[0].Checkpoint != 1 || snaps[0].SourceCheckpoint == nil || interrupted.SourceCheckpoint == nil ||
-		*snaps[0].SourceCheckpoint != *interrupted.SourceCheckpoint || snaps[0].Observed != 1 {
-		t.Fatalf("first resumed snapshot = %+v, want resumed run %s at the stored checkpoints (target 1, source %v)",
-			snaps, interrupted.VerificationID, interrupted.SourceCheckpoint)
+	if interrupted.SourceCheckpoint == nil {
+		t.Fatal("interrupted run has no source checkpoint, want one committed with target 1")
+	}
+	if len(snaps) == 0 {
+		t.Fatal("resume reported no progress snapshot")
+	}
+	if first := snaps[0]; !first.Resumed || first.VerificationID != interrupted.VerificationID ||
+		first.Checkpoint != 1 || first.SourceCheckpoint == nil ||
+		*first.SourceCheckpoint != *interrupted.SourceCheckpoint || first.Observed != 1 {
+		source := "nil"
+		if first.SourceCheckpoint != nil {
+			source = fmt.Sprint(*first.SourceCheckpoint)
+		}
+		t.Fatalf("first resumed snapshot = resumed %v run %s target %d source %s observed %d, want resumed run %s at target 1 source %d observed 1",
+			first.Resumed, first.VerificationID, first.Checkpoint, source, first.Observed,
+			interrupted.VerificationID, *interrupted.SourceCheckpoint)
 	}
 	if !res.Pass || res.ObservedTargets != 3 || res.SourceObserved != 3 || res.Verified != 3 {
 		t.Fatalf("resumed result = %v %d/%d/%d, want pass 3/3/3",

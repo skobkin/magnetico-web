@@ -11,6 +11,8 @@ import (
 // A resumed verification run announces itself exactly once, before its first
 // snapshot reaches the renderer; a fresh run never does.
 func TestAnnounceResumeLogsOnceBeforeFirstSnapshot(t *testing.T) {
+	t.Parallel()
+
 	var events []string
 	logf := func(format string, args ...any) {
 		events = append(events, "log: "+fmt.Sprintf(format, args...))
@@ -52,6 +54,8 @@ func TestAnnounceResumeLogsOnceBeforeFirstSnapshot(t *testing.T) {
 }
 
 func TestVerificationResumeMessage(t *testing.T) {
+	t.Parallel()
+
 	src := int64(4567)
 	p := migration.VerifyProgress{
 		VerificationID: "8a1f", Phase: "scanning", Resumed: true,
@@ -82,5 +86,11 @@ func TestVerificationResumeMessage(t *testing.T) {
 	}
 	if !strings.Contains(decode, "last committed target checkpoint 1234; cumulative progress 1200/5000 target rows observed") {
 		t.Fatalf("decode notice = %q, want the target checkpoint and progress", decode)
+	}
+
+	// No target commit yet: the target side reads "none", never checkpoint 0.
+	p.Checkpoint = 0
+	if got := verificationResumeMessage("verify-content", "postgres://db/target", p); !strings.Contains(got, "last committed target checkpoint none, source checkpoint none") {
+		t.Fatalf("content notice without any commit = %q, want \"target checkpoint none, source checkpoint none\"", got)
 	}
 }

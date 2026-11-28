@@ -150,9 +150,15 @@ func announceResume(command, rawTargetURL string, logf func(string, ...any), nex
 
 // verificationResumeMessage composes the resume notice from controlled
 // content only: the redacted URL, the run ID, its committed checkpoints and
-// cumulative counters.
+// cumulative counters. A target checkpoint of 0 means no target commit yet
+// (the keyset starts after 0, so a committed boundary is always a torrent ID
+// above it) and prints as "none", like an absent source checkpoint.
 func verificationResumeMessage(command, rawTargetURL string, p migration.VerifyProgress) string {
-	checkpoints := fmt.Sprintf("last committed target checkpoint %d", p.Checkpoint)
+	target := "none"
+	if p.Checkpoint != 0 {
+		target = fmt.Sprint(p.Checkpoint)
+	}
+	checkpoints := "last committed target checkpoint " + target
 	observed := fmt.Sprintf("%d/%d target rows observed", p.Observed, p.ExpectedTargets)
 	if command == "verify-content" {
 		source := "none"
