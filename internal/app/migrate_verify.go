@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/skobkin/magnetico-web/internal/migration"
@@ -27,9 +28,9 @@ func runMigrateVerifyDecode(opFlags *opflags.VerifyOptions) {
 			Workers:          int(opFlags.Workers),
 			BatchSize:        int(opFlags.BatchSize),
 			MaxInflightBytes: opFlags.MaxInflightBytes,
-			Progress: func(p migration.VerifyProgress) {
+			Progress: announceResume("verify-decode", opFlags.DatabaseURL, log.Printf, func(p migration.VerifyProgress) {
 				update(verifySnapshot("verify-decode", p))
-			},
+			}),
 		})
 	})
 	switch {
@@ -54,9 +55,9 @@ func runMigrateVerifyContent(opFlags *opflags.VerifyOptions) {
 			Workers:          int(opFlags.Workers),
 			BatchSize:        int(opFlags.BatchSize),
 			MaxInflightBytes: opFlags.MaxInflightBytes,
-			Progress: func(p migration.VerifyProgress) {
+			Progress: announceResume("verify-content", opFlags.DatabaseURL, log.Printf, func(p migration.VerifyProgress) {
 				update(verifySnapshot("verify-content", p))
-			},
+			}),
 		})
 	})
 	switch {
@@ -129,6 +130,41 @@ func verifySnapshot(title string, p migration.VerifyProgress) progress.Snapshot 
 		RunErrors:     p.Unverifiable,
 		ExpectedTotal: p.ExpectedTargets,
 	}
+}
+
+// announceResume wraps a verification progress callback so that the first
+// snapshot of an adopted (resumed) run logs one resume notice before it is
+// forwarded. The runners report once right after adopting the run and before
+// reading the first page, and the renderer draws nothing before its first
+// snapshot, so the notice precedes every scanning progress line; later
+// snapshots are forwarded untouched.
+func announceResume(command, rawTargetURL string, logf func(string, ...any), next func(migration.VerifyProgress)) func(migration.VerifyProgress) {
+	var once sync.Once
+	return func(p migration.VerifyProgress) {
+		if p.Resumed {
+			once.Do(func() { logf("%s", verificationResumeMessage(command, rawTargetURL, p)) })
+		}
+		next(p)
+	}
+}
+
+// verificationResumeMessage composes the resume notice from controlled
+// content only: the redacted URL, the run ID, its committed checkpoints and
+// cumulative counters.
+func verificationResumeMessage(command, rawTargetURL string, p migration.VerifyProgress) string {
+	checkpoints := fmt.Sprintf("last committed target checkpoint %d", p.Checkpoint)
+	observed := fmt.Sprintf("%d/%d target rows observed", p.Observed, p.ExpectedTargets)
+	if command == "verify-content" {
+		source := "none"
+		if p.SourceCheckpoint != nil {
+			source = fmt.Sprint(*p.SourceCheckpoint)
+		}
+		checkpoints += ", source checkpoint " + source
+		observed += fmt.Sprintf(", %d source rows classified", p.SourceObserved)
+	}
+	return fmt.Sprintf("%s on %s resuming interrupted verification run %s (phase %s): %s; cumulative progress %s — %d verified, %d mismatched, %d unverifiable, %d assumed single-file; %d issue(s) recorded",
+		command, redactDatabaseURL(rawTargetURL), p.VerificationID, p.Phase, checkpoints, observed,
+		p.Verified, p.Mismatched, p.Unverifiable, p.AssumedSingle, p.Issues)
 }
 
 // verificationOutcomeMessage composes the summary line of a completed

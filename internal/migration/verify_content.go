@@ -271,10 +271,12 @@ func VerifyContent(ctx context.Context, in VerifyContentInput) (*VerificationRes
 	report := func() {
 		if in.Progress != nil {
 			in.Progress(VerifyProgress{
-				Kind: result.Kind, Phase: m.phase, Resumed: resumed,
-				Checkpoint:      targetAfter,
-				ExpectedTargets: derefInt64(run.ExpectedTargetIDs),
-				Observed:        m.observed(), Verified: m.verified, Mismatched: m.mismatch,
+				Kind: result.Kind, VerificationID: run.VerificationID,
+				Phase: m.phase, Resumed: resumed,
+				Checkpoint:       targetAfter,
+				SourceCheckpoint: expectedSource,
+				ExpectedTargets:  derefInt64(run.ExpectedTargetIDs),
+				Observed:         m.observed(), Verified: m.verified, Mismatched: m.mismatch,
 				Unverifiable: m.unverifiable, AssumedSingle: m.assumed, Issues: m.issues,
 				SourceObserved: m.sourceObserved,
 			})

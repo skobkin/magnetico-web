@@ -170,7 +170,8 @@ func VerifyDecode(ctx context.Context, in VerifyDecodeInput) (*VerificationResul
 	report := func() {
 		if in.Progress != nil {
 			in.Progress(VerifyProgress{
-				Kind: result.Kind, Phase: m.phase, Resumed: resumed,
+				Kind: result.Kind, VerificationID: run.VerificationID,
+				Phase: m.phase, Resumed: resumed,
 				Checkpoint:      checkpoint,
 				ExpectedTargets: derefInt64(run.ExpectedTargetIDs),
 				Observed:        m.observed(), Verified: m.verified, Mismatched: m.mismatch,

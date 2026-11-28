@@ -738,12 +738,23 @@ func TestVerifyContentInterruptResumes(t *testing.T) {
 		t.Fatalf("run = %s checkpoint %v, want interrupted at 1", interrupted.State, interrupted.TargetCheckpoint)
 	}
 
-	res, err := verifyContent(t, context.Background(), src, tgt, nil)
+	var snaps []VerifyProgress
+	res, err := verifyContent(t, context.Background(), src, tgt, func(in *VerifyContentInput) {
+		in.Progress = func(p VerifyProgress) { snaps = append(snaps, p) }
+	})
 	if err != nil {
 		t.Fatalf("resume error = %v", err)
 	}
 	if !res.Resumed || res.VerificationID != interrupted.VerificationID {
 		t.Fatalf("resume = %v/%s, want adopted run %s", res.Resumed, res.VerificationID, interrupted.VerificationID)
+	}
+	// The first snapshot precedes any unit and carries what the CLI resume
+	// notice prints, including the stored source checkpoint.
+	if len(snaps) == 0 || !snaps[0].Resumed || snaps[0].VerificationID != interrupted.VerificationID ||
+		snaps[0].Checkpoint != 1 || snaps[0].SourceCheckpoint == nil || interrupted.SourceCheckpoint == nil ||
+		*snaps[0].SourceCheckpoint != *interrupted.SourceCheckpoint || snaps[0].Observed != 1 {
+		t.Fatalf("first resumed snapshot = %+v, want resumed run %s at the stored checkpoints (target 1, source %v)",
+			snaps, interrupted.VerificationID, interrupted.SourceCheckpoint)
 	}
 	if !res.Pass || res.ObservedTargets != 3 || res.SourceObserved != 3 || res.Verified != 3 {
 		t.Fatalf("resumed result = %v %d/%d/%d, want pass 3/3/3",

@@ -35,10 +35,14 @@ const (
 // Unverifiable/AssumedSingle classify them; Issues counts persisted issue
 // rows.
 type VerifyProgress struct {
-	Kind       string
-	Phase      string // scanning | extras | complete
-	Resumed    bool
-	Checkpoint int64 // last committed target-side page boundary (torrent ID)
+	Kind           string
+	VerificationID string
+	Phase          string // scanning | extras | complete
+	Resumed        bool
+	Checkpoint     int64 // last committed target-side page boundary (torrent ID)
+	// SourceCheckpoint is the last committed source-side boundary: content
+	// pass only, nil before the first source commit (and always for decode).
+	SourceCheckpoint *int64
 
 	ExpectedTargets int64 // target rows recorded at run start
 	Observed        int64 // target rows visited so far

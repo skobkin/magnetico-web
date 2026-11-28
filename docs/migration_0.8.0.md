@@ -375,7 +375,9 @@ magnetico migrate verify-content
 
 This is the **required cutover gate**. It reads both databases, writes nothing to either, and records its verdict in
 `magnetico_migration`. Exit status: `0` pass, `3` completed **with findings**, `2` interrupted (re-run the same command to
-resume), `1` fatal.
+resume), `1` fatal. A resumed run says so once, before its first progress line: the verification run ID, the last
+committed target and source checkpoints and the counts so far (`verify-decode` prints the same notice without the source
+side).
 
 - **What it proves.** For every legacy torrent: the same id, infohash, name, total size, discovery time and file count,
   and the complete `(path, size)` list, duplicates included. It decodes every stored file list with the production

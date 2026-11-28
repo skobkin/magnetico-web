@@ -521,11 +521,21 @@ func TestVerifyDecodeInterruptResumes(t *testing.T) {
 
 	// Resume: the pass adopts in place and completes with exactly one
 	// finding — the settled page is not rescanned, its issues not duplicated.
+	var snaps []VerifyProgress
 	res2, err := verifyDecoded(t, context.Background(), tgt, func(in *VerifyDecodeInput) {
 		in.BatchSize = 1
+		in.Progress = func(p VerifyProgress) { snaps = append(snaps, p) }
 	})
 	if !errors.Is(err, ErrVerificationFindings) {
 		t.Fatalf("resume error = %v, want ErrVerificationFindings", err)
+	}
+	// The first snapshot precedes any page and carries what the CLI resume
+	// notice prints: the adopted run, its committed checkpoint and the
+	// cumulative counters.
+	if len(snaps) == 0 || !snaps[0].Resumed || snaps[0].VerificationID != interrupted.VerificationID ||
+		snaps[0].Checkpoint != 1 || snaps[0].Observed != 1 || snaps[0].SourceCheckpoint != nil {
+		t.Fatalf("first resumed snapshot = %+v, want resumed run %s at checkpoint 1 with 1 observed",
+			snaps, interrupted.VerificationID)
 	}
 	if !res2.Resumed {
 		t.Fatal("resume did not adopt the interrupted pass")
