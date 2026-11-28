@@ -546,6 +546,28 @@ type decodePageResult struct {
 	assumed                          int64
 }
 
+// decodePageQuery is the keyset metadata page shared by verify-decode and
+// verify-content ($1 = cursor, $2 = row limit).
+//
+// The cursor restriction is repeated on the blob side of the LEFT JOIN on
+// purpose: PostgreSQL does not derive b.torrent_id > $1 from
+// b.torrent_id = t.id AND t.id > $1, so without it a Merge Left Join scans
+// the blob index from its start on every page — the already processed
+// prefix — and each page gets slower as the cursor advances (0.8.0-rc1
+// production incident, docs/wip/verify-page-query-performance-0.8.0-rc2.md).
+// The extra condition cannot drop a match: every selected t.id is > $1, so a
+// blob row with b.torrent_id = t.id satisfies it too, and torrents without a
+// blob still come back with NULL blob columns.
+const decodePageQuery = `SELECT t.id, t.info_hash, t.name, t.total_size, t.discovered_on,
+            t.file_count, b.torrent_id, octet_length(b.data)
+        FROM magneticod.torrents t
+        LEFT JOIN magneticod.torrent_file_blobs b
+            ON b.torrent_id = t.id
+            AND b.torrent_id > $1
+        WHERE t.id > $1
+        ORDER BY t.id
+        LIMIT $2`
+
 // readDecodePage reads one keyset metadata page in a bounded
 // REPEATABLE READ READ ONLY transaction: the torrents row left-joined with
 // its blob's octet_length — no BYTEA is materialized here.
@@ -566,13 +588,7 @@ func readDecodePage(ctx context.Context, pool *pgxpool.Pool, afterID int64, limi
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	rows, err := tx.Query(ctx, `SELECT t.id, t.info_hash, t.name, t.total_size, t.discovered_on,
-            t.file_count, b.torrent_id, octet_length(b.data)
-        FROM magneticod.torrents t
-        LEFT JOIN magneticod.torrent_file_blobs b ON b.torrent_id = t.id
-        WHERE t.id > $1
-        ORDER BY t.id
-        LIMIT $2`, afterID, limit)
+	rows, err := tx.Query(ctx, decodePageQuery, afterID, limit)
 	if err != nil {
 		return nil, err
 	}
